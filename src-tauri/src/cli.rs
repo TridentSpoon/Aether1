@@ -27,8 +27,14 @@ const PLAYERS: &[(&str, &[&str])] = &[
     ("afplay", &[]),
 ];
 
+/// The command name the help text is written with. Printed as whatever name this copy was
+/// actually invoked by, so a copy installed as `aurora1` tells its operator to type
+/// `aurora1` -- see `invoked_as`. Written out as one name here so that the sixty lines below
+/// stay readable.
+const USAGE_COMMAND: &str = "aether1";
+
 const USAGE: &str = "\
-AETHER1 -- cybernetic AI companion
+AURORA1 -- cybernetic AI companion
 
 USAGE:
     aether1                        Launch the desktop app (tray + HUD)
@@ -54,6 +60,14 @@ USAGE:
                                    before each one
     aether1 models                 Show which local model each speciality runs on
     aether1 models <NAME> <MODEL>  Point one speciality at a model (`clear` to unset)
+    aether1 reasoning              Show whether the model is asked to think, and how hard
+    aether1 reasoning <LEVEL>      off | auto | low | medium | high
+    aether1 tune                   Which of AETHER1's own prompts can be scored against
+                                   cases with known answers, and how the current wording did
+    aether1 tune <NAME>            Score the wording in force, and print the cases it fails
+    aether1 tune <NAME> run        One round: score it, ask a local model to reword it, and
+                                   keep the new wording only if it scores better
+    aether1 tune <NAME> revert     Put the wording AETHER1 shipped with back in force
     aether1 flow                   Show whether the avatar follows the question (STATIC or
                                    FLOW), and which line it can move within
     aether1 flow on|off            Turn that on or off
@@ -143,6 +157,40 @@ The HUD toggle is also bound to a global hotkey (Super+Shift+A by default, chang
 Settings). On Wayland, where an application can't grab keys system-wide, bind your
 compositor's keybinding to `aether1 toggle` instead.
 ";
+
+/// The name this copy of the app was launched by, for the help text and error messages.
+///
+/// **The rename gives this project two command names**: `aurora1`, the companion the operator
+/// talks to, and `aether1`, the one behind the curtain. Both are this same binary, so a help
+/// text with one of them written into it is wrong half the time -- it tells somebody who typed
+/// `aurora1 --help` to go and run a command that may not be on their PATH at all. Reading
+/// argv[0] instead costs nothing and is right whichever name is in use, before either of them
+/// moves.
+///
+/// Only the names this project ships are accepted. A binary the operator renamed to something
+/// of their own, or run straight out of `target/release`, falls back to the written-out name
+/// rather than printing a usage block full of whatever they called the file.
+fn invoked_as() -> &'static str {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            let stem = exe.file_stem()?.to_string_lossy().to_ascii_lowercase();
+            crate::installs::BINARY_NAMES
+                .into_iter()
+                .find(|name| *name == stem)
+        })
+        .unwrap_or(USAGE_COMMAND)
+}
+
+/// The help text, with the command name it was invoked by.
+fn usage() -> String {
+    let name = invoked_as();
+    let text = USAGE.trim_end();
+    if name == USAGE_COMMAND {
+        return text.to_string();
+    }
+    text.replace(USAGE_COMMAND, name)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Invocation {
@@ -270,6 +318,25 @@ pub enum Invocation {
     Models {
         persona: Option<String>,
         model: Option<String>,
+    },
+    /// `reasoning`: how much of its own thinking the model is asked to do, and to show.
+    /// See `llm::providers::Reasoning` for what each level actually sends.
+    Reasoning {
+        level: Option<String>,
+    },
+    /// `tune`: scores one of AETHER1's own prompts against cases with known answers, and
+    /// optionally runs a round of rewriting. See llm/tuning.rs -- and note that `run` is
+    /// dozens of local generations, which is why it is a word somebody types rather than
+    /// anything that happens on a timer.
+    Tune {
+        /// Which prompt. None lists them.
+        adapter: Option<String>,
+        /// `run` -- propose a rewrite and keep it if it scores better.
+        run: bool,
+        /// `revert` -- put the shipped wording back.
+        revert: bool,
+        /// How many rounds, for `run`. Each one is a full pass over the cases twice.
+        rounds: usize,
     },
     /// `flow`: STATIC keeps the avatar the operator picked on every question; FLOW lets the
     /// specialist inside that avatar's own line take the ones that are its own. See
@@ -793,6 +860,68 @@ pub fn parse(argv: &[String]) -> Invocation {
                     .to_string(),
             ),
         },
+        "tune" => match rest
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
+            [] => Ok(Invocation::Tune {
+                adapter: None,
+                run: false,
+                revert: false,
+                rounds: 1,
+            }),
+            [name] => Ok(Invocation::Tune {
+                adapter: Some((*name).to_string()),
+                run: false,
+                revert: false,
+                rounds: 1,
+            }),
+            [name, "revert"] => Ok(Invocation::Tune {
+                adapter: Some((*name).to_string()),
+                run: false,
+                revert: true,
+                rounds: 1,
+            }),
+            [name, "run"] => Ok(Invocation::Tune {
+                adapter: Some((*name).to_string()),
+                run: true,
+                revert: false,
+                rounds: 1,
+            }),
+            // The count is parsed here rather than accepted and clamped later, so a typo is
+            // a refusal with the correct form in it instead of one silent round.
+            [name, "run", count] => match count.parse::<usize>() {
+                Ok(rounds) if (1..=20).contains(&rounds) => Ok(Invocation::Tune {
+                    adapter: Some((*name).to_string()),
+                    run: true,
+                    revert: false,
+                    rounds,
+                }),
+                _ => Err(format!(
+                    "{count:?} is not a number of rounds between 1 and 20 -- for example \
+                     `aether1 tune judge run 3`. Each round is a full pass over the cases \
+                     twice, so twenty is already a long evening."
+                )),
+            },
+            _ => Err(
+                "tune takes nothing, a prompt's name, or a name and one of run or revert -- \
+                 for example `aether1 tune judge run`"
+                    .to_string(),
+            ),
+        },
+        "reasoning" => match rest.len() {
+            0 => Ok(Invocation::Reasoning { level: None }),
+            1 => Ok(Invocation::Reasoning {
+                level: Some(rest[0].to_string()),
+            }),
+            _ => Err(
+                "reasoning takes nothing, or one of off, auto, low, medium, high -- for \
+                 example `aether1 reasoning high`"
+                    .to_string(),
+            ),
+        },
         "words" => match rest
             .iter()
             .map(String::as_str)
@@ -968,7 +1097,7 @@ fn play_audio(path: &Path, device: &str) -> Result<(), String> {
         let Ok(binary) = which::which(player) else {
             continue;
         };
-        let mut command = std::process::Command::new(binary);
+        let mut command = crate::paths::quiet_command(binary);
         if let Some((key, value)) = &env {
             command.env(key, value);
         }
@@ -1997,7 +2126,7 @@ fn run_code(conventions: bool, ask: Option<String>, task: Option<String>) -> Str
     let advice = commands::code_advice(&engine);
 
     let mut out = format!(
-        "AETHER1 -- writing code on this machine\n\n{}\n",
+        "AURORA1 -- writing code on this machine\n\n{}\n",
         advice.headline
     );
 
@@ -2107,11 +2236,246 @@ fn indented(command: &str) -> String {
         .collect()
 }
 
+/// `aether1 reasoning`, both the showing and the setting.
+///
+/// A word rather than a switch because there are five answers, and because the difference
+/// between them is what gets *sent* -- see `Reasoning`. The round trip through
+/// `from_setting`/`as_key` is on purpose: it refuses a typo here instead of storing it and
+/// silently leaving reasoning on `auto` at the next turn.
+fn run_reasoning(level: Option<&str>) -> Result<String, String> {
+    use crate::llm::providers::Reasoning;
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    if let Some(asked) = level {
+        let wanted = Reasoning::from_setting(asked);
+        if wanted.as_key() != asked.trim().to_ascii_lowercase() {
+            return Err(format!(
+                "no reasoning level called {asked:?} -- it is one of off, auto, low, medium, high"
+            ));
+        }
+        db.set_setting(
+            crate::llm::REASONING_SETTING,
+            &serde_json::Value::String(wanted.as_key().to_string()),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let current =
+        Reasoning::from_setting(&db.get_setting_string(crate::llm::REASONING_SETTING, "auto"));
+    Ok(format!(
+        "Reasoning is {}.\n{}",
+        current.as_key(),
+        match current {
+            Reasoning::Off =>
+                "The model is told not to think where it can be told, and any \
+                               thinking it does anyway is taken out of the answer and not \
+                               shown.",
+            Reasoning::Auto =>
+                "Thinking is switched on for a local model whose server says \
+                                it can think, and reasoning is shown whenever a model \
+                                produces any. Nothing is asked of a provider that might \
+                                refuse the request for asking.",
+            Reasoning::Low | Reasoning::Medium | Reasoning::High =>
+                "Every provider that takes an effort level is asked for this one, and a \
+                 model that cannot reason is made to think on paper first -- one extra \
+                 pass per turn, shown in the reasoning panel. Cloud providers bill for \
+                 both.",
+        }
+    ))
+}
+
 /// `aether1 models`, both the showing and the setting.
 ///
 /// The showing is the important half: step 19's whole claim is that "which model for which
 /// job" reads back as a sentence the operator can check, and a list they can see is what
 /// makes that true rather than a thing the design asserts about itself.
+/// `tune`: score one of AETHER1's own prompts, and optionally let a local model reword it.
+///
+/// Everything here happens on this machine. The judge is the small model the router already
+/// uses, the rewriter is the largest model installed -- sorting a question and rewriting a
+/// page of instructions are different jobs -- and nothing is sent anywhere.
+fn run_tune(
+    adapter: Option<&str>,
+    run: bool,
+    revert: bool,
+    rounds: usize,
+) -> Result<String, String> {
+    use crate::llm::tuning::{self, Adapter};
+
+    let engine = crate::build_llm_engine();
+    let db = engine.db();
+
+    let Some(name) = adapter else {
+        let mut out =
+            String::from("Prompts that can be scored against cases with known answers:\n");
+        for adapter in Adapter::ALL {
+            let history = tuning::history(db, *adapter);
+            let (cases, _) = tuning::cases(db, *adapter);
+            let standing = match history.active_version() {
+                Some(version) => format!(
+                    "a tuned wording from {}, {}/{} on {}",
+                    version.made, version.passed, version.cases, version.model
+                ),
+                None => "the wording AETHER1 shipped with".to_string(),
+            };
+            out.push_str(&format!(
+                "\n  {:<8} {}\n           in force: {standing}\n           {} case{}, {} wording{} tried\n",
+                adapter.key(),
+                adapter.describes(),
+                cases.len(),
+                if cases.len() == 1 { "" } else { "s" },
+                history.versions.len(),
+                if history.versions.len() == 1 { "" } else { "s" },
+            ));
+        }
+        out.push_str(
+            "\nRun `aether1 tune <name>` to score what is in force, or \
+             `aether1 tune <name> run` for a round of rewriting.\n",
+        );
+        return Ok(out);
+    };
+
+    let Some(adapter) = Adapter::from_key(name) else {
+        return Err(format!(
+            "no prompt called {name:?} -- it is one of {}",
+            Adapter::ALL
+                .iter()
+                .map(|a| a.key())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+
+    if revert {
+        tuning::revert(db, adapter)?;
+        return Ok(format!(
+            "{} is back to the wording AETHER1 shipped with. The wordings that were tried \
+             are still recorded, so nothing is lost.",
+            adapter.key()
+        ));
+    }
+
+    // The two models this needs, and the refusals if they are not there. Said before any
+    // scoring starts: a round that discovers halfway through that it cannot ask for a
+    // rewrite has spent somebody's time to tell them something it knew at the beginning.
+    let available = crate::llm::auto::candidates(db);
+    if available.local.is_empty() {
+        return Err(format!(
+            "nothing answered at {}, and all of this runs on a model on this machine. Start \
+             your model server and try again.",
+            available.endpoint
+        ));
+    }
+    let judge_model = tuning::judge_model_for(db, &available)
+        .ok_or_else(|| "no model to score with".to_string())?;
+    let rewrite_model = tuning::rewriter_model_for(&available)
+        .ok_or_else(|| "no model to reword with".to_string())?;
+
+    let (cases, problem) = tuning::cases(db, adapter);
+    let mut out = String::new();
+    if let Some(problem) = problem {
+        // Printed rather than returned: the run still happens against the shipped cases,
+        // and they have to know the set they are reading about is not the one they meant.
+        out.push_str(&format!("Your own cases were not read -- {problem}\n\n"));
+    }
+    out.push_str(&format!(
+        "{} case{} -- {} scoring, {} rewording.\n",
+        cases.len(),
+        if cases.len() == 1 { "" } else { "s" },
+        judge_model,
+        rewrite_model,
+    ));
+    if let Some(path) = tuning::cases_path(db, adapter) {
+        out.push_str(&format!("Add your own cases in {}.\n", path.display()));
+    }
+    println!("{out}");
+    out.clear();
+
+    let judge = tuning::LocalJudge {
+        provider: available.local_provider,
+        endpoint: available.endpoint.clone(),
+        model: judge_model,
+        schema: crate::llm::auto::schema(),
+    };
+
+    if !run {
+        // Score only. The cases it fails are the whole output: they are what a wording
+        // would have to fix, and reading them is how somebody decides whether the cases or
+        // the prompt is the thing that is wrong.
+        let score = tuning::score(&judge, &tuning::text(db, adapter), &cases, &mut |outcome| {
+            println!("{}", tune_line(outcome));
+        });
+        out.push_str(&format!("\n{}/{} cases.\n", score.passed(), score.cases()));
+        if score.passed() < score.cases() {
+            out.push_str("Run `aether1 tune ");
+            out.push_str(adapter.key());
+            out.push_str(" run` to try a different wording against the same cases.\n");
+        }
+        return Ok(out);
+    }
+
+    let rewriter = |prompt: &str| tuning::reword_with(&available, &rewrite_model, prompt);
+    for round in 1..=rounds {
+        println!("\n--- round {round} of {rounds}");
+        let outcome = tuning::run_round(db, adapter, &judge, &rewriter, &cases, &mut |line| {
+            println!("{line}");
+        })?;
+        println!("{}", outcome.verdict);
+        if round == 1 {
+            out.push_str(&format!(
+                "Started from {}/{} cases.\n",
+                outcome.baseline.passed(),
+                outcome.baseline.cases()
+            ));
+        }
+        if outcome.kept {
+            println!("  ...so this is the wording in force from now on.");
+        }
+        if outcome.candidate.is_none() {
+            // Nothing was tried, so trying again changes nothing -- a loop that kept going
+            // here would be a loop printing the same refusal twenty times.
+            out.push_str(&format!(
+                "Stopped after round {round}: {}\n",
+                outcome.verdict
+            ));
+            return Ok(out);
+        }
+    }
+
+    let history = tuning::history(db, adapter);
+    out.push_str(&match history.active_version() {
+        Some(version) => format!(
+            "\nIn force now: a tuned wording scoring {}/{} on {}. \
+             `aether1 tune {} revert` puts the shipped one back.\n",
+            version.passed,
+            version.cases,
+            version.model,
+            adapter.key()
+        ),
+        None => format!(
+            "\nStill the wording AETHER1 shipped with -- nothing tried beat it. \
+             {} wording{} recorded.\n",
+            history.versions.len(),
+            if history.versions.len() == 1 { "" } else { "s" }
+        ),
+    });
+    Ok(out)
+}
+
+/// One case's result, for a terminal.
+fn tune_line(outcome: &crate::llm::tuning::Outcome) -> String {
+    let message: String = outcome.message.chars().take(60).collect();
+    if let Some(why) = &outcome.failed {
+        format!("  ! {message} -- no usable answer ({why})")
+    } else if outcome.wrong.is_empty() {
+        format!("  . {message}")
+    } else {
+        format!("  x {message} -- wrong: {}", outcome.wrong.join(", "))
+    }
+}
+
 fn run_models(persona: Option<String>, model: Option<String>) -> Result<String, String> {
     use crate::llm::routing;
     use crate::llm::Persona;
@@ -2261,7 +2625,7 @@ fn run_doctor(
         // which is a fair part of why it exists.
         let attended = doctor::attend(&engine, &doctor::Facts::default(), None);
         return Ok(format!(
-            "AETHER1 -- fixing what it can\n\n{}",
+            "AURORA1 -- fixing what it can\n\n{}",
             attended.as_report()
         ));
     }
@@ -2283,7 +2647,7 @@ fn run_doctor(
 fn render_health(health: &crate::doctor::Health) -> String {
     use crate::doctor::Verdict;
 
-    let mut out = format!("AETHER1 -- is it working?\n\n{}\n", health.headline);
+    let mut out = format!("AURORA1 -- is it working?\n\n{}\n", health.headline);
 
     for check in health.checks.iter().filter(|c| c.verdict != Verdict::Ok) {
         out.push_str(&format!(
@@ -2723,6 +3087,23 @@ fn run_verify(path: &str) -> Result<String, String> {
 /// `aether1 update`: the comparison, and with `download`, the fetch. Never the install -- see
 /// releases.rs for why half a gigabyte replacing the running app is the operator's own last
 /// step.
+/// The release's change lines as a block to drop into a message, or nothing at all.
+///
+/// Said before the download instruction, not after: the operator is deciding whether to
+/// replace a copy that works, and a list printed under the command they have already run is
+/// a list they read too late. Silent when the release carried no notes -- an empty "What
+/// changed:" heading claims to have answered a question it did not.
+fn changes_block(changes: &[String]) -> String {
+    if changes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\nWhat changed:\n");
+    for change in changes {
+        out.push_str(&format!("  - {change}\n"));
+    }
+    out
+}
+
 fn run_update(download: bool) -> Result<String, String> {
     let mode = crate::releases::mode();
     if mode == crate::releases::Mode::Checkout {
@@ -2733,6 +3114,18 @@ fn run_update(download: bool) -> Result<String, String> {
                 .to_string(),
         );
     }
+    /* The release check is an outbound request, and `net::require_online` refuses one until
+    an entry point has handed the egress gate the settings database. Every other CLI
+    subcommand gets that for free by building an engine; this one needed none, so it asked
+    GitHub without a policy installed and the gate failed closed -- "Aether1 has not loaded
+    its network policy yet ... This is a bug rather than a setting", which it was.
+
+    It was invisible from a checkout, because `Mode::Checkout` returns above before anything
+    reaches the network. So the one shape of install that has a release to update *to* was
+    the only one that could hit it, and `aether1 update` has never worked there. The engine
+    is built for its side effect, which also gets local-only mode honoured here: an operator
+    who has nailed this machine shut is told so, instead of being told to file a bug. */
+    let _engine = crate::build_llm_engine();
     let release =
         crate::releases::latest(crate::UPDATE_REPO, crate::USER_AGENT).map_err(|e| e.message())?;
     let running = crate::APP_VERSION;
@@ -2740,8 +3133,9 @@ fn run_update(download: bool) -> Result<String, String> {
 
     if newer == Some(false) {
         return Ok(format!(
-            "Up to date: running {running}, and {} is the latest release.",
-            release.tag
+            "Up to date: running {running}, and {} is the latest release.{}",
+            release.tag,
+            changes_block(&release.changes)
         ));
     }
     if newer.is_none() {
@@ -2758,10 +3152,12 @@ fn run_update(download: bool) -> Result<String, String> {
             .map(|a| format!(" ({:.1} GB)", a.size as f64 / 1_000_000_000.0))
             .unwrap_or_default();
         return Ok(format!(
-            "{} is out; you are running {running}.\n{}\n\nRun `aether1 update download` to fetch \
-             it{size}. Nothing installs itself: you get a file whose signature has been \
+            "{} is out; you are running {running}.\n{}{}\n\nRun `aether1 update download` to \
+             fetch it{size}. Nothing installs itself: you get a file whose signature has been \
              checked.",
-            release.tag, release.html_url
+            release.tag,
+            changes_block(&release.changes),
+            release.html_url
         ));
     }
 
@@ -2895,7 +3291,7 @@ pub fn run(invocation: Invocation) -> i32 {
         | Invocation::Serve { .. }
         | Invocation::Window { .. }
         | Invocation::Face => Ok(String::new()),
-        Invocation::Help => Ok(USAGE.trim_end().to_string()),
+        Invocation::Help => Ok(usage()),
         Invocation::Version => Ok(format!(
             "{} ({})",
             crate::APP_VERSION,
@@ -2936,6 +3332,13 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::NetRelay { .. } => Ok(String::new()),
         Invocation::CodeRunAllow { program, add } => run_code_run_allow(program, add),
         Invocation::Models { persona, model } => run_models(persona, model),
+        Invocation::Reasoning { level } => run_reasoning(level.as_deref()),
+        Invocation::Tune {
+            adapter,
+            run,
+            revert,
+            rounds,
+        } => run_tune(adapter.as_deref(), run, revert, rounds),
         Invocation::Flow { state, line } => run_flow(state.as_deref(), line.as_deref()),
         Invocation::Words {
             word,
@@ -2954,7 +3357,7 @@ pub fn run(invocation: Invocation) -> i32 {
         Invocation::Devices => run_devices(),
         Invocation::Revoke { id } => run_revoke(&id),
         Invocation::Invalid(message) => {
-            eprintln!("aether1: {message}\n\n{}", USAGE.trim_end());
+            eprintln!("{}: {message}\n\n{}", invoked_as(), usage());
             return 2;
         }
     };

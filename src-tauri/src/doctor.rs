@@ -424,7 +424,7 @@ pub fn observe(db: &MemoryDb, facts: &Facts) -> Observation {
             hud_responding: facts.hud_responding,
             managed_ollama: facts.managed_ollama,
             local_server_asleep: facts.local_server_asleep,
-            autostart_ollama: db.get_setting_bool("autostart_ollama", false),
+            autostart_ollama: db.get_setting_bool("autostart_ollama", true),
             hotkey_registered: facts.hotkey_registered,
         },
         tray: probe_tray(),
@@ -523,7 +523,7 @@ fn probe_tray() -> TrayProbe {
             desktop,
         };
     }
-    let mut cmd = std::process::Command::new("gdbus");
+    let mut cmd = crate::paths::quiet_command("gdbus");
     cmd.args([
         "call",
         "--session",
@@ -535,7 +535,6 @@ fn probe_tray() -> TrayProbe {
         "org.freedesktop.DBus.NameHasOwner",
         "org.kde.StatusNotifierWatcher",
     ]);
-    crate::paths::suppress_console_window(&mut cmd);
     let host_present = cmd.output().ok().and_then(|out| {
         if !out.status.success() {
             return None;
@@ -1674,6 +1673,7 @@ pub fn apply_with(
             true,
             ActionStatus::Proposed,
             Some(&format!("Repairing {}", check.title())),
+            None,
         )
         .ok();
     record_attempt_in_session(key);

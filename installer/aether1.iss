@@ -27,15 +27,22 @@
 #endif
 
 [Setup]
+; **The AppId and DefaultDirName below do not change with the rename, and must not.**
+; The AppId is how Windows' own uninstall registry entry is keyed, and how
+; installs.rs::windows_install finds a copy that is already here -- change it and an
+; existing install becomes invisible to both, so the next installer puts a second copy
+; beside it and neither uninstaller knows about the other. DefaultDirName is the folder
+; that install's files are already in. The display name is what an operator reads, and that
+; is what the rename moves; these two are identity, not branding.
 AppId={{9B7B6C6E-7B3E-4A9B-9C7A-8A1E8B6A6F1E}
-AppName=Aether1 Platform
+AppName=Aurora1
 AppVersion={#AppVersion}
 AppPublisher=TridentSpoon
 DefaultDirName={localappdata}\Aether1
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir={#OutDir}
-OutputBaseFilename=Aether1-Setup
+OutputBaseFilename=Aurora1-Setup
 SetupIconFile={#StageDir}\icon.ico
 UninstallDisplayIcon={app}\aether1.exe
 Compression=lzma2
@@ -69,11 +76,29 @@ Source: "{#StageDir}\models\{#PiperVoice}.onnx.json"; DestDir: "{%USERPROFILE}\.
 Source: "{#StageDir}\models\ggml-{#WhisperModel}.bin"; DestDir: "{%USERPROFILE}\.local\share\whisper"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Aether1 Platform"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\Aether1 Platform"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\Aurora1"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Aurora1"; Filename: "{app}\aether1.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\aether1.exe"; Description: "Launch Aether1 now"; Flags: nowait postinstall skipifsilent
+; **The second command name.** `aurora1` is the companion's command and `aether1` is the one
+; behind the curtain; every subcommand works under both, and the help text names whichever one
+; was typed (cli::invoked_as). A hard link rather than a second copy, because it is the same
+; binary -- copying it would double a large install for nothing and let the two drift apart on
+; the next update. `mklink /H` needs no elevation on NTFS within one volume, which is what a
+; per-user install under {localappdata} always is.
+;
+; `runhidden` and no failure handling: if the link cannot be made (a volume that is not NTFS,
+; say) the install is still complete and correct, because `aether1` is there and runs
+; everything. This is the one step allowed to fail quietly, which is why it is here and not
+; in [Files].
+Filename: "{cmd}"; Parameters: "/c mklink /H ""{app}\aurora1.exe"" ""{app}\aether1.exe"""; Flags: runhidden; StatusMsg: "Adding the aurora1 command..."
+
+Filename: "{app}\aether1.exe"; Description: "Launch Aurora1 now"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; The hard link above is made after install rather than listed in [Files], so Inno does not
+; know about it and would otherwise leave behind an aurora1.exe pointing at a deleted file.
+Type: files; Name: "{app}\aurora1.exe"
 
 [Code]
 // Appends {app}\bin to the current user's PATH so `which::which` (Rust, in the running

@@ -4,7 +4,6 @@
 // with `match` instead of a free-form "status" string the caller has to compare by hand.
 
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use std::time::Duration;
 
 const OLLAMA_URL: &str = "http://localhost:11434";
@@ -271,6 +270,53 @@ impl LocalApi {
     }
 }
 
+/// The base address of an OpenAI-compatible endpoint: the same server, without the `/v1`
+/// the OpenAI shape is served under.
+///
+/// Kept separate from the probe below so it can be tested without a server, and because
+/// the trailing slash is the sort of thing that silently turns a probe into a 404.
+pub fn without_openai_suffix(endpoint: &str) -> String {
+    let trimmed = endpoint.trim().trim_end_matches('/');
+    trimmed
+        .strip_suffix("/v1")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Whether the server behind an OpenAI-compatible endpoint is in fact Ollama.
+///
+/// Ollama serves its own API *and* an OpenAI-compatible one at `/v1`, so pointing the
+/// OpenAI-shaped provider at `http://127.0.0.1:11434/v1` works -- and quietly costs the
+/// two things that only the native path does: the capability probe that decides whether
+/// the model can call tools, and `num_ctx`, without which Ollama uses its 4096 default
+/// whatever the model can do. An operator who got there through the server list had no
+/// way to know any of that; they picked the server that answered.
+///
+/// `/api/version` is Ollama's and nothing else's, which is what makes this an answer
+/// rather than a guess about a port number.
+pub fn is_ollama_behind(endpoint: &str) -> bool {
+    let base = without_openai_suffix(endpoint);
+    if base.is_empty() {
+        return false;
+    }
+    crate::net::get(
+        &format!("{base}/api/version"),
+        "the local server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .map(|resp| resp.status().is_success())
+    .unwrap_or(false)
+}
+
 /// A local model server that answered.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LocalServer {
@@ -295,40 +341,22 @@ fn describe_local(port: u16, models: &[String]) -> String {
     }
 }
 
-/// Asks one port whether it is a model server, OpenAI-compatible shape first.
+/// Asks one port whether it is a model server, native shape first.
 ///
-/// The native API is tried second and only as a fallback, because a server that speaks
-/// both is then driven through the OpenAI-compatible path -- the one every other tool
-/// here also uses.
+/// The order matters and used to be the other way round, on the reasoning that a server
+/// speaking both shapes should be driven through the OpenAI-compatible one "every other
+/// tool here also uses". Ollama speaks both -- and it answers `/v1/models` -- so that
+/// order labelled *every* Ollama a generic OpenAI server on a `/v1` endpoint. Since
+/// native tool calling arrived, that label is not a cosmetic preference: it is what
+/// decides whether the `/api/show` capability probe runs at all, whether `tools` is sent,
+/// and whether `num_ctx` can be set. An Ollama driven through `/v1` is a capable model
+/// forced onto the fenced-text protocol, reading at Ollama's 4096 default.
+///
+/// So the native API is asked first. A server that answers it *is* the native kind;
+/// anything else falls through to the OpenAI-compatible shape, which is still the right
+/// answer for LM Studio, llama.cpp's server, vLLM and the rest.
 fn probe_local_port(port: u16) -> Option<LocalServer> {
     let base = format!("http://127.0.0.1:{port}");
-
-    let openai: Option<Vec<String>> = crate::net::get(
-        &format!("{base}/v1/models"),
-        "the local server was not probed",
-    )
-    .ok()
-    .and_then(|request| {
-        request
-            .config()
-            .timeout_global(Some(PROBE_TIMEOUT))
-            .build()
-            .call()
-            .ok()
-    })
-    .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
-    .map(|data| data.data.into_iter().map(|m| m.id).collect());
-
-    if let Some(models) = openai {
-        return Some(LocalServer {
-            endpoint: format!("{base}/v1"),
-            port,
-            api: LocalApi::OpenAi,
-            provider_key: LocalApi::OpenAi.provider_key(),
-            label: describe_local(port, &models),
-            models,
-        });
-    }
 
     let native: Option<Vec<String>> = crate::net::get(
         &format!("{base}/api/tags"),
@@ -346,11 +374,38 @@ fn probe_local_port(port: u16) -> Option<LocalServer> {
     .and_then(|resp| resp.into_body().read_json::<OllamaTagsResponse>().ok())
     .map(|data| data.models.into_iter().map(|m| m.name).collect());
 
-    native.map(|models| LocalServer {
-        endpoint: base,
+    if let Some(models) = native {
+        return Some(LocalServer {
+            endpoint: base,
+            port,
+            api: LocalApi::Native,
+            provider_key: LocalApi::Native.provider_key(),
+            label: describe_local(port, &models),
+            models,
+        });
+    }
+
+    let openai: Option<Vec<String>> = crate::net::get(
+        &format!("{base}/v1/models"),
+        "the local server was not probed",
+    )
+    .ok()
+    .and_then(|request| {
+        request
+            .config()
+            .timeout_global(Some(PROBE_TIMEOUT))
+            .build()
+            .call()
+            .ok()
+    })
+    .and_then(|resp| resp.into_body().read_json::<LmStudioModelsResponse>().ok())
+    .map(|data| data.data.into_iter().map(|m| m.id).collect());
+
+    openai.map(|models| LocalServer {
+        endpoint: format!("{base}/v1"),
         port,
-        api: LocalApi::Native,
-        provider_key: LocalApi::Native.provider_key(),
+        api: LocalApi::OpenAi,
+        provider_key: LocalApi::OpenAi.provider_key(),
         label: describe_local(port, &models),
         models,
     })
@@ -369,8 +424,12 @@ fn probe_local_port(port: u16) -> Option<LocalServer> {
 pub fn models_at(endpoint: &str) -> Option<Vec<String>> {
     let base = endpoint.trim_end_matches('/');
     // An endpoint ending in /v1 is the OpenAI-compatible shape and already carries the
-    // prefix; anything else gets both shapes tried, same order and same reason as
-    // probe_local_port -- a server that speaks both is driven through the common one.
+    // prefix; anything else gets both shapes tried. The OpenAI shape goes first here, the
+    // opposite of probe_local_port, and deliberately: that function is choosing which
+    // provider will drive a server and must not mistake an Ollama for a generic one, while
+    // this one is only listing what an endpoint the operator already configured can run.
+    // Asking an explicitly-configured /v1 address in its own shape first is the right
+    // reading of that configuration, and either probe answering counts either way.
     let openai_url = if base.ends_with("/v1") {
         format!("{base}/models")
     } else {
@@ -532,7 +591,10 @@ pub fn pull_model(model_name: &str) -> PullResult {
     }
 
     if which::which("ollama").is_ok() {
-        return match Command::new("ollama").args(["pull", model_name]).spawn() {
+        return match crate::paths::quiet_command("ollama")
+            .args(["pull", model_name])
+            .spawn()
+        {
             // Started, not finished: nothing here waits for it, and a several-gigabyte
             // download does not fit in any timeout worth holding a thread for. Whoever asked
             // for this finds out it landed by asking the server what models it has -- which
@@ -945,5 +1007,42 @@ mod tests {
         }
         assert!(status.models.is_empty());
         assert_eq!(status.recommended_model, "local-model");
+    }
+
+    /// Trident's settings were `llm_endpoint = "http://127.0.0.1:11434/v1"`. The probe has
+    /// to ask the server itself, on its own API, so the `/v1` has to come off cleanly --
+    /// including a trailing slash, which would otherwise turn `/api/version` into a 404
+    /// and the answer into a silent no.
+    #[test]
+    fn the_openai_suffix_comes_off_an_endpoint_however_it_was_typed() {
+        for written in [
+            "http://127.0.0.1:11434/v1",
+            "http://127.0.0.1:11434/v1/",
+            "  http://127.0.0.1:11434/v1  ",
+            "http://127.0.0.1:11434",
+            "http://127.0.0.1:11434/",
+        ] {
+            assert_eq!(
+                without_openai_suffix(written),
+                "http://127.0.0.1:11434",
+                "{written}"
+            );
+        }
+    }
+
+    /// A path that merely contains v1 is not the OpenAI suffix.
+    #[test]
+    fn only_a_trailing_v1_is_treated_as_the_openai_suffix() {
+        assert_eq!(
+            without_openai_suffix("http://box:8080/v1/proxy"),
+            "http://box:8080/v1/proxy"
+        );
+    }
+
+    /// Nothing to probe is not Ollama, and must not become a request to "/api/version".
+    #[test]
+    fn an_empty_endpoint_is_not_mistaken_for_a_server() {
+        assert!(!is_ollama_behind(""));
+        assert!(!is_ollama_behind("   "));
     }
 }

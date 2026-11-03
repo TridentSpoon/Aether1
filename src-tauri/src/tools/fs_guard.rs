@@ -360,6 +360,9 @@ mod tests {
         });
     }
 
+    // A symlink made with the unix API, judged against /etc: both halves are this
+    // platform's, so the test is too.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_pointing_out_of_bounds_is_refused() {
         with_home(|home| {
@@ -420,6 +423,9 @@ mod tests {
         });
     }
 
+    // A symlink made with the unix API, judged against /etc: both halves are this
+    // platform's, so the test is too.
+    #[cfg(unix)]
     #[test]
     fn writing_through_a_symlink_out_of_home_is_refused() {
         with_home(|home| {
@@ -431,6 +437,9 @@ mod tests {
         });
     }
 
+    // A symlink made with the unix API, judged against /etc: both halves are this
+    // platform's, so the test is too.
+    #[cfg(unix)]
     #[test]
     fn writing_into_a_directory_that_links_out_of_home_is_refused() {
         with_home(|home| {

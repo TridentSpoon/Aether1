@@ -25,7 +25,6 @@
 // working.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// whisper.cpp's CLI has been renamed more than once; distributions ship at least these.
 const WHISPER_BINARIES: &[&str] = &["whisper-cli", "whisper-cpp", "whisper", "main"];
@@ -142,9 +141,8 @@ fn faster_whisper_status() -> Result<PathBuf, String> {
             managed_env_command("faster-whisper")
         )
     })?;
-    let mut cmd = Command::new(&python);
+    let mut cmd = crate::paths::quiet_command(&python);
     cmd.args(["-c", "import faster_whisper"]);
-    crate::paths::suppress_console_window(&mut cmd);
     let ok = cmd.output().map(|o| o.status.success()).unwrap_or(false);
     if ok {
         Ok(python)
@@ -214,7 +212,7 @@ fn transcribe_with_whisper_cpp(
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<String, String> {
-    let mut command = Command::new(binary);
+    let mut command = crate::paths::quiet_command(binary);
     command
         .arg("--model")
         .arg(model)
@@ -222,7 +220,6 @@ fn transcribe_with_whisper_cpp(
         .arg(wav_path)
         .arg("--language")
         .arg(language.unwrap_or("en"));
-    crate::paths::suppress_console_window(&mut command);
 
     let output = command
         .output()
@@ -248,14 +245,13 @@ fn transcribe_with_faster_whisper(
     wav_path: &Path,
     language: Option<&str>,
 ) -> Result<String, String> {
-    let mut command = Command::new(python);
+    let mut command = crate::paths::quiet_command(python);
     command
         .arg("-c")
         .arg(FASTER_WHISPER_SCRIPT)
         .arg(DEFAULT_FASTER_WHISPER_MODEL)
         .arg(wav_path)
         .arg(language.unwrap_or("en"));
-    crate::paths::suppress_console_window(&mut command);
 
     let output = command
         .output()

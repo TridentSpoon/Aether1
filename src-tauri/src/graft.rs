@@ -13,7 +13,7 @@
 use crate::llm::MemoryDb;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// Path setting for the project chosen before there was more than one. Read only to carry
@@ -150,13 +150,17 @@ fn check_graft_status(project_path: &Path) -> GraftStatus {
 
 /// Where the Graft binary is, if it can be found.
 ///
+/// Public because `graft_install` needs it the moment npm has finished: a global npm
+/// install lands exactly where this resolver looks and exactly where a desktop launcher's
+/// PATH does not.
+///
 /// `graft` is an npm global, and a desktop launcher does not start the app from the
 /// operator's shell, so the directory npm installs into is routinely missing from PATH even
 /// though `graft` runs fine in a terminal -- nvm most of all, since what adds its bin
 /// directory is a shell init file a launcher never sources. PATH is still asked first,
 /// through the same lookup as every other binary Aether1 shells out to; npm's own prefixes
 /// are the fallback, and `GRAFT_BIN` overrides both for an install somewhere unusual.
-fn graft_program() -> PathBuf {
+pub fn program() -> PathBuf {
     if let Some(from_env) = std::env::var_os("GRAFT_BIN") {
         let path = PathBuf::from(from_env);
         if path.is_file() {
@@ -224,14 +228,13 @@ fn run_graft(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output, String> {
-    let mut command = Command::new(graft_program());
+    let mut command = crate::paths::quiet_command(program());
     command
         .args(args)
         .current_dir(project_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::paths::suppress_console_window(&mut command);
 
     let mut child = command.spawn().map_err(|e| {
         format!(

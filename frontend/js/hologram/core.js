@@ -1,45 +1,39 @@
 /**
  * 3D Holographic Avatar Engine (Three.js)
- * Avatars (3D shape) and Color Themes (palette) are independently selectable.
- * Avatars:
- * 1. hAlcy: Harmonic Particle Lattice & Orbital Rings
- * 2. A.R.X.LIMES: Faceted Floating Hub with a Fractured Convex Dome of Plates
- * 3. The Nexus: Squid/Brain Creature with Trailing Tentacles that Hunts the Cursor,
- *    Set Against Falling NEXUS Letter Rain
- * 4. R.E.D. 9000 (HAL 9000): Obsidian Eye with a Hot Lens Glow, Two Depth-Stacked Blinking
- *    Eyelid Arcs, and a Speech-Reactive Light
- * 5. A.R.X.LOGOS: Hexagonal Core Eye with Six Spiraling Aperture-Blade Arms, Two Tumbling
- *    Hex-Frame Rings, and an Orbiting Hex Swarm
- * 6. A1ter_nul: Cunningham -- a Faceted Chromatic-Glitch Ghost Bust Behind a Rotating Firewall/ICE Ring
- * 7. A1: Monogram Placeholder -- Extruded Solid 'A' beside a Point-Cloud '1', shown before
- *    an operator has actually picked a persona/avatar
- * 8. Real-time Audio Frequency and State deformation.
  *
- * Three of the avatars above belong to named families, grouped together (not scattered
- * through the list above) in index.html's avatar-menu and js/avatar-lab.js's BUILT_IN --
- * see registerAvatar's optional def.group if a new one joins as a plugin rather than a
- * hand-modelled buildXAvatar() like these:
- * - "Singular Ascended Class": hAlcy (1), R.E.D. 9000 (4), A1ter_nul (6).
- * - "Trace Protocols": The Nexus (3), and the plugins Nexus Sent, White Rabbit and Operator.
- *   The latter three are also hidden easter eggs, not just a group: they start absent from
- *   the picker and only ever appear by being triggered from a chat message while The Nexus
- *   is on screen (a greeting, an Alice/rabbit-hole reference, a security or diagnostic
- *   question), unlocking permanently into the picker the first time that happens -- see
- *   js/app.js's EASTER_EGG_RULES, checkEasterEggTriggers and flashEasterEgg.
- * - "The Umbrals": A.R.X.LIMES (2) and A.R.X.LOGOS (5), the A.R.X. name in general.
- * - "The eXcelsior Class": the plugins enXephalon, C.I.C.E.R.O., PRAXIS,
- *   Chrono-mAIstresse, m.A.I.r.a.d., vA1or, CorvA1s, Divinai and TithesA1s. index.html's
- *   avatar-menu keeps a family heading off screen while its grid is empty, which is how
- *   this one waited for its first avatar.
+ * An avatar (the 3D shape) and a colour theme (the palette) are selected independently.
+ * Every avatar is a plug-in: it lives in its own avatar-*.js file and registers itself
+ * with HologramAvatar.registerAvatar, carrying its own build(), animate() and
+ * applyPalette(). This file knows none of them by name -- see js/hologram/README.md for
+ * the contract, and avatar-template.js for a blank one.
  *
- * This file defines the class shell (construction, lifecycle, avatar/theme selection).
- * Geometry construction lives in avatar-*.js, shared geometry helpers in geometry-helpers.js,
- * and the per-frame animation loop in animate.js -- all attached via HologramAvatar.prototype,
- * so load order in index.html matters: this file first, then the rest, before app.js runs.
+ * Avatars belong to named families, which pickers cluster together rather than scattering
+ * through a flat list, through registerAvatar's optional def.group:
+ * - "Singular Ascended Class": hAlcy, R.E.D. 9000, A1ter_nul.
+ * - "Trace Protocols": The Nexus, Nexus Sent, White Rabbit and Operator. The last three
+ *   are hidden easter eggs as well as a group: they start absent from the picker and only
+ *   appear by being triggered from a chat message while The Nexus is on screen (a
+ *   greeting, an Alice/rabbit-hole reference, a security or diagnostic question),
+ *   unlocking permanently the first time that happens -- see js/app.js's EASTER_EGG_RULES,
+ *   checkEasterEggTriggers and flashEasterEgg.
+ * - "The Umbrals": A.R.X.LIMES, A.R.X.LOGOS, and the A.R.X. name in general.
+ * - "The eXcelsior Class": enXephalon, C.I.C.E.R.O., PRAXIS, Chrono-mAIstresse,
+ *   m.A.I.r.a.d., vA1or, CorvA1s, Divinai and TithesA1s. index.html's avatar-menu keeps a
+ *   family heading off screen while its grid is empty, which is how this one waited for
+ *   its first avatar.
  *
- * The avatar-*.js files are the exception: they are not in the page at launch at all. Each is
- * fetched the first time its avatar is picked -- see avatar-loader.js and materialiseAvatar
- * below -- so an avatar that exists but has never been chosen costs nothing to start up.
+ * A1 is the monogram placeholder shown before an operator has picked a persona at all.
+ *
+ * This file defines the class shell: construction, lifecycle, avatar and theme selection.
+ * Shared geometry and texture helpers live in geometry-helpers.js (handed to avatars as
+ * api.helpers), and the per-frame loop in animate.js -- both attached via
+ * HologramAvatar.prototype, so load order in index.html matters: this file first, then
+ * those, before app.js runs.
+ *
+ * The avatar-*.js files are the exception: they are not in the page at launch at all. Each
+ * is fetched the first time its avatar is picked -- see avatar-loader.js and
+ * materialiseAvatar below -- so an avatar that exists but has never been chosen costs
+ * nothing to start up.
  */
 
 class HologramAvatar {
@@ -49,7 +43,7 @@ class HologramAvatar {
         // Set while the GPU has taken the WebGL context away; see the
         // webglcontextlost handler in init(). Nothing is drawn until it is back.
         this.contextLost = false;
-        this.currentAvatar = 'a1'; // a1, halcy, arx-limes, nexus, red, arx-logos, alt
+        this.currentAvatar = 'a1'; // any registered avatar's id; see avatar-loader.js
         this.currentColorTheme = 'halcy'; // halcy, nexus, arx-limes, arx-logos, red, night-city
         this.activePalette = THEME_PALETTES.halcy;
         this.audioData = new Uint8Array(64);
@@ -58,134 +52,9 @@ class HologramAvatar {
         this.camera = null;
         this.renderer = null;
 
-        // 1. hAlcy structures
-        this.particleSystem = null;
-        this.particleCount = 2800;
-        this.basePositions = [];
-        this.coreOrb = null; // obsidian inner sphere — fixed color, not theme-tinted
-        this.halcyOuterRing = null; // static cyan ring — fixed color, not theme-tinted
-        this.halcyInnerRingGroup = null; // ultramarine equalizer ring — fixed color, not theme-tinted
-        this.halcyInnerSegments = [];
-
-        // 2. A.R.X.LIMES structures — floating faceted hub + fractured dome plates
-        this.arxLimesGroup = null;
-        this.arxLimesHubMesh = null;
-        this.arxLimesHubOutline = null;
-        this.arxLimesPlates = []; // { group, baseAngle, baseRadius, phase, tier }
-        this.arxLimesHubFillMat = null;
-        this.arxLimesHubRimMat = null; // fixed hot "event horizon" rim — not theme-tinted
-        this.arxLimesOutlineMat = null;
-        this.arxLimesMainFillMat = null;
-        this.arxLimesWingFillMat = null;
-        this.arxLimesAccretionGroup = null;
-        this.arxLimesAccretionRing1 = null;
-        this.arxLimesAccretionRing1Mat = null; // fixed hot accent — not theme-tinted
-        this.arxLimesAccretionRing2 = null;
-        this.arxLimesAccretionRing2Mat = null; // fixed hot accent — not theme-tinted
-        this.arxLimesAccretionHotspots = []; // { mesh, angle, radius, speed }
-        this.arxLimesAccretionHotspotsMat = null; // fixed hot accent — not theme-tinted
-
-        // 3. The Nexus Crew (v3): an elongated, bulbous lathe-hull rendered as a wireframe/
-        // point-cloud "live sensor feed" (not a solid mesh), the previous build's eye-lens
-        // cluster carried over onto the nose, and 10 chain-link tentacles that drift
-        // jellyfish-style when idle and spread/sharpen forward toward the cursor when alert
-        // -- set against a falling NEXUS letter rain and a faint radar-grid backdrop.
-        this.nexusGroup = null;
-        this.nexusCreatureGroup = null; // hull + tentacles; rotates to face the cursor
-        this.nexusHeadMesh = null; // near-invisible fill (vertex-colored gradient), just enough for the point cloud to sit "on"
-        this.nexusHullFillMat = null;
-        this.nexusHeadInnerWire = null; // dense inner wireframe (every triangle edge) -- dimmer, "inner structural lines"
-        this.nexusHullInnerWireMat = null;
-        this.nexusHeadOutline = null; // sparser structural/silhouette edges -- brighter, additive
-        this.nexusHeadOutlineMat = null;
-        this.nexusHeadPoints = null; // sparse point cloud at every hull vertex -- brightest of the three, the "nodes" depth cue
-        this.nexusHullPointsMat = null;
-        this.nexusHeadHeightScale = 1; // head-on Y squash (0.6 -- same width, 60% height); animateNexus's pulse multiplies on top of this
-        this.nexusRibMat = null; // shared material for the three carapace ribs
-        this.nexusGridMat = null; // faint rotating radar-grid backdrop sprite
-        this.nexusTentacleLinkMat = null; // shared tapered-cylinder chain-link material
-        this.nexusTentaclePointMat = null; // shared glowing joint-marker material, brighter than the links
-        this.nexusTentacles = []; // { geom, positions, points, links, claws, baseAngle, speedMult, phaseSeed, aggroT }
-        this.nexusEyes = []; // { mesh, glow, ring, highlight } — fixed phosphor red/orange, blink together in idle
-        this.nexusEyeRingMat = null; // shared bezel-outline sprite material, slowly spins
-        this.nexusEyeHighlightMat = null; // shared anime/cartoon eye-shine sprite material
-        this.nexusRainDrops = []; // sprites, fall straight down and wrap top-to-bottom
-        this.nexusRainMaterials = []; // one shared material per NEXUS letter
-        this.nexusFacing = { yaw: 0, pitch: 0, roll: 0 }; // eased head orientation
-
-        // 4. R.E.D. 9000 / HAL 9000 structures -- obsidian eye with lens shell + eyelid arcs
-        this.redGroup = null;
-        this.redCoreSphere = null;
-        this.redLensOuter = null;
-        this.redBlueCircle = null;
-        this.redCyanCircle = null;
-        // Lens glow: a fixed yellow-hot-to-crimson sprite sitting on the core's front face,
-        // plus a warm point light seated at the lens -- both pulse with speech/thinking/
-        // blink in animateRed9000. Fixed color regardless of theme, same convention as the
-        // obsidian core itself.
-        this.redLensGlow = null;
-        this.redInnerGlow = null; // same warm gradient, depth-test off, bleeds past the core's silhouette
-        this.redEyeLight = null;
-        // Blink scheduling -- see animateRed9000. redBlinkStartTime is elapsedTime when the
-        // eyelids started closing; redNextBlinkTime is when the next autonomous blink fires.
-        this.redBlinkStartTime = -999;
-        this.redNextBlinkTime = 4 + Math.random() * 4;
-        this.redLastHandledBlinkClick = -999; // dedupes a click's blink to a single trigger
-
-        // 5. A.R.X.LOGOS - Central Hexagon with Six Spiraling Hexagon Arms + Dotted Outer Ring
-        this.arxLogosGroup = null;
-        this.arxLogosCentralFill = null;
-        this.arxLogosCentralOutline = null;
-        this.arxLogosArmHexes = []; // { mesh, armIndex, stepIndex, baseX, baseY, phase }
-        this.arxLogosOuterDots = [];
-        this.arxLogosArmMatNear = null;
-        this.arxLogosArmMatMid = null;
-        this.arxLogosArmMatFar = null;
-        this.arxLogosOuterDotMat = null;
-        // Core eye -- a fixed dark pupil + catchlight nested in the central hex (real "eye"
-        // material, not theme-tinted, same convention as every other avatar's obsidian core).
-        this.arxLogosPupil = null;
-        this.arxLogosCatchlight = null;
-        // Two hex-frame rings beyond the dotted boundary, each tumbling on its own axis --
-        // see buildArxLogosAvatar.
-        this.arxLogosShellRings = []; // { mesh, speed: {x,y,z} }
-        this.arxLogosShellRingMats = [];
-        // A small swarm of hex nodes orbiting freely in 3D around the whole structure,
-        // unlike the arm hexes (locked to the flat spiral) -- real depth beyond one plane.
-        this.arxLogosSwarmGroup = null;
-        this.arxLogosSwarmNodes = []; // { mesh, radius, angle, heightOffset, speed, bobPhase }
-        this.arxLogosSwarmMat = null;
-        // Aperture-close scheduling -- see animateArxLogos. Pulls every arm hex in toward
-        // the core-eye and back, like a camera iris snapping shut over it. Same click +
-        // autonomous-idle-timer pattern as R.E.D. 9000's blink.
-        this.arxLogosApertureStartTime = -999;
-        this.arxLogosNextApertureTime = 5 + Math.random() * 4;
-        this.arxLogosLastHandledApertureClick = -999;
-
-        // 6. A1ter_nul (Cunningham) -- modelled on Cyberpunk 2077's Black Wall / relic: a
-        // stack of irregular dark-glass shards with gaps between them (not a solid body),
-        // behind a static firewall/ICE perimeter of concentric, fading rings. Each shard's
-        // glass fill is a fixed obsidian material; its glowing edge is theme-tinted and,
-        // while speaking, driven by its own audio frequency bin -- the stack as a vertical
-        // equalizer built out of broken relic glass -- see buildAltAvatar.
-        this.altGroup = null;
-        this.altShardGroup = null;
-        this.altShards = []; // { fillMat, outlineMat, baseOpacity, phase, binIndex }
-        this.altFirewallRings = []; // { mesh, mat, fade } -- concentric, outer rings fainter
-        // Parent for all but the innermost two firewall rings -- added straight to the
-        // scene (not nested under altGroup) so those rings never inherit the avatar's
-        // own sway/click-nudge and stay genuinely static. See buildAltAvatar.
-        this.altFirewallStaticGroup = null;
-        this.altShieldGroup = null;
-        this.altShieldTiles = []; // { fill, outline, baseAngle, phase }
-        this.altShieldFillMat = null;
-        this.altShieldOutlineMat = null;
-
-        // Avatars registered from outside this engine -- see registerAvatar below and
-        // js/hologram/README.md. Each entry is { def, model }: the definition someone
-        // handed us, and whatever their build() returned. A1 (the default placeholder
-        // shown before an operator has picked a persona/avatar) is one of these -- see
-        // avatar-a1.js -- rather than a hand-modelled built-in like the six below.
+        /* Every avatar this engine knows -- all of them register themselves (see
+           registerAvatar below and js/hologram/README.md). Each entry is { def, model }:
+           the definition someone handed us, and whatever their build() returned. */
         this.plugins = new Map();
 
         // Which avatars have actually been built into this scene. Avatar files arrive on
@@ -231,11 +100,11 @@ class HologramAvatar {
         // avatar should be scaled up to occupy. Only the fullscreen face asks for this.
         this.fillFraction = null;
 
-        // Pointer tracking -- only The Nexus consumes these (mouse-manipulated head that
-        // autonomously "hunts" when the pointer isn't actively directing it); other avatars
-        // stay front-facing/static and simply don't read them.
-        this.nexusMouseNX = 0; // -1..1 across the renderer element
-        this.nexusMouseNY = 0;
+        /* Pointer tracking, handed to every avatar as ctx.pointer. Only The Nexus reads
+           it today -- a head the pointer can steer, which goes back to hunting on its own
+           the moment it stops -- and other avatars simply stay front-facing. */
+        this.pointerNX = 0; // -1..1 across the renderer element
+        this.pointerNY = 0;
         this.lastMouseMoveTime = -999; // seconds on this.clock
 
         // Auto-fit: keeps the active avatar's edges (and its idle bounce/pulse/float) clear
@@ -402,13 +271,14 @@ class HologramAvatar {
         this.renderer.domElement.addEventListener('pointerup', endDrag);
         this.renderer.domElement.addEventListener('pointercancel', endDrag);
 
-        // The Nexus's head can be steered by the pointer while it's active over the
-        // viewport; animateNexus falls back to an autonomous "hunting" scan the moment it
-        // stops (mouseleave included, so it doesn't just sit aimed at wherever it was left).
+        /* Where the pointer is over the viewport, for any avatar that wants it. Leaving
+           the element resets the idle clock rather than the position, so an avatar
+           watching it goes back to its own behaviour instead of sitting aimed at wherever
+           the pointer was last seen. */
         this.renderer.domElement.addEventListener('mousemove', (e) => {
             const rect = this.renderer.domElement.getBoundingClientRect();
-            this.nexusMouseNX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            this.nexusMouseNY = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+            this.pointerNX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            this.pointerNY = ((e.clientY - rect.top) / rect.height) * 2 - 1;
             this.lastMouseMoveTime = this.clock.getElapsedTime();
         });
         this.renderer.domElement.addEventListener('mouseleave', () => {
@@ -430,12 +300,11 @@ class HologramAvatar {
 
     // Which 3D shape is visible / animated. Independent of color theme.
     setAvatar(avatar) {
-        /* A saved setting may still name an avatar by a spelling it has since outgrown --
-           see ALIASES in avatar-loader.js. Resolve it once, here, so that everything
+        /* A saved setting may still name an avatar by a spelling it has since outgrown,
+           or one this build has never heard of. Resolve it once, here, so everything
            downstream sees the same id: the plugin lookup below, the per-frame lookup in
-           animate.js, and materialiseAvatar's retry. The built-in branches further down
-           name their own old spellings explicitly and are unaffected either way. */
-        avatar = HologramAvatar.canonicalAvatarId(avatar);
+           animate.js, and materialiseAvatar's retry. */
+        avatar = HologramAvatar.resolveAvatarId(avatar);
         this.currentAvatar = avatar;
         /* Its file may not be in the page yet -- they arrive on demand (see
            js/hologram/avatar-loader.js). Build it if it is here, otherwise fetch it and come
@@ -443,52 +312,42 @@ class HologramAvatar {
            behind is hidden immediately rather than staying on screen until the new one's file
            finishes loading, which would read as the click not registering. */
         this.materialiseAvatar(avatar);
-        // A registered avatar wins over every built-in, including the hAlcy fallback
-        // below -- otherwise an unrecognised name would show hAlcy *and* the plug-in.
         const plugin = this.plugins.get(avatar);
         this.plugins.forEach((entry, id) => {
             if (entry.model && entry.model.group) entry.model.group.visible = (id === avatar);
         });
-        const isArxLimes = avatar === 'arx-limes';
-        const isNexus = avatar === 'nexus' || avatar === 'matrix';
-        const isRed = avatar === 'red' || avatar === 'crimson';
-        const isArxLogos = avatar === 'arx-logos';
-        const isAlt = avatar === 'alt' || avatar === 'cunningham' || avatar === 'a1ter_nul';
-        const isHalcy = !plugin && !isArxLimes && !isNexus && !isRed && !isArxLogos && !isAlt;
 
-        if (this.particleSystem) this.particleSystem.visible = isHalcy;
-        if (this.halcyOuterRing) this.halcyOuterRing.visible = isHalcy;
-        if (this.halcyInnerRingGroup) this.halcyInnerRingGroup.visible = isHalcy;
-        if (this.coreOrb) this.coreOrb.visible = isHalcy;
+        /* A viewport overlay the avatar itself asks for, through viewportClass on its
+           registerAvatar def -- A1ter_nul's chromatic glitch, and the CRT scanlines The
+           Nexus is watched through (see #hologram-viewport.glitch-active::after and
+           .crt-active::after in A1theme.css / sprite.css). Every class any registered
+           avatar declares is cleared first, so switching avatars can never leave somebody
+           else's overlay on the viewport. */
+        if (this.container) {
+            HologramAvatar.avatarPlugins.forEach((def) => {
+                if (def.viewportClass) this.container.classList.remove(def.viewportClass);
+            });
+            if (plugin && plugin.def.viewportClass) {
+                this.container.classList.add(plugin.def.viewportClass);
+            }
+        }
 
-        if (this.arxLimesGroup) this.arxLimesGroup.visible = isArxLimes;
-        if (this.nexusGroup) this.nexusGroup.visible = isNexus;
-        if (this.redGroup) this.redGroup.visible = isRed;
-        if (this.arxLogosGroup) this.arxLogosGroup.visible = isArxLogos;
-        if (this.altGroup) this.altGroup.visible = isAlt;
-        if (this.altFirewallStaticGroup) this.altFirewallStaticGroup.visible = isAlt;
+        /* A different avatar can be a very different size (a hand-modelled one against a
+           custom recipe dialled up to its largest settings) -- measure the one now on
+           screen and refit the camera to it. Nothing to measure yet means its file is
+           still on its way; materialiseAvatar calls back through here when it lands. */
+        if (plugin && plugin.model && plugin.model.group) {
+            this.updateContentFit([this.fitGroupFor(plugin.model)]);
+        }
+    }
 
-        // CRT scanline/flicker overlay (see #hologram-viewport.crt-active::after in
-        // A1theme.css / sprite.css) -- only The Nexus Crew's wireframe "live sensor feed"
-        // look asks for it.
-        if (this.container) this.container.classList.toggle('crt-active', isNexus);
-
-        // Chromatic-glitch scanline overlay (see #hologram-viewport.glitch-active::after in
-        // A1theme.css / sprite.css) -- only A1ter_nul's digital-ghost look asks for it.
-        if (this.container) this.container.classList.toggle('glitch-active', isAlt);
-
-        // A different avatar can be a very different size (a hand-modelled built-in vs. a
-        // custom recipe dialled up to its largest settings) -- measure the one now on
-        // screen and refit the camera to it.
-        const activeObjects = plugin && plugin.model && plugin.model.group
-            ? [plugin.model.group]
-            : [
-                isHalcy && this.particleSystem, isHalcy && this.halcyOuterRing,
-                isHalcy && this.halcyInnerRingGroup, isHalcy && this.coreOrb,
-                isArxLimes && this.arxLimesGroup, isNexus && this.nexusGroup,
-                isRed && this.redGroup, isArxLogos && this.arxLogosGroup, isAlt && this.altGroup
-            ].filter(Boolean);
-        this.updateContentFit(activeObjects);
+    /* What auto-fit measures for a registered avatar: its whole group, unless it returned
+       a fitGroup saying otherwise. A1ter_nul does -- its firewall perimeter is a boundary
+       deliberately sized to the window's own edges, so measuring it would make the camera
+       pull back until the avatar inside it was a postage stamp. Anything an avatar wants
+       seen but not measured goes outside its fitGroup. */
+    fitGroupFor(model) {
+        return model.fitGroup || model.group;
     }
 
     // Measures the given objects' combined world-space bounding box and refits the camera
@@ -691,77 +550,8 @@ class HologramAvatar {
     applyColorPalette() {
         const p = this.activePalette;
 
-        // hAlcy particle lattice (the obsidian core + both rings have fixed colors by design,
-        // independent of the color theme — see buildHalcyAvatar)
-        if (this.particleSystem) {
-            const colors = this.particleSystem.geometry.attributes.color.array;
-            for (let i = 0; i < this.particleCount; i++) {
-                colors[i * 3] = p.r;
-                colors[i * 3 + 1] = Math.min(1, p.g + Math.random() * 0.15);
-                colors[i * 3 + 2] = p.b;
-            }
-            this.particleSystem.geometry.attributes.color.needsUpdate = true;
-        }
-
-        // The Nexus Crew: wireframe hull + chain tentacles + letter rain. The near-invisible
-        // fill and dense inner wireframe pick up the base hue; the sparser structural
-        // outline, points, and ribs pick up hex3 so they read distinctly brighter -- the
-        // "inner lines dimmer than outer edges/nodes" depth cue. The eye-lens cluster and
-        // pincer tips are a fixed red regardless of theme (see buildNexusAvatar), like every
-        // avatar's always-lit accent.
-        if (this.nexusHullFillMat) this.nexusHullFillMat.color.setHex(p.hex);
-        if (this.nexusHullInnerWireMat) this.nexusHullInnerWireMat.color.setHex(p.hex);
-        if (this.nexusHeadOutlineMat) this.nexusHeadOutlineMat.color.setHex(p.hex3);
-        if (this.nexusHullPointsMat) this.nexusHullPointsMat.color.setHex(p.hex3);
-        if (this.nexusRibMat) this.nexusRibMat.color.setHex(p.hex3);
-        if (this.nexusGridMat) this.nexusGridMat.color.setHex(p.hex);
-        if (this.nexusTentacleLinkMat) this.nexusTentacleLinkMat.color.setHex(p.hex);
-        if (this.nexusTentaclePointMat) this.nexusTentaclePointMat.color.setHex(p.hex3);
-        this.nexusRainMaterials.forEach(mat => mat.color.setHex(p.hex));
-
-        // A.R.X.LIMES fractured dome. The hub is a fixed black void now (a black hole),
-        // and its event-horizon rim + accretion disc are this avatar's fixed hot accent --
-        // none of the three retint with the theme, same as every other avatar's one
-        // constant identity colour.
-        if (this.arxLimesMainFillMat) this.arxLimesMainFillMat.color.setHex(p.hex);
-        if (this.arxLimesWingFillMat) this.arxLimesWingFillMat.color.setHex(p.hex2);
-        if (this.arxLimesOutlineMat) this.arxLimesOutlineMat.color.setHex(p.hex3);
-
-        // A.R.X.LOGOS hexagon spiral
-        if (this.arxLogosCentralFill) this.arxLogosCentralFill.material.color.setHex(p.hex);
-        if (this.arxLogosCentralOutline) this.arxLogosCentralOutline.material.color.setHex(p.hex);
-        if (this.arxLogosArmMatNear) this.arxLogosArmMatNear.color.setHex(p.hex);
-        if (this.arxLogosArmMatMid) this.arxLogosArmMatMid.color.setHex(p.hex2);
-        if (this.arxLogosArmMatFar) this.arxLogosArmMatFar.color.setHex(p.hex3);
-        if (this.arxLogosOuterDotMat) this.arxLogosOuterDotMat.color.setHex(p.hex3);
-        // Pupil and catchlight are fixed (real "eye" material) and stay untouched here.
-        if (this.arxLogosShellRingMats[0]) this.arxLogosShellRingMats[0].color.setHex(p.hex2);
-        if (this.arxLogosShellRingMats[1]) this.arxLogosShellRingMats[1].color.setHex(p.hex3);
-        if (this.arxLogosSwarmMat) this.arxLogosSwarmMat.color.setHex(p.hex);
-
-        // R.E.D. 9000 (the obsidian core is a fixed material, not theme-tinted -- see buildRed9000Avatar)
-        if (this.redLensOuter) this.redLensOuter.material.color.setHex(p.hex);
-        if (this.redBlueCircle) this.redBlueCircle.material.color.setHex(p.hex2);
-        if (this.redCyanCircle) this.redCyanCircle.material.color.setHex(p.hex3);
-        // redLensGlow / redEyeLight are fixed (real "hot lens" glow, like the obsidian core
-        // itself) and stay untouched here.
-
-        // A1ter_nul (Cunningham): each shard's glass fill is a fixed obsidian material
-        // (see buildAltAvatar) -- only the glowing edges retint, ramped from hex2 at the
-        // bottom of the stack to hex3 at the top so the equalizer reads as a spectrum,
-        // like a real EQ's color ramp, rather than one flat color.
-        const altBottom = new THREE.Color(p.hex2);
-        const altTop = new THREE.Color(p.hex3);
-        this.altShards.forEach((shard, i) => {
-            const tt = this.altShards.length > 1 ? i / (this.altShards.length - 1) : 0;
-            shard.outlineMat.color.copy(altBottom).lerp(altTop, tt);
-        });
-        this.altFirewallRings.forEach(ring => ring.mat.color.setHex(p.hex));
-        if (this.altShieldFillMat) this.altShieldFillMat.color.setHex(p.hex);
-        if (this.altShieldOutlineMat) this.altShieldOutlineMat.color.setHex(p.hex3);
-
-        // Registered avatars retint too -- all of them, not just the visible one, so
-        // switching to one later shows it already in the right colours.
+        /* Every avatar retints, not just the visible one, so switching to one later shows
+           it already in the right colours. */
         this.plugins.forEach((entry) => {
             if (typeof entry.def.applyPalette !== 'function') return;
             try {
@@ -812,22 +602,10 @@ class HologramAvatar {
      * chose, not the ones the HUD is set to.
      */
     materialiseAvatar(avatar) {
-        let id = HologramAvatar.canonicalAvatarId(avatar);
-        // A name this engine does not recognise has always shown hAlcy (see setAvatar and
-        // animate) -- so that is the file to fetch for it, not one that does not exist.
-        if (!HologramAvatar.avatarPlugins.has(id) && HologramAvatar.knownAvatarIds().indexOf(id) === -1) {
-            id = 'halcy';
-        }
+        const id = HologramAvatar.resolveAvatarId(avatar);
         if (this.builtAvatars.has(id)) return true;
 
         if (HologramAvatar.avatarPlugins.has(id)) return this.buildRegisteredAvatar(id);
-
-        const builder = HologramAvatar.builderNameFor(id);
-        if (builder && typeof this[builder] === 'function') {
-            this[builder]();
-            this.builtAvatars.add(id);
-            return true;
-        }
 
         if (this.loadingAvatars.has(id)) return false; // already on its way
         this.loadingAvatars.add(id);
@@ -887,7 +665,7 @@ class HologramAvatar {
         // may have changed its radius/size settings) -- if it's the one currently on
         // screen, the camera's fit needs to be measured against the new geometry, not the
         // old one it was computed from.
-        if (wasVisible) this.updateContentFit([this.plugins.get(id).model.group]);
+        if (wasVisible) this.updateContentFit([this.fitGroupFor(this.plugins.get(id).model)]);
         return true;
     }
 
@@ -903,7 +681,20 @@ class HologramAvatar {
                 glowTexture: (size) => this.createGlowSpriteTexture(size),
                 radialGlowTexture: (size, center, edge) => this.createRadialGlowTexture(size, center, edge),
                 ringTexture: (size, thickness) => this.createRingSpriteTexture(size, thickness),
+                gridTexture: (size, divisions) => this.createGridSpriteTexture(size, divisions),
+                letterTexture: (char, size) => this.createLetterSpriteTexture(char, size),
                 hexVertices: (r, rot, cx, cy) => this.hexVertices(r, rot, cx, cy),
+                /* The shape makers that go with hexVertices. They are prototype methods
+                   on the engine (see geometry-helpers.js), which a registered avatar has
+                   no `this` to reach -- and three avatars plus the parts kit all want
+                   them, so they belong in the handed-over api rather than copied into
+                   each file. */
+                hexOutline: (r, rot, mat, cx, cy) => this.buildHexOutline(r, rot, mat, cx, cy),
+                hexFill: (r, rot, mat, cx, cy) => this.buildHexFill(r, rot, mat, cx, cy),
+                hexPrism: (r, rot, mat, thickness, cx, cy) => this.buildHexPrism(r, rot, mat, thickness, cx, cy),
+                polygonShard: (pts, bulge, fillMat, outlineMat, thickness) =>
+                    this.buildPolygonShard(pts, bulge, fillMat, outlineMat, thickness),
+                roundedCube: (radius, segments, round) => this.buildRoundedCube(radius, segments, round),
             },
         };
     }
@@ -978,9 +769,9 @@ HologramAvatar.registerAvatar = function (def) {
 };
 
 /* What is on offer, for anything drawing an avatar picker. group is optional and purely
-   organisational -- a plugin avatar that belongs to a named family (see "The Umbrals" in
-   index.html's avatar-menu and js/avatar-lab.js's BUILT_IN) sets def.group to the same
-   family name so pickers can cluster it with its relatives instead of listing it flat. */
+   organisational -- an avatar that belongs to a named family (see "The Umbrals" in
+   index.html's avatar-menu) sets def.group to the same family name so pickers can cluster
+   it with its relatives instead of listing it flat. */
 HologramAvatar.registeredAvatars = function () {
     return Array.from(HologramAvatar.avatarPlugins.values())
         .map((def) => ({ id: def.id, label: def.label || def.id, group: def.group }));

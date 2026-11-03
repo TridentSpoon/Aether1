@@ -24,7 +24,6 @@
 //! quietly going unprotected.
 
 use std::path::Path;
-use std::process::Command;
 
 /// Where checkpoint refs live. Outside `refs/heads` and `refs/tags`, so they are not
 /// branches to be pushed, do not show up in `git branch`, and cannot be confused with the
@@ -42,7 +41,7 @@ pub struct Checkpoint {
 
 /// Runs a git command in the workspace and returns its stdout, or a readable error.
 fn git(root: &Path, args: &[&str], index: Option<&Path>) -> Result<String, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::paths::quiet_command("git");
     cmd.arg("-C").arg(root).args(args);
     if let Some(index) = index {
         cmd.env("GIT_INDEX_FILE", index);

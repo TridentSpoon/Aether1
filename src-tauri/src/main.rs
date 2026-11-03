@@ -40,14 +40,18 @@ mod desktop_theme;
 mod discovery;
 mod doctor;
 mod downloads;
+mod fit;
 mod github_auth;
 mod gpu;
 mod graft;
+mod graft_install;
+mod hf;
 mod hotkey;
 mod installs;
 mod lan;
 mod llm;
 mod local_only;
+mod local_server;
 mod model_scanner;
 mod net;
 mod paths;
@@ -55,6 +59,7 @@ mod peers;
 mod persona_voice;
 mod profile;
 mod releases;
+mod secrets;
 mod serve_auth;
 mod serve_tls;
 mod server;
@@ -66,6 +71,7 @@ mod vault;
 mod voice_download;
 mod voice_setup;
 mod watchers;
+mod websearch;
 
 // installs::Machine is the trait the scan reads the machine through; brought in as `_` because
 // only its methods are called here, never its name.
@@ -150,9 +156,7 @@ fn project_root() -> PathBuf {
     if baked_in.join("frontend").is_dir() {
         return baked_in;
     }
-    paths::home_dir()
-        .map(|home| home.join(".local").join("share").join("aether1"))
-        .unwrap_or(baked_in)
+    paths::share_dir().unwrap_or(baked_in)
 }
 
 #[derive(Deserialize)]
@@ -247,6 +251,10 @@ struct UpdateStatus {
     needs_sign_in: bool,
     /// The sign-in was offered once and turned down, and that answer is being kept.
     declined: bool,
+    /// Release mode: what is in the update that is being offered, one plain line each.
+    /// Empty when the check did not conclude or the release carried no notes -- the panel
+    /// then says so rather than implying nothing changed.
+    changes: Vec<String>,
 }
 
 /// Whether this install is in local-only mode. Read through the managed engine so the
@@ -293,6 +301,7 @@ fn base_status() -> UpdateStatus {
         sign_in_available: github_auth::configured(),
         needs_sign_in: false,
         declined: false,
+        changes: Vec::new(),
     }
 }
 
@@ -384,6 +393,11 @@ fn compute_release_status() -> UpdateStatus {
                     .asset
                     .as_ref()
                     .is_some_and(|a| a.signature_id.is_some()),
+                // Carried whichever way the comparison went. An operator who is already up
+                // to date is being told what they have, which is the same list read for a
+                // different reason, and it costs nothing: the notes arrived in the response
+                // that answered the version question.
+                changes: release.changes,
                 ..base_status()
             }
         }
@@ -828,6 +842,124 @@ enum UpdateStage {
     Relaunch,
 }
 
+/// How many steps an update is made of, so the HUD can say "step 2 of 5" instead of
+/// showing a bar that moves when it feels like it.
+const UPDATE_STEPS: u8 = 5;
+
+/// Says where an update has got to, on the `update-progress` event.
+///
+/// `label` is the step in a sentence; `detail` is the line git or cargo last printed,
+/// which is the part that was missing when the whole of a two-minute rebuild was one bar
+/// and the words "Applying update". Both are sent every time, so a listener that only has
+/// room for one line can pick, and the panel can show both.
+fn emit_update_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    step: u8,
+    label: &str,
+    detail: &str,
+    percent: u8,
+) {
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({
+            "step": step,
+            "steps": UPDATE_STEPS,
+            "label": label,
+            "detail": detail,
+            "percent": percent,
+        }),
+    );
+    if detail.is_empty() {
+        println!("[AETHER1] Update ({step}/{UPDATE_STEPS}) {label}");
+    } else {
+        println!("[AETHER1] Update ({step}/{UPDATE_STEPS}) {label} -- {detail}");
+    }
+}
+
+/// Runs the rebuild with its output read rather than inherited, so the HUD can show which
+/// crate cargo is on right now, and so a failure arrives as the compiler's own last words
+/// rather than as "rebuild did not succeed" -- which was the whole of what an operator got
+/// out of the longest and most failure-prone step of an update.
+///
+/// stdout and stderr are read on threads of their own: cargo writes its progress to stderr
+/// and a pipe that nobody drains fills up and stalls the build it is watching.
+fn run_build_with_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    mut command: Command,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::sync::mpsc;
+
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("could not start the rebuild: {e}"))?;
+
+    let (tx, rx) = mpsc::channel::<String>();
+    let mut readers = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        let tx = tx.clone();
+        readers.push(std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        }));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let tx = tx.clone();
+        readers.push(std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        }));
+    }
+    drop(tx);
+
+    // The last dozen lines, kept for the failure message: cargo puts the error itself
+    // several lines above the end, so one line is never enough, and the whole log is far
+    // more than a panel can hold.
+    let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut compiled: u32 = 0;
+    for line in rx {
+        let trimmed = line.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if tail.len() == 12 {
+            tail.pop_front();
+        }
+        tail.push_back(trimmed.clone());
+        if trimmed.starts_with("Compiling") || trimmed.starts_with("Building") {
+            compiled += 1;
+        }
+        // 45% to 88%, estimated from crates compiled so far against a typical full
+        // rebuild. A rebuild's real total is not known until it is over, so this is an
+        // estimate that keeps moving rather than a percentage pretending to be exact.
+        let percent = 45 + (compiled.min(300) * 43 / 300) as u8;
+        emit_update_progress(app, 4, "Rebuilding Aether1", &trimmed, percent);
+    }
+    for reader in readers {
+        let _ = reader.join();
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("the rebuild could not be waited on: {e}"))?;
+    if status.success() {
+        return Ok(());
+    }
+    let detail = tail.iter().cloned().collect::<Vec<_>>().join("\n");
+    Err(if detail.is_empty() {
+        match status.code() {
+            Some(code) => format!("the rebuild failed (it exited {code}, and said nothing)"),
+            None => "the rebuild was killed before it finished".to_string(),
+        }
+    } else {
+        format!("the rebuild failed, and this is what it last printed:\n{detail}")
+    })
+}
+
 /// Runs a git subcommand in `root` with its output captured, so a failure can be reported
 /// with git's own words instead of a bare exit code.
 ///
@@ -840,14 +972,13 @@ enum UpdateStage {
 /// GIT_TERMINAL_PROMPT=0 turns that hang into an error with a name. Credential helpers with
 /// their own GUI (Git Credential Manager, the usual one on Windows) are unaffected.
 fn run_git(root: &std::path::Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = crate::paths::quiet_command("git");
     cmd.args(args)
         .current_dir(root)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    paths::suppress_console_window(&mut cmd);
     cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             // The single most likely Windows cause, and the one the old message hid
@@ -934,6 +1065,14 @@ fn perform_update_core<R: tauri::Runtime>(
     // of the network (the first three) never reach the network at all.
     let git = |args: &[&str]| run_git(&root, args).map_err(|e| (UpdateStage::Pull, e));
 
+    emit_update_progress(
+        app,
+        1,
+        "Checking the checkout",
+        &root.display().to_string(),
+        5,
+    );
+
     let inside = git(&["rev-parse", "--is-inside-work-tree"])?;
     if !inside.status.success() {
         return Err((
@@ -1000,13 +1139,39 @@ fn perform_update_core<R: tauri::Runtime>(
     }
     let upstream = String::from_utf8_lossy(&upstream.stdout).trim().to_string();
 
-    println!("[AETHER1] Update: fetching {upstream}...");
+    let before = git(&["rev-parse", "--short", "HEAD"])?;
+    let before = String::from_utf8_lossy(&before.stdout).trim().to_string();
+
+    emit_update_progress(
+        app,
+        2,
+        &format!("Fetching from {upstream}"),
+        &format!("at {before}"),
+        15,
+    );
     let fetched = git(&["fetch", "--quiet"])?;
     if !fetched.status.success() {
         return Err((UpdateStage::Pull, git_failure("git fetch", &fetched)));
     }
 
-    println!("[AETHER1] Update: fast-forwarding to {upstream}...");
+    // How far behind, said in commits. It is the one number that tells an operator
+    // whether they are about to wait on a one-line change or on a month of them.
+    let behind = git(&["rev-list", "--count", &format!("HEAD..{upstream}")])?;
+    let behind = String::from_utf8_lossy(&behind.stdout).trim().to_string();
+    let behind_note = match behind.as_str() {
+        "" => String::new(),
+        "0" => "already level with the remote".to_string(),
+        "1" => "1 commit to apply".to_string(),
+        n => format!("{n} commits to apply"),
+    };
+
+    emit_update_progress(
+        app,
+        3,
+        &format!("Fast-forwarding to {upstream}"),
+        &behind_note,
+        30,
+    );
     let merged = git(&["merge", "--ff-only", &upstream])?;
     if !merged.status.success() {
         return Err((
@@ -1014,6 +1179,20 @@ fn perform_update_core<R: tauri::Runtime>(
             git_failure("git merge --ff-only", &merged),
         ));
     }
+
+    let after = git(&["log", "-1", "--format=%h %s"])?;
+    let after = String::from_utf8_lossy(&after.stdout).trim().to_string();
+    emit_update_progress(
+        app,
+        3,
+        &format!("Fast-forwarded to {upstream}"),
+        &if after.is_empty() {
+            format!("was {before}")
+        } else {
+            format!("{before} -> {after}")
+        },
+        40,
+    );
 
     let new_binary = if cfg!(target_os = "windows") {
         let release_dir = root.join("src-tauri").join("target").join("release");
@@ -1037,31 +1216,31 @@ fn perform_update_core<R: tauri::Runtime>(
             }
         }
 
-        println!("[AETHER1] Update: rebuilding via `cargo build --release`...");
-        let build_ok = Command::new("cargo")
-            .args(["build", "--release"])
-            .current_dir(root.join("src-tauri"))
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if !build_ok {
-            return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
-        }
+        emit_update_progress(
+            app,
+            4,
+            "Rebuilding Aether1",
+            "cargo build --release (this is the long step)",
+            45,
+        );
+        let mut build = crate::paths::quiet_command("cargo");
+        build.args(["build", "--release"]);
+        build.current_dir(root.join("src-tauri"));
+        run_build_with_progress(app, build).map_err(|e| (UpdateStage::Build, e))?;
 
         target_exe
     } else {
-        println!("[AETHER1] Update: rebuilding via scripts/install_desktop_app.sh...");
-        let build_ok = Command::new("bash")
-            .arg(root.join("scripts").join("install_desktop_app.sh"))
-            .current_dir(&root)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        if !build_ok {
-            return Err((UpdateStage::Build, "rebuild did not succeed".to_string()));
-        }
+        emit_update_progress(
+            app,
+            4,
+            "Rebuilding and installing Aether1",
+            "scripts/install_desktop_app.sh (this is the long step)",
+            45,
+        );
+        let mut build = crate::paths::quiet_command("bash");
+        build.arg(root.join("scripts").join("install_desktop_app.sh"));
+        build.current_dir(&root);
+        run_build_with_progress(app, build).map_err(|e| (UpdateStage::Build, e))?;
 
         // Relaunch the installed copy at ~/.local/bin/aether1 (see
         // scripts/install_desktop_app.sh), not the raw build artifact under
@@ -1083,8 +1262,17 @@ fn perform_update_core<R: tauri::Runtime>(
             })
     };
 
-    println!("[AETHER1] Update: relaunching {}...", new_binary.display());
-    match Command::new(&new_binary).current_dir(&root).spawn() {
+    emit_update_progress(
+        app,
+        5,
+        "Restarting Aether1",
+        &new_binary.display().to_string(),
+        95,
+    );
+    match crate::paths::quiet_command(&new_binary)
+        .current_dir(&root)
+        .spawn()
+    {
         Ok(_child) => {
             note_expected_exit(app);
             app.exit(0);
@@ -1178,7 +1366,17 @@ fn perform_update<R: tauri::Runtime>(
 /// so the frontend only ever observes this call either hang (app about to exit) or reject.
 #[tauri::command(async)]
 fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
-    perform_update_core(&app).map_err(|(_, msg)| msg)
+    perform_update_core(&app).map_err(|(stage, msg)| {
+        // Which step it died on, in front of the message. An operator reading "fatal:
+        // couldn't find remote ref" has no way of telling the fetch from the rebuild
+        // otherwise, and the two have nothing in common to try next.
+        let where_it_failed = match stage {
+            UpdateStage::Pull => "Pulling the latest changes failed",
+            UpdateStage::Build => "Rebuilding failed",
+            UpdateStage::Relaunch => "Restarting the new build failed",
+        };
+        format!("{where_it_failed}: {msg}")
+    })
 }
 
 /// Is anything AETHER1 draws actually on a screen right now?
@@ -1255,6 +1453,11 @@ fn generate_response_streaming_rust(
     // before there is anything in it.
     let handover_app = app.clone();
     let handover_stream = stream_id.clone();
+    // Its own event, for the same reason the hand-off has one: reasoning is not part of
+    // the answer, and a frontend that had to pick the two apart out of one stream would be
+    // doing the splitting a second time, in a language with no tests on it.
+    let thought_app = app.clone();
+    let thought_stream = stream_id.clone();
     commands::generate_response_streamed_with_media(
         &engine,
         prompt,
@@ -1264,6 +1467,12 @@ fn generate_response_streaming_rust(
             let _ = app.emit(
                 "chat-delta",
                 serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |delta| {
+            let _ = thought_app.emit(
+                "chat-reasoning",
+                serde_json::json!({ "stream_id": thought_stream, "delta": delta }),
             );
         },
         &mut |handover| {
@@ -1597,6 +1806,38 @@ fn scan_models_rust() -> model_scanner::ScanResult {
     model_scanner::scan_all()
 }
 
+/// Everywhere the companion could think from, for the chin bar's brain picker.
+#[tauri::command(async)]
+fn brains_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::brains(&engine)
+}
+
+/// What is saved for each provider, for the roster above the connection form.
+#[tauri::command(async)]
+fn provider_accounts_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::provider_accounts(&engine)
+}
+
+/// Takes one provider's key, address and model off this machine.
+#[tauri::command(async)]
+fn forget_provider_account_rust(
+    engine: tauri::State<LlmEngine>,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    commands::forget_provider_account(&engine, &provider)
+}
+
+/// The Hugging Face side of the model picker. See `commands::hf_search`.
+#[tauri::command(async)]
+fn hf_search_rust(query: Option<String>) -> serde_json::Value {
+    commands::hf_search(query.unwrap_or_default())
+}
+
+#[tauri::command(async)]
+fn hf_quants_rust(repo: String) -> serde_json::Value {
+    commands::hf_quants(repo)
+}
+
 /// Where this machine is on the road to having a model, and what to do about it. Drives
 /// the setup wizard; safe to call as often as the wizard likes, since it is only probes.
 #[tauri::command(async)]
@@ -1626,6 +1867,21 @@ fn forget_download_rust(model_name: String) -> serde_json::Value {
 #[tauri::command(async)]
 fn voice_catalogue_rust() -> serde_json::Value {
     commands::voice_catalogue()
+}
+
+#[tauri::command(async)]
+fn start_graft_install_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
+    commands::start_graft_install(&engine)
+}
+
+#[tauri::command(async)]
+fn graft_install_status_rust() -> serde_json::Value {
+    commands::graft_install_status()
+}
+
+#[tauri::command(async)]
+fn forget_graft_install_rust() -> serde_json::Value {
+    commands::forget_graft_install()
 }
 
 #[tauri::command(async)]
@@ -1697,6 +1953,41 @@ fn approve_action_rust(
     id: i64,
 ) -> Result<serde_json::Value, String> {
     commands::approve_action(&engine, id)
+}
+
+/// Hands an approved action's output back to the model and streams what it says once it can
+/// see the result, as `chat-delta` events -- the same event the operator's own turns use, so
+/// the answer lands in the conversation rather than in a card nothing reads back.
+///
+/// `async` because this runs a whole model turn, and a blocking command would hold the
+/// window's IPC thread for the length of it.
+#[tauri::command(async)]
+fn resume_after_action_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    managed_ollama: tauri::State<background_services::ManagedOllama>,
+    id: i64,
+    stream_id: String,
+) -> Result<serde_json::Value, String> {
+    background_services::note_use(&engine, &managed_ollama);
+    let thought_app = app.clone();
+    let thought_stream = stream_id.clone();
+    commands::resume_after_action(
+        &engine,
+        id,
+        &mut |delta| {
+            let _ = app.emit(
+                "chat-delta",
+                serde_json::json!({ "stream_id": stream_id, "delta": delta }),
+            );
+        },
+        &mut |delta| {
+            let _ = thought_app.emit(
+                "chat-reasoning",
+                serde_json::json!({ "stream_id": thought_stream, "delta": delta }),
+            );
+        },
+    )
 }
 
 #[tauri::command(async)]
@@ -2855,6 +3146,19 @@ fn set_agent_selection_rust(
 fn build_llm_engine() -> LlmEngine {
     let engine = open_llm_engine();
     net::install(engine.db());
+    // The one-time switch-on for installs that had tools off without choosing to. Here
+    // for the same reason `net::install` is: it is the single path every entry point
+    // shares, and it has to happen before anything asks a model a question.
+    tools::apply_default_on(engine.db());
+    // Before anything reads the provider: a mislabelled Ollama is the difference between a
+    // companion that can search and one that cannot. See the function for why.
+    llm::adopt_ollama_behind_openai_label(engine.db());
+    // Then the broader version of the same idea: look at what is actually listening on
+    // this machine and configure AETHER1 to use it, rather than leaving the operator to
+    // assemble a provider, an address and a model by hand. Runs after the relabel above so
+    // that a server already correctly configured is not re-examined.
+    local_server::apply_autostart_default(engine.db());
+    local_server::adopt_local_server(engine.db());
     engine
 }
 
@@ -2883,6 +3187,11 @@ fn open_llm_engine() -> LlmEngine {
             // different answer -- build and test tools, confined to one project folder,
             // and inert until the operator turns the `run` permission on.
             code_workspace::seed_starter_allowlist(&db);
+            // Any provider key still sitting in the settings table as plain text moves
+            // into the system credential store here, once, rather than on the day its
+            // owner happens to press Save in Settings again -- which for a key typed in
+            // a year ago is never. See secrets::migrate.
+            secrets::migrate(&db);
             LlmEngine::new(db)
         }
         Err(e) => {
@@ -3009,11 +3318,19 @@ fn main() {
             doctor_attend_rust,
             run_diagnostics_rust,
             setup_advice_rust,
+            brains_rust,
+            provider_accounts_rust,
+            forget_provider_account_rust,
+            hf_search_rust,
+            hf_quants_rust,
             pull_model_rust,
             start_download_rust,
             download_status_rust,
             forget_download_rust,
             voice_catalogue_rust,
+            start_graft_install_rust,
+            graft_install_status_rust,
+            forget_graft_install_rust,
             start_voice_download_rust,
             voice_download_status_rust,
             forget_voice_download_rust,
@@ -3025,6 +3342,7 @@ fn main() {
             get_actions_rust,
             pending_actions_rust,
             approve_action_rust,
+            resume_after_action_rust,
             undo_action_rust,
             reject_action_rust,
             set_always_allowed_rust,
@@ -3214,7 +3532,7 @@ fn main() {
                     eprintln!("[AETHER1] Could not sync launch-at-login: {e}");
                 }
 
-                let autostart_ollama = engine.db().get_setting_bool("autostart_ollama", false);
+                let autostart_ollama = engine.db().get_setting_bool("autostart_ollama", true);
                 let game_mode = engine.db().get_setting_bool("game_mode", false);
                 if autostart_ollama && !game_mode {
                     let managed = app.state::<background_services::ManagedOllama>();

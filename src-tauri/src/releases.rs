@@ -100,6 +100,11 @@ struct RawRelease {
     prerelease: bool,
     #[serde(default)]
     assets: Vec<RawAsset>,
+    /// The release notes GitHub wrote. `release.yml` sets `generate_release_notes: true`,
+    /// so this is a list of the pull requests that went in -- which is the only reason it
+    /// is worth showing an operator at all. See [`changes_from_notes`].
+    #[serde(default)]
+    body: Option<String>,
 }
 
 /// One downloadable file on a release, and the signature that goes with it.
@@ -124,6 +129,99 @@ pub struct Release {
     pub html_url: String,
     /// The asset for the platform this binary is running on, if the release has one.
     pub asset: Option<Asset>,
+    /// What changed, one plain line each, newest first. Empty when the release has no notes
+    /// -- which is reported as having none rather than filled in with the tag.
+    pub changes: Vec<String>,
+}
+
+/// How many change lines are carried. An update is a decision, and a decision is not helped
+/// by the fifty-first line: past this the operator is sent to the release page, which is
+/// what `html_url` is for.
+const MAX_CHANGES: usize = 12;
+
+/// The release notes, reduced to what an operator would recognise as a list of changes.
+///
+/// `release.yml` asks GitHub to write the notes, so the body arrives in a known shape: a
+/// `## What's Changed` heading, then one `* <pull request title> by @who in <url>` per
+/// merged pull request, then sometimes `## New Contributors` and a `**Full Changelog**`
+/// line. Two of those four parts are about the project rather than about the machine in
+/// front of the operator, so they come out.
+///
+/// **This does not rewrite anything into plain English; it relies on the titles already
+/// being plain English.** Aether1's pull request titles are written as sentences about what
+/// changed for the operator ("Stop asking the model the same question twice"), so the title
+/// with its attribution trailer removed *is* the plain-language line. Where a title is not
+/// written that way, this says so by showing it unchanged rather than inventing something
+/// friendlier, because a made-up summary of an update is worse than a terse true one.
+///
+/// A hand-written body (no bullets at all) is kept as its own non-empty, non-heading lines,
+/// so a release whose notes somebody wrote themselves is not silently reported as having
+/// changed nothing.
+pub fn changes_from_notes(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // Anything under "New Contributors" is a bullet in the same shape as a change and is
+    // not one, so the section is skipped by name rather than by trying to tell its lines
+    // apart from the real ones.
+    let mut in_contributors = false;
+
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(heading) = line.strip_prefix('#') {
+            in_contributors = heading.to_ascii_lowercase().contains("contributor");
+            continue;
+        }
+        // `**Full Changelog**: <compare url>` -- a link for whoever wants the diff, not a
+        // change. Matched on the words rather than the asterisks, which GitHub has moved
+        // around before.
+        if line
+            .to_ascii_lowercase()
+            .replace('*', "")
+            .starts_with("full changelog")
+        {
+            continue;
+        }
+        if in_contributors {
+            continue;
+        }
+
+        let bullet = line
+            .strip_prefix("* ")
+            .or_else(|| line.strip_prefix("- "))
+            .map(str::trim);
+        let text = match bullet {
+            Some(text) => text,
+            // Not a bullet. Kept, because a hand-written body is prose and dropping it
+            // would report a real release as having no changes.
+            None => line,
+        };
+
+        let text = strip_attribution(text);
+        if text.is_empty() {
+            continue;
+        }
+        if out.len() == MAX_CHANGES {
+            break;
+        }
+        out.push(text.to_string());
+    }
+    out
+}
+
+/// Takes ` by @someone in <url>` off the end of a generated bullet.
+///
+/// Cut at the *last* ` by @`, not the first: a title may legitimately contain the words
+/// ("Stop the watcher being woken by @mentions" is a title this project could plausibly
+/// have), and the trailer GitHub appends is always last.
+fn strip_attribution(text: &str) -> &str {
+    match text.rfind(" by @") {
+        // Only when what follows really is the trailer -- a login, then ` in `, then a URL.
+        // Otherwise the title ends with those words for its own reasons and keeps them.
+        Some(at) if text[at..].contains(" in http") => text[..at].trim_end(),
+        _ => text.trim_end(),
+    }
 }
 
 #[derive(Debug)]
@@ -174,16 +272,47 @@ impl ReleaseError {
 }
 
 /// The bundle name this platform installs, as `release.yml` names it. Matched as a prefix so
-/// a future `aether1-offline-linux-aarch64.tar.gz` needs nothing here, and so the `.minisig`
+/// a future `aurora1-offline-linux-aarch64.tar.gz` needs nothing here, and so the `.minisig`
 /// beside it is never mistaken for the bundle itself.
+/// **Both brandings, on purpose, and the new one first.** The copy that has to find a
+/// release's assets is the one already installed, whose list of prefixes was compiled into
+/// it -- so the `aurora1-` names were learned here one release before `release.yml` started
+/// publishing them, and the `aether1-` names stay readable now that it has stopped. A copy
+/// built before the rename still finds nothing in a renamed release, which is why no release
+/// was ever cut under the old names: there is no such copy anywhere. The old prefixes are
+/// kept for the operator who has an older bundle on disk and asks this to verify it.
+///
+/// The new name is listed first so that a release carrying both is read as the Aurora1 one.
+/// **macOS is matched with the extension on, unlike the others, and by architecture.** The
+/// two disk images are `Aurora1-aarch64.dmg` and `Aurora1-x86_64.dmg`, and the AppImage in
+/// the same release is `Aurora1-x86_64.AppImage` -- so a bare `Aurora1-x86_64` prefix would
+/// hand an Intel Mac a Linux bundle, whichever of the two GitHub happened to list first.
+/// An Apple Silicon Mac is not offered the Intel image: it would run under Rosetta, which is
+/// a slower copy of an app the release also ships natively.
+///
+/// **The AppImage is deliberately not in the Linux list.** Picking it would mean the updater
+/// offering a shape it cannot install: the two tarballs come with an installer that knows
+/// where things go, and replacing a running AppImage in place is a different mechanism that
+/// does not exist yet. Somebody running the AppImage updates it by downloading the next one.
 fn wanted_asset_prefixes() -> &'static [&'static str] {
     if cfg!(target_os = "windows") {
-        &["Aether1-Setup"]
+        &["Aurora1-Setup", "Aether1-Setup"]
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            &["Aurora1-aarch64.dmg"]
+        } else {
+            &["Aurora1-x86_64.dmg"]
+        }
     } else {
         // The offline bundle first: it is the one that needs no network on the target
         // machine, which is the point of having it. The slim one is the fallback for a
         // release that only carries that.
-        &["aether1-offline-linux", "aether1-slim-linux"]
+        &[
+            "aurora1-offline-linux",
+            "aether1-offline-linux",
+            "aurora1-slim-linux",
+            "aether1-slim-linux",
+        ]
     }
 }
 
@@ -294,6 +423,11 @@ pub fn latest(repo: &str, agent_label: &str) -> Result<Release, ReleaseError> {
 
     Ok(Release {
         asset: pick_asset(&raw.assets),
+        changes: raw
+            .body
+            .as_deref()
+            .map(changes_from_notes)
+            .unwrap_or_default(),
         name: raw.name.unwrap_or_else(|| raw.tag_name.clone()),
         tag: raw.tag_name,
         html_url: raw.html_url,
@@ -308,6 +442,12 @@ pub fn is_newer(running: &str, latest_tag: &str) -> Option<bool> {
     // `Version::parse` reads three dot-separated numbers, and `v0` is not one, so the whole tag
     // falls through to its opaque branch and compares against nothing. The symptom is an
     // installed copy that can never tell whether it is behind.
+    //
+    // The same stripping is what makes the Aurora1 tag, `v0-261018-227`, readable here, and
+    // this release has to be able to read it *before* one is ever pushed -- an installed copy
+    // compares with the parser it was built with, so a copy that has never seen the dashed
+    // spelling answers "cannot tell" for every release after the rename and silently stops
+    // offering updates. `Version::parse` handles both spellings; see installs::Version.
     let latest = Version::parse(latest_tag.trim().trim_start_matches(['v', 'V']))?;
     let running = Version::parse(running)?;
     running.older_than(&latest)
@@ -544,12 +684,92 @@ pub fn verify_file(path: &Path, signature_path: &Path) -> Result<(), FetchError>
 mod tests {
     use super::*;
 
+    /// The disk image this test machine would be offered, so the shared tests above carry an
+    /// asset for all three platforms rather than quietly asserting nothing on a Mac.
+    const DMG_HERE: &str = if cfg!(target_arch = "aarch64") {
+        "Aurora1-aarch64.dmg"
+    } else {
+        "Aurora1-x86_64.dmg"
+    };
+
     fn asset(name: &str, id: u64) -> RawAsset {
         RawAsset {
             id,
             name: name.to_string(),
             size: 1,
         }
+    }
+
+    /// The exact shape `generate_release_notes: true` produces, down to the blank lines.
+    const GENERATED_NOTES: &str = "\
+## What's Changed
+* Stop asking the model the same question twice by @TridentSpoon in https://github.com/TridentSpoon/Aether1/pull/285
+* Let the AppImage say where its next version lives by @TridentSpoon in https://github.com/TridentSpoon/Aether1/pull/284
+
+## New Contributors
+* @somebody made their first contribution in https://github.com/TridentSpoon/Aether1/pull/284
+
+**Full Changelog**: https://github.com/TridentSpoon/Aether1/compare/v0-261101-276...v0-261102-285
+";
+
+    #[test]
+    fn the_notes_become_the_pull_request_titles_and_nothing_else() {
+        assert_eq!(
+            changes_from_notes(GENERATED_NOTES),
+            vec![
+                "Stop asking the model the same question twice",
+                "Let the AppImage say where its next version lives",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_contributors_section_is_not_mistaken_for_a_change() {
+        // Its bullets are the same shape as a change's and say nothing about what the
+        // operator is about to install, which is why the section is skipped by name.
+        let changes = changes_from_notes(GENERATED_NOTES);
+        assert!(
+            !changes.iter().any(|c| c.contains("first contribution")),
+            "{changes:?}"
+        );
+    }
+
+    #[test]
+    fn a_title_that_ends_in_those_words_keeps_them() {
+        // ` by @` is cut only where the whole GitHub trailer follows it. A title that just
+        // happens to end that way is a title, and rewriting it would be reporting an update
+        // as something other than what it is.
+        assert_eq!(
+            changes_from_notes("* Stop the watcher being woken by @mentions"),
+            vec!["Stop the watcher being woken by @mentions"]
+        );
+    }
+
+    #[test]
+    fn a_hand_written_body_is_kept_rather_than_read_as_no_changes() {
+        assert_eq!(
+            changes_from_notes("The voice no longer stops mid-sentence.\n\nRebuilt for Wayland."),
+            vec![
+                "The voice no longer stops mid-sentence.",
+                "Rebuilt for Wayland.",
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_notes_report_no_changes_rather_than_one_blank_line() {
+        assert!(changes_from_notes("").is_empty());
+        assert!(changes_from_notes("\n\n   \n").is_empty());
+        assert!(changes_from_notes("## What's Changed\n").is_empty());
+    }
+
+    #[test]
+    fn a_very_long_release_stops_at_the_cap_rather_than_filling_the_panel() {
+        let body: String = (0..40).map(|i| format!("* change number {i}\n")).collect();
+        let changes = changes_from_notes(&body);
+        assert_eq!(changes.len(), MAX_CHANGES);
+        // Newest first, as GitHub orders them: the cap drops the oldest, not the newest.
+        assert_eq!(changes[0], "change number 0");
     }
 
     #[test]
@@ -559,9 +779,18 @@ mod tests {
             asset("aether1-offline-linux-x86_64.tar.gz.minisig", 2),
             asset("Aether1-Setup.exe", 3),
             asset("Aether1-Setup.exe.minisig", 4),
+            asset(DMG_HERE, 5),
+            asset(&format!("{DMG_HERE}{SIGNATURE_SUFFIX}"), 6),
         ];
         let picked = pick_asset(&assets).expect("this platform has an asset in that list");
-        assert_eq!(picked.signature_id, Some(if cfg!(windows) { 4 } else { 2 }));
+        let expected = if cfg!(windows) {
+            4
+        } else if cfg!(target_os = "macos") {
+            6
+        } else {
+            2
+        };
+        assert_eq!(picked.signature_id, Some(expected));
     }
 
     #[test]
@@ -574,6 +803,8 @@ mod tests {
             asset("aether1-offline-linux-x86_64.tar.gz", 1),
             asset("Aether1-Setup.exe.minisig", 4),
             asset("Aether1-Setup.exe", 3),
+            asset(&format!("{DMG_HERE}{SIGNATURE_SUFFIX}"), 6),
+            asset(DMG_HERE, 5),
         ];
         let picked = pick_asset(&assets).expect("this platform has an asset in that list");
         assert!(!picked.name.ends_with(SIGNATURE_SUFFIX));
@@ -585,9 +816,34 @@ mod tests {
         let assets = vec![
             asset("aether1-offline-linux-x86_64.tar.gz", 1),
             asset("Aether1-Setup.exe", 3),
+            asset(DMG_HERE, 5),
         ];
         let picked = pick_asset(&assets).expect("this platform has an asset in that list");
         assert_eq!(picked.signature_id, None);
+    }
+
+    /// A Mac is offered the image built for its own processor, and the AppImage in the same
+    /// release -- which shares the `Aurora1-x86_64` stem with the Intel image -- is never
+    /// mistaken for one.
+    #[test]
+    fn a_mac_is_offered_its_own_disk_image_and_not_the_linux_file_beside_it() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let assets = vec![
+            asset("Aurora1-x86_64.AppImage", 1),
+            asset("Aurora1-x86_64.dmg", 2),
+            asset("Aurora1-aarch64.dmg", 3),
+        ];
+        let picked = pick_asset(&assets).expect("a Mac has an image in that list");
+        assert_eq!(
+            picked.name,
+            if cfg!(target_arch = "aarch64") {
+                "Aurora1-aarch64.dmg"
+            } else {
+                "Aurora1-x86_64.dmg"
+            }
+        );
     }
 
     #[test]
@@ -597,7 +853,7 @@ mod tests {
 
     #[test]
     fn the_slim_bundle_is_the_fallback_and_never_the_first_choice() {
-        if cfg!(windows) {
+        if cfg!(windows) || cfg!(target_os = "macos") {
             return;
         }
         let both = vec![
@@ -619,6 +875,62 @@ mod tests {
         assert_eq!(is_newer("Ver 0.4.152", "nightly"), None);
         // Without the `v` too, in case a tag is ever cut without one.
         assert_eq!(is_newer("Ver 0.4.140", "0.4.152"), Some(true));
+    }
+
+    /// The Aurora1 tag, read by a build that still publishes the old one. An installed copy
+    /// compares with the parser it was compiled with, so the dashed spelling has to be
+    /// readable one release before a tag ever carries it -- otherwise every release after
+    /// the rename comes back as "cannot tell" and the copy silently stops offering updates.
+    #[test]
+    fn the_aurora1_tag_compares_against_a_version_from_before_the_rename() {
+        assert_eq!(is_newer("Ver 0.4.140", "v0-261018-227"), Some(true));
+        assert_eq!(is_newer("Ver 0.4.300", "v0-261018-227"), Some(false));
+        // And the other way round: a renamed copy against the tags published before it.
+        assert_eq!(is_newer("Aurora1 rev0.261018.227", "v0.4.300"), Some(true));
+        assert_eq!(is_newer("Aurora1 rev0.261018.227", "v0.4.140"), Some(false));
+        // Two renamed releases.
+        assert_eq!(
+            is_newer("Aurora1 rev0.261018.227", "v0-261101-240"),
+            Some(true)
+        );
+        // Still nothing guessed about a tag that is not a version.
+        assert_eq!(is_newer("Aurora1 rev0.261018.227", "nightly"), None);
+    }
+
+    /// A release that carries both brandings resolves to the Aurora1 one, whichever order
+    /// GitHub lists the assets in. A transitional release could carry both, and "whichever
+    /// the API happened to return first" is not a decision.
+    #[test]
+    fn a_release_carrying_both_names_resolves_to_the_new_one() {
+        let old_first = vec![
+            asset("aether1-offline-linux-x86_64.tar.gz", 1),
+            asset("aurora1-offline-linux-x86_64.tar.gz", 2),
+        ];
+        let new_first = vec![
+            asset("aurora1-offline-linux-x86_64.tar.gz", 2),
+            asset("aether1-offline-linux-x86_64.tar.gz", 1),
+        ];
+        for assets in [old_first, new_first] {
+            assert_eq!(
+                pick_asset(&assets).expect("a bundle should be found").name,
+                "aurora1-offline-linux-x86_64.tar.gz"
+            );
+        }
+    }
+
+    /// Both brandings of the bundle names, for the same reason: the copy that has to find a
+    /// renamed release's assets is the one already installed.
+    #[test]
+    fn either_brandings_bundle_is_picked_up() {
+        for name in [
+            "aether1-offline-linux-x86_64.tar.gz",
+            "aurora1-offline-linux-x86_64.tar.gz",
+        ] {
+            let assets = vec![asset(name, 1), asset(&format!("{name}.minisig"), 2)];
+            let picked = pick_asset(&assets).expect("the bundle should be found");
+            assert_eq!(picked.name, name);
+            assert_eq!(picked.signature_id, Some(2));
+        }
     }
 
     /// The two refusals GitHub cannot tell apart have to be told apart here, because the

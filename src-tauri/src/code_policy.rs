@@ -46,8 +46,43 @@ use serde_json::Value;
 
 use crate::llm::MemoryDb;
 
-/// The per-project file, relative to the workspace root.
+/// The per-project directory, relative to the workspace root -- the one a project that has
+/// neither gets. The Aurora1 rename moves this to `.aurora`, and when it does, every project
+/// folder on the machine still has the old one.
+pub const DIR: &str = ".aether";
+
+/// The name the same directory has under the other branding. Projects keep whichever they
+/// already have: a dotdir in somebody's workspace is their file, often committed and often
+/// in their `.gitignore`, so a rename of ours is not a reason to leave a second one beside
+/// it or to stop reading the first.
+pub const ALT_DIR: &str = ".aurora";
+
+/// The per-project file, relative to the workspace root, as it is *named* in prose and in
+/// the settings pane. `file_in` is what reads and writes go through -- this is the default
+/// spelling for a project that has no policy file yet.
 pub const FILE: &str = ".aether/policy.json";
+
+/// Which of the two directory names this project is using: whichever it already has, and
+/// `DIR` when it has neither.
+///
+/// Preferring the one that exists is the whole of the compatibility story. It means the
+/// release that renames `DIR` finds every existing project's `.aether/policy.json` and keeps
+/// writing to it, and a project set up after the rename is read correctly by a copy of
+/// AETHER1 built before it -- which matters because an operator runs more than one copy
+/// while an update is going through.
+pub fn dir_in(root: &Path) -> &'static str {
+    for name in [DIR, ALT_DIR] {
+        if root.join(name).is_dir() {
+            return name;
+        }
+    }
+    DIR
+}
+
+/// The policy file for `root`, under whichever directory name that project uses.
+pub fn file_in(root: &Path) -> PathBuf {
+    root.join(dir_in(root)).join("policy.json")
+}
 
 /// The level a project is trusted at when its file does not say. Developer, because an
 /// operator who nominated a project folder and switched on a coding agent asked for one
@@ -183,14 +218,14 @@ impl Level {
 
 /// Reads the raw policy document, or an empty one.
 fn document(root: &Path) -> Value {
-    std::fs::read_to_string(root.join(FILE))
+    std::fs::read_to_string(file_in(root))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
 fn write_document(root: &Path, policy: &Value) -> Result<(), String> {
-    let path = root.join(FILE);
+    let path = file_in(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("{} could not be made: {e}", parent.display()))?;
@@ -222,7 +257,7 @@ pub fn set_level(root: &Path, db: &MemoryDb, level: Level) -> Result<(), String>
     let mut policy = document(root);
     policy
         .as_object_mut()
-        .ok_or_else(|| format!("{FILE} is not a JSON object"))?
+        .ok_or_else(|| format!("{} is not a JSON object", file_in(root).display()))?
         .insert("level".to_string(), Value::String(level.key().to_string()));
     write_document(root, &policy)?;
     level.apply(db)
@@ -306,7 +341,7 @@ pub fn remember_similar_command(root: &Path, command: &str) -> Result<String, St
     let mut policy = document(root);
     let list = policy
         .as_object_mut()
-        .ok_or_else(|| format!("{FILE} is not a JSON object"))?
+        .ok_or_else(|| format!("{} is not a JSON object", file_in(root).display()))?
         .entry("similar_commands")
         .or_insert_with(|| serde_json::json!([]))
         .as_array_mut()
@@ -372,7 +407,7 @@ pub fn add_mount(root: &Path, path: &str, write: bool) -> Result<PathBuf, String
     let mut policy = document(root);
     let list = policy
         .as_object_mut()
-        .ok_or_else(|| format!("{FILE} is not a JSON object"))?
+        .ok_or_else(|| format!("{} is not a JSON object", file_in(root).display()))?
         .entry("mounts")
         .or_insert_with(|| serde_json::json!([]))
         .as_array_mut()
@@ -421,6 +456,49 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let db = MemoryDb::open(home.join("aether1_memory.db")).unwrap();
         (db, root)
+    }
+
+    /// A project keeps whichever of the two directory names it already has.
+    ///
+    /// **This is what stops the rename losing a project's answers.** A policy file is in
+    /// somebody's workspace, usually committed and usually in their `.gitignore`; renaming
+    /// the directory in our source does not move theirs, it only stops finding it -- and a
+    /// project that cannot be found reads as one nobody has been asked about, so the trust
+    /// question comes round again and the domains they allowed are gone. Looking for what
+    /// is there first means the release that flips `DIR` keeps writing to the file every
+    /// existing project already has.
+    #[test]
+    fn a_project_keeps_the_policy_directory_it_already_has() {
+        let (_db, root) = project("dirs");
+        // Neither there: the name this build writes.
+        assert_eq!(dir_in(&root), DIR);
+        assert_eq!(file_in(&root), root.join(DIR).join("policy.json"));
+
+        // Only the other one there: that is the project's directory, whichever way round
+        // the two constants happen to be pointing in this build.
+        std::fs::create_dir_all(root.join(ALT_DIR)).unwrap();
+        assert_eq!(dir_in(&root), ALT_DIR);
+        assert_eq!(file_in(&root), root.join(ALT_DIR).join("policy.json"));
+
+        // Both there -- a project somebody has had open under both brandings. The one this
+        // build prefers wins, so nothing flips back and forth between two files.
+        std::fs::create_dir_all(root.join(DIR)).unwrap();
+        assert_eq!(dir_in(&root), DIR);
+    }
+
+    /// And a policy written while only the other directory exists is read back out of it,
+    /// rather than a second file appearing beside it.
+    #[test]
+    fn a_policy_is_written_and_read_through_the_directory_in_use() {
+        let (db, root) = project("dirs_roundtrip");
+        std::fs::create_dir_all(root.join(ALT_DIR)).unwrap();
+        set_level(&root, &db, Level::Assistant).unwrap();
+        assert!(root.join(ALT_DIR).join("policy.json").is_file());
+        assert!(
+            !root.join(DIR).exists(),
+            "nothing should write a second policy directory beside the one in use"
+        );
+        assert_eq!(level(&root), Level::Assistant);
     }
 
     /// A level is a name for switches, so setting one and reading it back has to agree --

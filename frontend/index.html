@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aether1 Platform // CYBERNETIC AI HUD</title>
+    <title>Aurora1 // CYBERNETIC AI HUD</title>
     <!-- Everything the HUD needs to draw itself is on disk. It used to fetch Tailwind,
          three.js and the fonts from three CDNs on every launch, which meant an offline
          machine (or a blocked network, or a bad afternoon at Cloudflare) got an unstyled
@@ -14,12 +14,17 @@
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
+    <link rel="stylesheet" href="css/studio.css?v=9">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
          HUD first. See the [data-solo-panel] rules in css/layout.css and the script further
          down that adds .solo-target to the matching panel once it exists in the DOM. -->
     <script src="js/solo-panel.js?v=1"></script>
+    <!-- Which shell the window wears, in the head for the same reason the theme is:
+         read any later and the panel grid paints before the studio replaces it. -->
+    <script src="js/shell.js?v=4"></script>
+    <script src="js/modules.js?v=1"></script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -164,23 +169,30 @@
         <div class="flex items-center gap-2.5 shrink-0">
             <div class="w-2.5 h-2.5 rounded-full bg-cyan-400 box-glow-cyan animate-pulse shrink-0"></div>
             <div class="flex flex-col items-start gap-0.5">
-                <!-- The wordmark carries the agent's own name once one is set, and turns over
-                     to AETHER1 PLATFORM every so often so what it is running on is never a
-                     mystery. See refreshWordmark in app.js. -->
-                <h1 id="hud-wordmark" class="font-orbitron font-bold text-base leading-none text-cyan-400 tracking-wider glow-cyan">AETHER1</h1>
+                <!-- The wordmark carries the companion's own name once one is set, and
+                     nothing else: the platform it runs on is named in this element's tooltip
+                     and in the About box, not by rotating the header through a second name.
+                     See refreshWordmark in app.js. -->
+                <h1 id="hud-wordmark" class="font-orbitron font-bold text-base leading-none text-cyan-400 tracking-wider glow-cyan">AURORA1</h1>
                 <!-- Starts hidden and is revealed by initVersionAndUpdates, which only runs
                      in the desktop app: the browser has no version to report, and an empty
                      badge reading "--" under the wordmark forever is worse than no badge. -->
                 <div class="flex items-center gap-1">
                     <button id="version-badge" title="Click to check for updates" class="hidden items-center text-[9px] leading-none font-mono text-slate-500 border border-slate-700 rounded px-1 py-0.5 hover:border-cyan-500/50 hover:text-cyan-300 transition-colors">--</button>
-                    <button id="btn-header-update" type="button" class="hidden cyber-btn text-[9px] leading-none py-1 px-1.5" title="Check for Aether1 updates">↻ Update</button>
+                    <button id="btn-header-update" type="button" class="hidden cyber-btn text-[9px] leading-none py-1 px-1.5" title="Check for Aurora1 updates">↻ Update</button>
                 </div>
-                <div id="header-update-progress" class="hidden w-36 max-w-full space-y-0.5" aria-live="polite">
+<!-- Two lines rather than one: the step on top, and under it whatever git or cargo
+                     last printed, which is the part that tells an operator a two-minute rebuild
+                     is still moving. Both are truncated to fit the header and both carry the
+                     whole text as a tooltip; the button opens Settings -> Updates, where the same
+                     thing is shown in full with the last lines of output under it. -->
+                <button id="header-update-progress" type="button" class="hidden w-36 max-w-full space-y-0.5 text-left" aria-live="polite" title="Open Settings &#8594; Updates for the whole message">
                     <div id="header-update-progress-text" class="text-[8px] font-mono text-slate-500 truncate">Checking for updates…</div>
-                    <div class="h-1 rounded bg-slate-800 overflow-hidden" role="progressbar" aria-label="Aether1 update progress">
+                    <div id="header-update-progress-detail" class="hidden text-[8px] font-mono text-slate-500 truncate"></div>
+                    <div class="h-1 rounded bg-slate-800 overflow-hidden" role="progressbar" aria-label="Aurora1 update progress">
                         <div id="header-update-progress-bar" class="h-full w-0 bg-cyan-400 transition-all duration-200"></div>
                     </div>
-                </div>
+                </button>
             </div>
         </div>
 
@@ -197,6 +209,11 @@
                     <span aria-hidden="true">☰</span><span class="sr-only">Menu</span>
                 </button>
                 <div id="hud-menu" class="hud-slideout hud-slideout-right hidden" role="menu" aria-labelledby="btn-hud-menu">
+                    <!-- The way back to the studio. The studio's own sidebar has a button out to
+                         the HUD; without its mirror here the default shell was a one-way door,
+                         and the only way home was Settings -> Display. app.js writes the label
+                         from the shell that is on screen, so this one entry is both directions. -->
+                    <button id="btn-shell-toggle" class="hud-slideout-action" role="menuitem">▦ Chat studio</button>
                     <button id="btn-sfx" class="hud-slideout-action" role="menuitem">🔊 SFX: ON</button>
                     <button id="btn-setup" class="hud-slideout-action" role="menuitem">🧠 Set up the AI</button>
                     <button id="btn-voice-setup" class="hud-slideout-action" role="menuitem">🗣 Set up the voice</button>
@@ -219,7 +236,7 @@
                 <button id="btn-window-maximize" type="button" class="window-btn" title="Maximise" aria-pressed="false">
                     <span class="window-btn-glyph" aria-hidden="true">&#x25a1;</span><span class="sr-only">Maximise</span>
                 </button>
-                <button id="btn-window-close" type="button" class="window-btn window-btn-close" title="Close to the tray -- AETHER1 keeps running. Quit it from the tray icon.">
+                <button id="btn-window-close" type="button" class="window-btn window-btn-close" title="Close to the tray -- AURORA1 keeps running. Quit it from the tray icon.">
                     <span aria-hidden="true">&#x2715;</span><span class="sr-only">Close</span>
                 </button>
             </div>
@@ -241,7 +258,130 @@
     </div>
 
     <!-- MAIN DASHBOARD CONTENT (FREE-FORM PANEL GRID) -->
+    <!-- THE SHELL ROW: the sidebar, and everything that was already here.
+         ================================================================================
+         AETHER1 has one screen in two shells. HUD is the free-form panel grid, unchanged
+         and still the default. STUDIO is the chat-first one: this sidebar on the left, the
+         conversation alone in the middle, the avatar behind it. Nothing moves in the DOM
+         between the two -- the studio is a set of rules in css/studio.css keyed off
+         <html data-shell>, so the chat panel in the studio is the same element, with the
+         same ids and the same listeners, as the chat panel in the HUD. A second copy of
+         the conversation is a second place for it to go wrong.
+
+         The nav is the chat panel's own tabs, in a column. They are the same eight views
+         (see .chat-tabs below) driven through the same switchChatTab, because a sidebar
+         entry that opened a different Notes from the tab's Notes would be two Notes. -->
+    <div id="shell-row" class="flex-1 flex min-h-0">
+    <aside id="studio-sidebar" aria-label="Aurora1 navigation">
+        <div class="studio-brand">
+            <span class="studio-brand-mark" aria-hidden="true"></span>
+            <span class="studio-brand-name font-orbitron">AURORA1</span>
+            <span class="studio-brand-tag">STUDIO</span>
+            <button id="btn-studio-sidebar" type="button" class="studio-icon-btn ml-auto"
+                    title="Collapse the sidebar" aria-label="Collapse the sidebar" aria-expanded="true">&#x276E;</button>
+        </div>
+
+        <button id="btn-studio-new" type="button" class="studio-nav studio-nav-primary">
+            <span class="studio-nav-icon" aria-hidden="true">&#9998;</span><span class="studio-nav-label">New chat</span>
+        </button>
+
+        <nav class="studio-nav-list" aria-label="Views">
+            <button type="button" class="studio-nav" data-studio-nav="conversation"><span class="studio-nav-icon" aria-hidden="true">&#128172;</span><span class="studio-nav-label">Conversation</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="code"><span class="studio-nav-icon" aria-hidden="true">&#60;&#47;&#62;</span><span class="studio-nav-label">Aether Code</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="terminal" id="studio-nav-terminal"><span class="studio-nav-icon" aria-hidden="true">&#9646;</span><span class="studio-nav-label">Terminal</span></button>
+            <div class="studio-nav-rule" aria-hidden="true"></div>
+            <button type="button" class="studio-nav" data-studio-nav="memories"><span class="studio-nav-icon" aria-hidden="true">&#9673;</span><span class="studio-nav-label">Memories</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="history"><span class="studio-nav-icon" aria-hidden="true">&#8634;</span><span class="studio-nav-label">History</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="notes"><span class="studio-nav-icon" aria-hidden="true">&#9998;</span><span class="studio-nav-label">Notes</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="activity"><span class="studio-nav-icon" aria-hidden="true">&#9889;</span><span class="studio-nav-label">Activity</span></button>
+            <button type="button" class="studio-nav" data-studio-nav="performance"><span class="studio-nav-icon" aria-hidden="true">&#128202;</span><span class="studio-nav-label">Performance</span></button>
+            <div class="studio-nav-rule" aria-hidden="true"></div>
+            <!-- Not views: these open what already exists elsewhere, so the sidebar is a
+                 way to everything rather than a way to eight things and a dead end. -->
+            <button type="button" class="studio-nav" data-studio-open="brain"><span class="studio-nav-icon" aria-hidden="true">&#129504;</span><span class="studio-nav-label">Model hub</span></button>
+            <button type="button" class="studio-nav" data-studio-open="avatars"><span class="studio-nav-icon" aria-hidden="true">&#9728;</span><span class="studio-nav-label">Avatars</span></button>
+            <button type="button" class="studio-nav" data-studio-open="agents"><span class="studio-nav-icon" aria-hidden="true">&#129302;</span><span class="studio-nav-label">Agent browser</span></button>
+        </nav>
+
+        <!-- The last few conversations, read from the same store the HISTORY tab reads, so
+             the two cannot disagree about what was said. Clicking one opens it in HISTORY
+             rather than loading it into the live chat: this is a way to look, and loading
+             a session over the one on screen is a way to lose the one on screen. -->
+        <div class="studio-recents">
+            <div class="studio-recents-head">RECENTS</div>
+            <div id="studio-recents-list" class="studio-recents-list">
+                <div class="studio-recents-empty">No conversations yet</div>
+            </div>
+        </div>
+
+        <div class="studio-foot">
+            <button id="btn-studio-operator" type="button" class="studio-operator" title="Settings">
+                <span id="studio-operator-mark" class="studio-operator-mark" aria-hidden="true">A</span>
+                <span class="studio-operator-text">
+                    <span id="studio-operator-name" class="studio-operator-name">Operator</span>
+                    <span id="studio-operator-sub" class="studio-operator-sub">Aurora1</span>
+                </span>
+            </button>
+            <button id="btn-studio-shell" type="button" class="studio-icon-btn" title="Back to the HUD panel grid" aria-label="Back to the HUD panel grid">&#9638;</button>
+            <button id="btn-studio-settings" type="button" class="studio-icon-btn" title="Settings" aria-label="Settings">&#9881;</button>
+        </div>
+    </aside>
+
     <main id="hud-layout" class="flex-1 p-4 overflow-auto z-10">
+        <!-- THE MODEL PICKER, where the Unsloth layout puts it: top left of the stage, one
+             press from the caret. There has been a picker in the chin bar since #245 and a
+             second in the chat row since #251, and both are a `<select>` -- fine for a dozen
+             entries and useless at sixty, which is what a machine with Ollama, LM Studio and
+             three keys actually has. This one is a popover with a search box and four tabs,
+             and it is filled from the same `brains` reply and writes through the same save as
+             the other two, so all three always name the same model (fillBrainSelect /
+             renderBrainPopover in js/app.js).
+
+             AUTO sits above the tabs rather than in them because it is not a model: it is the
+             judgement call about which model, made per message by the local router. The router
+             is being built in its own branch; until it lands this row says so and cannot be
+             chosen, which is the honest state -- an Auto that silently picked whatever was
+             already selected would be a lie told every message. -->
+        <div id="studio-stage-bar" class="studio-stage-bar">
+            <button id="studio-model-trigger" type="button" class="studio-model-trigger"
+                    aria-haspopup="dialog" aria-expanded="false" aria-controls="brain-popover">
+                <span id="studio-model-name" class="studio-model-name">Select model</span>
+                <span class="studio-model-caret" aria-hidden="true">&#9662;</span>
+            </button>
+
+            <!-- The same setting as the slider in Settings -> Display, put where you are
+                 actually looking at the avatar: a slider you cannot see the effect of is
+                 a slider you drag twice. Out only while the avatar is behind the chat,
+                 and only in the studio, since the stage bar is the studio's. Both inputs
+                 are painted by paintAvatarOpacity and both write through setShell, so
+                 neither is the record of anything. -->
+            <label id="stage-avatar-opacity" class="stage-avatar-opacity hidden">
+                <span class="stage-avatar-opacity-label">AVATAR</span>
+                <input id="stage-avatar-opacity-range" type="range" min="5" max="100" step="5" value="40"
+                       class="avatar-opacity-range" aria-label="How strongly the avatar is drawn behind the chat">
+                <span id="stage-avatar-opacity-value" class="stage-avatar-opacity-value">40%</span>
+            </label>
+
+            <div id="brain-popover" class="brain-popover hidden" role="dialog" aria-label="Choose the model that answers">
+                <div class="brain-pop-search">
+                    <span class="brain-pop-search-icon" aria-hidden="true">&#9906;</span>
+                    <input id="brain-pop-search" type="search" class="brain-pop-search-input"
+                           placeholder="Search models" aria-label="Search models" autocomplete="off">
+                </div>
+                <div class="brain-pop-tabs" role="tablist" aria-label="Which models to show">
+                    <button type="button" class="brain-pop-tab" data-brain-tab="recommended" role="tab" aria-selected="true"><span aria-hidden="true">&#9733;</span> Recommended</button>
+                    <button type="button" class="brain-pop-tab" data-brain-tab="device" role="tab" aria-selected="false"><span aria-hidden="true">&#8681;</span> On device</button>
+                    <button type="button" class="brain-pop-tab" data-brain-tab="connected" role="tab" aria-selected="false"><span aria-hidden="true">&#9729;</span> Connected</button>
+                    <button type="button" class="brain-pop-tab" data-brain-tab="all" role="tab" aria-selected="false">All</button>
+                </div>
+                <div id="brain-pop-auto" class="brain-pop-auto"></div>
+                <div id="brain-pop-list" class="brain-pop-list" role="listbox" aria-label="Models"></div>
+                <div class="brain-pop-foot">
+                    <button type="button" id="brain-pop-setup" class="brain-pop-setup">Set up another model&hellip;</button>
+                </div>
+            </div>
+        </div>
+
 
         <!-- CENTER STAGE: 3D HOLOGRAPHIC AVATAR -->
         <div class="hud-panel movable-panel grip-inset flex flex-col items-center justify-center relative rounded overflow-hidden" data-panel="hologram" data-panel-name="The avatar" data-grid-col="1" data-grid-row="1" data-grid-w="12" data-grid-h="37">
@@ -378,10 +518,65 @@
             </div>
 
             <div id="chat-view-conversation" class="flex-1 min-h-0 flex flex-col" data-chat-view="conversation">
+            <!-- The line over an empty conversation. Shown only while #chat-messages is
+                 empty and only in the studio, where there is room for it; the HUD's chat
+                 column is 380px and a greeting there is 380px of the thing you came to
+                 read. js/app.js toggles .has-messages on the view. -->
+            <div id="studio-greeting" class="studio-greeting">
+                <!-- The avatar, shut in a box, on the one screen with room for it. Pressing
+                     it is how you say where it should live: behind the conversation, small
+                     in the corner, out on the desktop, or nowhere. The three were only ever
+                     in Settings -> Display before, which is a strange place to keep the
+                     companion.
+
+                     The label under it is written by app.js from where the avatar is now,
+                     and it is set the way every other label in this app is set -- mono,
+                     upper case, spaced. It was a line of handwriting at an angle with a
+                     drawn arrow, lifted from the screen the idea came off; Trident:
+                     "I don't want it as a carbon copy I just like that they are clean
+                     interfaces". The clean part was the empty ground and the one thing on
+                     it to press, which is what this keeps. -->
+                <div id="studio-cage" class="studio-cage">
+                    <button id="btn-studio-cage" type="button" class="studio-cage-tile"
+                            aria-haspopup="true" aria-expanded="false" aria-controls="studio-cage-menu">
+                        <span id="studio-cage-mark" class="studio-cage-mark" aria-hidden="true">&#129302;</span>
+                        <span id="studio-cage-sr" class="sr-only">Where the avatar goes</span>
+                    </button>
+                    <span id="studio-cage-note" class="studio-cage-note">LET IT OUT</span>
+                    <div id="studio-cage-menu" class="studio-cage-menu hidden" role="radiogroup" aria-label="Where the avatar goes">
+                        <button type="button" class="studio-cage-opt" data-avatar-home="background" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">BEHIND THE CHAT</span>
+                            <span class="studio-cage-opt-sub">Full size, dimmed, behind the conversation.</span>
+                        </button>
+                        <button type="button" class="studio-cage-opt" data-avatar-home="minitar" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">MINI-TAR</span>
+                            <span class="studio-cage-opt-sub">Small, in the bottom corner, still live.</span>
+                        </button>
+                        <!-- Shown only in the desktop app: the holo-tar is a transparent
+                             always-on-top window, which the browser has no answer for. -->
+                        <button type="button" id="studio-cage-opt-holotar" class="studio-cage-opt hidden" data-avatar-home="holotar" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">HOLO-TAR</span>
+                            <span class="studio-cage-opt-sub">Out of the window entirely, loose on your desktop.</span>
+                        </button>
+                        <button type="button" class="studio-cage-opt" data-avatar-home="off" role="radio" aria-checked="false">
+                            <span class="studio-cage-opt-name">BACK IN THE BOX</span>
+                            <span class="studio-cage-opt-sub">A clean ground. The avatar stops drawing.</span>
+                        </button>
+                    </div>
+                </div>
+                <div id="studio-greeting-line" class="studio-greeting-line font-orbitron" aria-hidden="true">What are we building?</div>
+                <div id="studio-greeting-sub" class="studio-greeting-sub" aria-hidden="true"></div>
+            </div>
             <div id="chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
 
             <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
-                <div id="chat-media-previews" class="hidden flex flex-wrap gap-2 mb-2"></div>
+                <!-- `hidden` and `flex` together is `hidden` losing: Tailwind emits the
+                     display utilities in one layer and flex comes after none, so this
+                     drew an empty bordered strip above the input card on every screen
+                     that had no images pending. renderChatImagePreviews carries both
+                     classes now, so the row is display: flex only while it holds
+                     something. -->
+                <div id="chat-media-previews" class="hidden flex-wrap gap-2 mb-2"></div>
                 <div class="flex items-center gap-2">
                     <button id="btn-mic" title="Hold to talk (or hold Space)" class="cyber-btn px-3 py-2 text-cyan-400 rounded">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
@@ -389,6 +584,20 @@
                     <input id="chat-media-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden">
                     <button id="btn-chat-media" type="button" title="Attach images for analysis (or paste an image)" aria-label="Attach images" class="cyber-btn px-3 py-2 text-cyan-300 rounded">▧</button>
                     <input id="chat-input" type="text" placeholder="Type a directive, or hold Space to talk..." class="flex-1 bg-slate-900/80 border border-cyan-500/40 rounded px-3 py-2 text-sm text-cyan-100 placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono">
+                    <!-- WHICH MODEL ANSWERS, in the row where the question is typed.
+
+                         There has been a picker in the chin bar since #245, beside STATE,
+                         and it was reported missing anyway: it is a 10px control at the
+                         very bottom edge of the window, two rows below the box, and it
+                         took itself away entirely whenever the model server could not be
+                         reached -- which looks exactly like not having one. So the same
+                         list is here as well, an arm's length from the caret, and neither
+                         copy hides any more (see fillBrainSelect in js/app.js). Both are
+                         filled from one reply and write through one save, so they cannot
+                         drift apart. -->
+                    <span id="chat-brain-row" class="hidden shrink-0 items-center">
+                        <select id="chat-brain" class="chin-brain-select chat-brain-select" aria-label="Which model answers"></select>
+                    </span>
                     <!-- Hush. Hidden until there is something to stop, because a dead
                          button beside the one you press every time is clutter, and because
                          its appearing is itself the sign that Escape will work. -->
@@ -397,6 +606,30 @@
                     </button>
                     <button id="btn-send" class="cyber-btn px-4 py-2 text-sm rounded">
                         Send
+                    </button>
+                </div>
+
+                <!-- WHAT THIS MESSAGE IS ALLOWED TO DO, under the box it is typed in.
+                     Three switches that were three different places: whether it may look
+                     anything up at all (Settings -> tools), whether looking up includes
+                     the web, and what happens when it wants to change something. Each one
+                     writes the real setting the engine reads -- there is no per-message
+                     copy of any of them -- so the row is the state of the machine, not a
+                     decoration over it.
+
+                     Studio only. The HUD's chat column is 380px wide and this row in it is
+                     either three chips on four lines or three chips nobody can read. -->
+                <div id="chat-actions" class="chat-actions" aria-label="What this message may do">
+                    <button id="btn-chat-attach" type="button" class="chat-chip chat-chip-icon" title="Attach images for analysis" aria-label="Attach images">+</button>
+                    <button id="btn-chat-approval" type="button" class="chat-chip" aria-haspopup="true" aria-expanded="false" aria-controls="chat-approval-menu">
+                        <span aria-hidden="true">&#9816;</span><span class="chat-chip-text">Ask for approval</span><span class="chat-chip-caret" aria-hidden="true">&#9662;</span>
+                    </button>
+                    <div id="chat-approval-menu" class="chat-chip-menu hidden" role="menu" aria-labelledby="btn-chat-approval"></div>
+                    <button id="btn-chat-search" type="button" class="chat-chip" aria-pressed="false" title="Let it search the web for things it cannot know">
+                        <span aria-hidden="true">&#9901;</span><span class="chat-chip-text">Search</span>
+                    </button>
+                    <button id="btn-chat-tools" type="button" class="chat-chip" aria-pressed="false" title="Let it use its tools at all">
+                        <span aria-hidden="true">&#60;&#47;&#62;</span><span class="chat-chip-text">Tools</span>
                     </button>
                 </div>
             </div>
@@ -490,7 +723,7 @@
                      whenever that changes, which is what makes less and htop redraw properly. -->
                 <div id="terminal-surface" class="flex-1 min-h-0 px-2 py-2 hidden"></div>
                 <p id="terminal-note" class="px-4 py-3 text-[10px] font-mono text-slate-500 leading-relaxed">
-                    Your own shell, in the window. Aether1 cannot see it or type into it, and
+                    Your own shell, in the window. Aurora1 cannot see it or type into it, and
                     nothing runs here until you press Return.
                 </p>
             </div>
@@ -665,6 +898,7 @@
         </div>
 
     </main>
+    </div><!-- /#shell-row -->
 
     <!-- Solo-panel corner control: only shown in a window opened by open_panel_window_rust
          (see the inline bootstrap script in <head> and initSoloPanel() in app.js). A
@@ -721,7 +955,7 @@
                 <button id="btn-verify" type="button" class="quick-chip chin-cmd" title="Check this install over without asking the companion">
                     &#10003; Verify
                 </button>
-                <button type="button" class="quick-chip chin-cmd" data-cmd="Run your self-check and tell me what is wrong with AETHER1 right now, and whether anything has crashed recently." title="Run the self-check and say what it found">
+                <button type="button" class="quick-chip chin-cmd" data-cmd="Run your self-check and tell me what is wrong with AURORA1 right now, and whether anything has crashed recently." title="Run the self-check and say what it found">
                     &#129658; Diagnostics
                 </button>
                 <button type="button" class="quick-chip chin-cmd" data-cmd="help" title="What can this thing do?">
@@ -731,6 +965,22 @@
         </div>
 
         <div class="chin-line px-4 py-1 flex items-center gap-2">
+        <!-- WHICH BRAIN IS ANSWERING, and the control to change it.
+
+             Where the AI runs has always been a setting, and it is three levels down:
+             The Brain, then Connections, then a collapsed "AI Model Connection" group.
+             That is the right home for an address and a key, and the wrong one for the
+             question somebody asks several times an evening -- answer this one locally,
+             answer this one with Claude. The only thing in the chat itself was a dropdown
+             of local models for the active persona, in the desktop app alone.
+
+             So it is here, beside STATE, which is the other thing in this bar that says
+             what the companion is rather than what it did. One control, both groups in it,
+             switching on the spot. Hidden when there is nothing to switch between. -->
+        <span id="chin-brain-row" class="hidden items-center gap-1.5">
+            <span class="text-[10px] font-mono text-slate-400 tracking-wider">BRAIN</span>
+            <select id="chin-brain" class="chin-brain-select" aria-label="Which model answers"></select>
+        </span>
         <span class="text-[10px] font-mono text-slate-400 tracking-wider">STATE</span>
         <span id="status-badge" class="px-2 py-0.5 text-[10px] font-mono rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30">
             IDLE
@@ -810,7 +1060,7 @@
             </div>
 
             <p class="text-xs font-mono text-slate-400 leading-snug">
-                Aether1 is the face and the memory. The thinking is done by an AI model that runs
+                Aurora1 is the face and the memory. The thinking is done by an AI model that runs
                 on this computer &mdash; it is a separate program, and it is free. This page
                 installs one, start to finish. You do not need to understand any of it.
             </p>
@@ -844,7 +1094,7 @@
                 <div id="setup-downloads" class="space-y-2"></div>
                 <p class="text-[11px] font-mono text-slate-500 leading-snug">
                     You can close this window &mdash; the download belongs to the model server,
-                    not to Aether1, and it keeps going either way.
+                    not to Aurora1, and it keeps going either way.
                 </p>
             </div>
 
@@ -912,7 +1162,7 @@
                     <div class="font-orbitron text-[11px] font-bold text-cyan-300 tracking-wider">PICK A BETTER VOICE</div>
                     <p id="voice-picker-note" class="text-[11px] font-mono text-slate-400 leading-snug">
                         These are voice files for Piper &mdash; recordings turned into numbers,
-                        not programs. Aether1 saves them in its own voices folder; nothing is
+                        not programs. Aurora1 saves them in its own voices folder; nothing is
                         installed, nothing is run, and you still need Piper itself from the
                         steps above for them to be used.
                     </p>
@@ -984,11 +1234,11 @@
                         <span class="settings-nav-icon">🧱</span>
                         <span class="settings-nav-text">Display</span>
                     </button>
-                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key server ollama openai cloud local provider connections github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
+                    <button type="button" id="settings-nav-brain" class="settings-nav-item" data-settings-section="brain" data-keywords="model hub models endpoint api key apikey server ollama lm studio lmstudio openai anthropic gemini groq gateway cloud local provider connection connections credentials github coding opencode aider download vram" data-hint="which AI does the thinking" title="which AI does the thinking">
                         <span class="settings-nav-icon">🧠</span>
                         <span class="settings-nav-text">The Brain</span>
                     </button>
-                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq models api key provider connect credentials" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
+                    <button type="button" id="settings-nav-connections" class="settings-nav-item" data-settings-section="connections" data-keywords="accounts sign in github openai anthropic gemini groq ollama lm studio lmstudio gateway models api key apikey token secret keychain provider connect connection credentials endpoint address server model reasoning thinking think thought effort" data-hint="accounts, sign-in and AI provider connections" title="accounts, sign-in and AI provider connections">
                         <span class="settings-nav-icon">🔗</span>
                         <span class="settings-nav-text">Connections &amp; Accounts</span>
                     </button>
@@ -1035,11 +1285,11 @@
                             <span class="settings-nav-icon">⚡</span>
                             <span class="settings-nav-text">Startup &amp; Performance</span>
                         </button>
-                        <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AETHER1, and the broken ones" title="every part of AETHER1, and the broken ones">
+                        <button type="button" id="settings-nav-doctor" class="settings-nav-item" data-settings-section="doctor" data-keywords="diagnostics broken fix repair doctor not working" data-hint="every part of AURORA1, and the broken ones" title="every part of AURORA1, and the broken ones">
                             <span class="settings-nav-icon">🩺</span>
                             <span class="settings-nav-text">Is it working?</span>
                         </button>
-                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="about help hotkey shortcut version update release guide" data-hint="what Aether1 is, help and updates" title="what Aether1 is, help and updates">
+                    <button type="button" id="settings-nav-app" class="settings-nav-item" data-settings-section="app" data-keywords="about help hotkey shortcut version update release guide" data-hint="what Aurora1 is, help and updates" title="what Aurora1 is, help and updates">
                             <span class="settings-nav-icon">🖥</span>
                         <span class="settings-nav-text">About &amp; Help</span>
                         </button>
@@ -1102,7 +1352,7 @@
                             <p id="profile-hostname" class="profile-hostname">&mdash;</p>
                             <p class="text-[10px] font-mono text-slate-400 leading-snug">
                                 The hostname, as the rest of your network knows this box.
-                                AETHER1 reads it and never changes it.
+                                AURORA1 reads it and never changes it.
                             </p>
                         </div>
                         <div class="space-y-1">
@@ -1394,7 +1644,7 @@
                 <!-- STAGE 1: the lines. -->
                 <div class="avatar-stage is-active" data-avatar-stage="groups">
                     <p class="avatar-stage-lede">
-                        The hologram is the thing AETHER1 has that nothing else does. Pick the
+                        The hologram is the thing AURORA1 has that nothing else does. Pick the
                         line first -- each one is a cast with its own idea of how the work gets
                         covered.
                     </p>
@@ -1539,6 +1789,54 @@
                     <p class="settings-pane-hint">where the avatar lives, and where the panels sit</p>
                 </div>
 
+                <!-- WHICH SHELL. The first question this section asks, because it decides
+                     what the rest of it is about: in the studio there are no panels to
+                     arrange. Screen-local like the panel grid below it and for the same
+                     reason -- it is a property of this display, not of the companion -- so
+                     it lives in localStorage (js/shell.js) and is not saved with the
+                     settings. Two screens can wear two different shells. -->
+                <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
+                    <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#128421; SHELL</span>
+                    <div class="shell-choices" role="radiogroup" aria-label="Which shell">
+                        <button type="button" class="shell-choice" data-shell-choice="studio" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">STUDIO</span>
+                            <span class="shell-choice-sub">Chat first. A sidebar, one centred column, the avatar behind it. The one a new window opens in.</span>
+                        </button>
+                        <button type="button" class="shell-choice" data-shell-choice="hud" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">HUD</span>
+                            <span class="shell-choice-sub">The panel grid. Everything on screen at once, draggable and resizable.</span>
+                        </button>
+                    </div>
+                    <span class="text-[11px] font-mono text-slate-400 block pt-1">In the studio, where the avatar goes:</span>
+                    <div class="shell-choices" role="radiogroup" aria-label="Where the avatar goes in the studio">
+                        <button type="button" class="shell-choice shell-choice-sm" data-avatar-place="background" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">BEHIND THE CHAT</span>
+                            <span class="shell-choice-sub">Full size, dimmed, behind the conversation.</span>
+                        </button>
+                        <button type="button" class="shell-choice shell-choice-sm" data-avatar-place="minitar" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">MINI-TAR</span>
+                            <span class="shell-choice-sub">Small, in the bottom corner, still live.</span>
+                        </button>
+                        <button type="button" class="shell-choice shell-choice-sm" data-avatar-place="off" role="radio" aria-checked="false">
+                            <span class="shell-choice-name">OFF</span>
+                            <span class="shell-choice-sub">A clean ground. The avatar stops drawing.</span>
+                        </button>
+                    </div>
+                    <!-- Only out while the avatar is behind the chat: it is that mode's
+                         own control, and the mini-tar is drawn at full strength in a box
+                         of its own where nothing is reading through it. app.js shows and
+                         hides the row from the same painter that lights the cards. -->
+                    <div id="avatar-opacity-row" class="avatar-opacity-row hidden">
+                        <label for="setting-avatar-opacity" class="avatar-opacity-label">
+                            How strongly it is drawn
+                            <span id="avatar-opacity-value" class="avatar-opacity-value">40%</span>
+                        </label>
+                        <input id="setting-avatar-opacity" type="range" min="5" max="100" step="5" value="40"
+                               class="avatar-opacity-range" aria-describedby="avatar-opacity-help">
+                        <span id="avatar-opacity-help" class="avatar-opacity-help">Turn it down when the conversation is hard to read over it.</span>
+                    </div>
+                </div>
+
                 <div id="sprite-mode-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
                     <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">🖥️ DESKTOP SPRITE</span>
                     <!-- The checkbox keeps its id: loadSettings/saveSettings and
@@ -1569,6 +1867,23 @@
                     <p class="text-[10px] font-mono text-slate-500 leading-snug">
                         A panel you switch off is not running: the avatar stops drawing, and
                         nothing hidden here is being kept up to date behind your back.
+                    </p>
+                </div>
+
+                <!-- The other half of the same question. The panels above are the big
+                     boxes; these are the eight tabs inside the chat panel, which is
+                     where "I only want the terminal" actually lives. Filled in by
+                     js/modules.js from the tab strip, so a tab added to the HUD appears
+                     here by itself, and screen-local for the same reason the panels
+                     are. Both shells honour them: the studio's sidebar is these same
+                     eight views by another route. -->
+                <div class="pt-1 space-y-1">
+                    <span class="text-[11px] font-mono text-cyan-300 block">Chat tabs to show</span>
+                    <div id="view-toggles" class="space-y-1"></div>
+                    <p class="text-[10px] font-mono text-slate-500 leading-snug">
+                        Switch off everything you do not use and the chat panel becomes
+                        whatever is left -- a terminal, a coding window, a conversation and
+                        nothing else. One has to stay on, since a tab is how you get back.
                     </p>
                 </div>
                 </div>
@@ -1631,11 +1946,28 @@
                         <div class="min-w-0">
                             <div class="text-xs font-mono text-cyan-200">Not sure what to put here?</div>
                             <div class="text-[11px] font-mono text-slate-400 leading-snug">
-                                Let Aether1 check this computer and walk you through installing a
+                                Let Aurora1 check this computer and walk you through installing a
                                 free AI that runs offline. Takes a few minutes.
                             </div>
                         </div>
                         <button id="btn-open-setup-settings" type="button" class="cyber-btn cyber-btn-active text-xs py-2 px-3 whitespace-nowrap">🧠 Set it up for me</button>
+                    </div>
+
+                    <!-- The hub answers "which model", and the form that answers "where
+                         does it run and what key does it need" is a pane away under
+                         Connections. Somebody with an OpenAI key lands here, finds a
+                         catalogue of things to download, and has no way of knowing the
+                         six lines they actually want are somewhere else. This is that
+                         way. See openProviderSetup in app.js. -->
+                    <div class="bg-slate-900/60 border border-cyan-500/20 p-3 rounded-md flex items-center justify-between gap-3 flex-wrap">
+                        <div class="min-w-0">
+                            <div class="text-xs font-mono text-cyan-200">Already have an API key, or a server of your own?</div>
+                            <div class="text-[11px] font-mono text-slate-400 leading-snug">
+                                OpenAI, Anthropic, Gemini, Groq, a gateway, or an address on your
+                                network. Each one keeps its own key, address and model.
+                            </div>
+                        </div>
+                        <button id="brain-setup-provider" type="button" class="cyber-btn text-xs py-2 px-3 whitespace-nowrap">🔑 Set up a provider</button>
                     </div>
 
                     <div id="brain-status" class="text-[11px] font-mono p-2 rounded border border-slate-600/40 bg-slate-900/60 text-slate-400">
@@ -1653,11 +1985,16 @@
                         <div class="hub-tabs" role="tablist">
                             <button type="button" id="hub-tab-discover" class="hub-tab is-active" data-hub-tab="discover" role="tab">Discover</button>
                             <button type="button" id="hub-tab-device" class="hub-tab" data-hub-tab="device" role="tab">On device</button>
+                            <button type="button" id="hub-tab-hf" class="hub-tab" data-hub-tab="hf" role="tab">Hugging Face</button>
                         </div>
                         <div class="hub-search">
                             <span class="hub-search-icon" aria-hidden="true">🔍</span>
                             <input id="hub-search" type="search" placeholder="Search all models" autocomplete="off" aria-label="Search models">
                         </div>
+                        <label class="flex items-center gap-1.5 text-[10px] font-mono text-cyan-300/80 whitespace-nowrap cursor-pointer">
+                            <input id="hub-hf-tools-only" type="checkbox" checked class="accent-cyan-400">
+                            hide models that can't use tools
+                        </label>
                         <select id="hub-filter-purpose" class="hub-select" aria-label="What the model is for">
                             <option value="all">Any purpose</option>
                             <option value="chat">To talk to</option>
@@ -1733,16 +2070,33 @@
                         <div class="settings-group-body space-y-2">
 
                     <!-- AI MODEL CONNECTION -->
-                    <details class="border border-cyan-500/20 rounded p-3">
-                        <summary class="text-xs font-mono text-slate-300 cursor-pointer">🧠 AI Model Connection</summary>
+                    <!-- Open, and first in the group. It was a shut <details> four levels
+                         down a pane reached from a rail, with a one-line summary in the
+                         same grey as the two below it: the one control a cloud user has to
+                         find in order to have a companion at all, folded away like an
+                         advanced option. Nothing about it is advanced. -->
+                    <details id="settings-group-ai-connection" class="border border-cyan-400/40 rounded p-3 bg-slate-900/60" open>
+                        <summary class="text-xs font-mono text-cyan-200 cursor-pointer">🧠 AI Model Connection <span class="text-slate-400">— providers, API keys and which model answers</span></summary>
                         <div class="space-y-2 mt-2">
+
+                            <!-- The roster of what is actually saved. See the SAVED ACCOUNTS
+                                 block in app.js for why it exists: the form below has one
+                                 address box, one key box and one model box, and until now
+                                 nothing on the page said that each provider keeps its own
+                                 set of all three. Drawn by renderProviderAccounts. -->
+                            <div class="space-y-1">
+                                <span class="text-xs font-mono text-cyan-300 block">YOUR PROVIDERS</span>
+                                <div id="provider-accounts" class="space-y-1"></div>
+                                <p id="provider-accounts-note" class="provider-account-note"></p>
+                            </div>
+
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div class="space-y-1">
                                     <label for="setting-provider" class="text-xs font-mono text-cyan-300 block">WHERE THE AI RUNS</label>
                                     <select id="setting-provider" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                                         <option value="offline">Nothing yet -- canned replies only</option>
-                                        <option value="lmstudio">On this computer -- OpenAI-compatible server</option>
-                                        <option value="ollama">On this computer -- Ollama-style server</option>
+                                        <option value="ollama">On this computer -- Ollama</option>
+                                        <option value="lmstudio">On this computer -- LM Studio, or another OpenAI-compatible server</option>
                                         <option value="gemini">Google Gemini (cloud)</option>
                                         <option value="groq">Groq (cloud)</option>
                                         <option value="openai">OpenAI (cloud)</option>
@@ -1774,6 +2128,32 @@
                                 <span class="text-[11px] font-mono text-slate-500 block">
                                     Picking one fills in everything else for you.
                                 </span>
+                            </div>
+
+                            <div class="space-y-1">
+                                <label for="setting-reasoning" class="text-xs font-mono text-cyan-300 block">THINKING OUT LOUD</label>
+                                <select id="setting-reasoning" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                    <option value="auto">Automatic -- think where it is free, show it when it happens</option>
+                                    <option value="off">Off -- no thinking, and none shown</option>
+                                    <option value="low">Low effort -- think a little, every time</option>
+                                    <option value="medium">Medium effort</option>
+                                    <option value="high">High effort -- slowest and most careful</option>
+                                </select>
+                                <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                    Models like qwen3 and deepseek-r1 reason before they answer. The
+                                    reasoning appears above the reply in a panel you can open, and is
+                                    never part of the answer, never spoken, and never kept. Automatic
+                                    asks nothing of a provider that might refuse the request for
+                                    asking.
+                                </p>
+                                <p class="text-[10px] font-mono text-amber-300 leading-snug">
+                                    A fixed effort also makes a model that <em>cannot</em> reason do it
+                                    on paper: it is asked the question once as a scratchpad, and then
+                                    asked again with its own notes in front of it. That helps on a
+                                    question with steps in it and costs a second reply's worth of time
+                                    every turn -- and on a cloud provider, a second reply's worth of
+                                    money.
+                                </p>
                             </div>
 
                             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1861,9 +2241,10 @@
                                     </div>
 
                                     <span class="text-[11px] font-mono text-slate-500 block">
-                                        Any local server works, not just Ollama: anything speaking the
-                                        OpenAI-compatible or Ollama-style API on a common port is found by
-                                        the scan, and anything else can be typed into the address box by hand.
+                                        Any local server works, not just Ollama: anything speaking
+                                        Ollama's own API or the OpenAI-compatible API on a common port is
+                                        found by the scan, and anything else can be typed into the address
+                                        box by hand.
                                     </span>
                                 </div>
                             </details>
@@ -1888,7 +2269,7 @@
                                     Optional. Checking for updates works without it &mdash; the releases are
                                     public. Signing in raises GitHub&rsquo;s hourly request limit, and lets this
                                     copy see releases that are not public. A short code typed in at github.com;
-                                    Aether1 never sees a password, and the access it gets is read-only.
+                                    Aurora1 never sees a password, and the access it gets is read-only.
                                     Declining leaves everything else working.
                                 </div>
                                 <!-- The device code, shown here as well as in the update panel: whichever
@@ -1908,7 +2289,7 @@
                                     computer, and it is what AETHER CODE runs read-only commands through
                                     (<span class="text-slate-400">gh pr view</span>, <span class="text-slate-400">gh run list</span>).
                                     It carries its own login, made with <span class="text-slate-400">gh auth login</span>
-                                    in a terminal; Aether1 never reads it. Signing in above does not install it
+                                    in a terminal; Aurora1 never reads it. Signing in above does not install it
                                     and is not what gives AETHER CODE its access, and updates need neither.
                                 </div>
                             </div>
@@ -1926,9 +2307,9 @@
                             <div class="bg-cyan-950/30 border border-cyan-500/40 p-3 rounded-md space-y-2">
                                 <div class="text-xs font-mono text-cyan-200">Write code with no subscription behind it</div>
                                 <div class="text-[11px] font-mono text-slate-400 leading-snug">
-                                    A coding model runs on this computer and costs nothing to use. Aether1
+                                    A coding model runs on this computer and costs nothing to use. Aurora1
                                     works out which one fits in this machine's memory, downloads it, and
-                                    gives you the exact commands to point a coding program at it. Aether1
+                                    gives you the exact commands to point a coding program at it. Aurora1
                                     does not do the editing itself &mdash; it sets up something that does.
                                 </div>
                                 <div class="flex items-center justify-end">
@@ -1976,6 +2357,10 @@
                     <div class="hub-detail-name">Accounts and providers</div>
                     <p class="hub-blurb">Connect OpenAI, Anthropic, Google Gemini, Groq, local Ollama or OpenAI-compatible servers, and sign in to GitHub. The model browser remains in The Brain; its catalog shows supported downloads and models detected on your connected server.</p>
                     <div class="hub-action"><span class="hub-action-size">Connected models are selected in The Brain.</span><button id="btn-open-model-hub" type="button" class="cyber-btn text-[10px] py-1 px-2">🧠 Open model hub</button></div>
+                    <!-- The one thing this pane exists for, as a button rather than as
+                         something to go looking for. It opens the connection form below
+                         and scrolls to it; see btn-setup-provider in app.js. -->
+                    <div class="hub-action"><span class="hub-action-size">Add a provider, paste an API key, or point at a server.</span><button id="btn-setup-provider" type="button" class="cyber-btn text-[10px] py-1 px-2">🔑 Set up a provider</button></div>
                 </div>
                 <div id="settings-connections-host"></div>
             </section>
@@ -2072,7 +2457,7 @@
                         </div>
                         <details class="border border-cyan-500/20 rounded p-3 mt-3">
                             <summary class="text-xs font-mono text-cyan-200 cursor-pointer">🌙 Quiet hours / Night mode</summary>
-                            <p class="hub-blurb mt-2">During these hours Aether1 stays silent unless you mark headphones as connected or start a voice conversation. The startup voice check is silent by default.</p>
+                            <p class="hub-blurb mt-2">During these hours Aurora1 stays silent unless you mark headphones as connected or start a voice conversation. The startup voice check is silent by default.</p>
                             <div class="flex flex-wrap items-center gap-3 mt-2">
                                 <label class="flex items-center gap-2 text-xs font-mono text-slate-300"><input id="setting-quiet-hours" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0"> Enable quiet hours</label>
                                 <label class="text-xs font-mono text-slate-300">From <input id="setting-quiet-start" type="time" value="22:00" class="bg-slate-900 border border-cyan-500/40 rounded p-1 text-cyan-100"></label>
@@ -2084,7 +2469,7 @@
                     </div>
                     <div class="hub-detail mt-3">
                         <div class="hub-detail-name">✨ Quirky greetings</div>
-                        <p class="hub-blurb">Aether1 can greet you with a short, characterful line. Greeting styles will have a home here later; there are no greeting settings to configure yet.</p>
+                        <p class="hub-blurb">Aurora1 can greet you with a short, characterful line. Greeting styles will have a home here later; there are no greeting settings to configure yet.</p>
                     </div>
 
                     <!-- ---- Devices ----
@@ -2104,7 +2489,7 @@
                                 <button type="button" id="vhub-test-output" class="cyber-btn text-[10px] py-1 px-2">▶ Test this speaker</button>
                             </div>
                             <p class="hub-blurb">
-                                Only Aether1's own sound moves; nothing else on this computer is
+                                Only Aurora1's own sound moves; nothing else on this computer is
                                 changed. Remember to press Save Changes.
                             </p>
                         </div>
@@ -2319,9 +2704,23 @@
                             <button id="btn-graft-build-all" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">🔨 Build All Missing</button>
                         </div>
 
+                        <!-- Shown only when Graft is missing. The paragraph below used to tell the
+                             operator to run the npm line themselves; this runs it for them, the same
+                             way AETHER1 already sets up Ollama rather than handing over a command. -->
+                        <div id="graft-install-row" class="hidden mb-3 border border-cyan-500/40 rounded p-2 bg-slate-900">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <button id="btn-graft-install" type="button" class="text-xs font-mono text-cyan-300 hover:text-cyan-100 border border-cyan-500/40 rounded px-2 py-1 bg-cyan-950/40 cursor-pointer">⬇ Download &amp; Install Graft</button>
+                                <span id="graft-install-step" class="text-[10px] font-mono text-slate-400"></span>
+                            </div>
+                            <div id="graft-install-bar-track" class="hidden mt-2 h-1.5 w-full rounded bg-slate-800 overflow-hidden">
+                                <div id="graft-install-bar" class="h-full w-0 bg-cyan-400 transition-all duration-300"></div>
+                            </div>
+                            <div id="graft-install-detail" class="mt-1 text-[10px] font-mono text-slate-500 break-all"></div>
+                        </div>
+
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            Graft builds a graph of your codebase to help understand its structure. Install it
-                            with <span class="text-cyan-300">npm install -g @nanonets/graft</span>, then build a
+                            Graft builds a graph of your codebase to help understand its structure. AETHER1
+                            fetches it with <span class="text-cyan-300">npm</span> when it is missing, then build a
                             graph for each project you want it to know about. Every ticked project is asked when
                             you ask a code question, and the nodes that match best across all of them are
                             injected into the AI's context, each labelled with its project and the file and line
@@ -2374,7 +2773,7 @@
 
                 <details class="border border-cyan-500/25 rounded p-3 bg-slate-900/50">
                     <summary class="text-xs font-mono text-cyan-200 cursor-pointer">💡 Try a request in chat</summary>
-                    <p class="text-[10px] font-mono text-slate-400 mt-2">Choose a starter prompt to place it in chat. Aether1 will still show an approval card before a gated action runs.</p>
+                    <p class="text-[10px] font-mono text-slate-400 mt-2">Choose a starter prompt to place it in chat. Aurora1 will still show an approval card before a gated action runs.</p>
                     <div class="flex flex-wrap gap-2 mt-2">
                         <button type="button" data-prompt-suggestion="List the files in my selected project and summarize its layout." class="cyber-btn text-[10px] py-1 px-2">Explore this project</button>
                         <button type="button" data-prompt-suggestion="Review the selected project and suggest useful checks to run." class="cyber-btn text-[10px] py-1 px-2">Find checks to run</button>
@@ -2715,7 +3114,7 @@
                         <div class="net-card-heading">
                             <h4 class="net-card-title">Leaving this machine</h4>
                             <p class="net-card-hint">
-                                Whether AETHER1 may reach the internet at all. A separate
+                                Whether AURORA1 may reach the internet at all. A separate
                                 question from who may come in, and the stricter of the two.
                             </p>
                         </div>
@@ -2819,7 +3218,7 @@
                                     <span id="lan-state" class="net-state" data-state="off"><i aria-hidden="true"></i>Off</span>
                                 </h4>
                                 <p class="net-card-hint">
-                                    Use AETHER1 from a phone, a tablet or another computer on your
+                                    Use AURORA1 from a phone, a tablet or another computer on your
                                     Wi-Fi or wired network. Traffic is encrypted, and every request
                                     needs a token the device earns by typing the pairing phrase once.
                                 </p>
@@ -2847,7 +3246,7 @@
                         <div class="net-row">
                             <div class="net-row-text">
                                 <p class="net-row-title">Port</p>
-                                <p class="net-row-hint">Fixed. start.sh, start.bat, the README and <span class="font-mono">aether1 doctor</span> all assume this port, so it is a fact about AETHER1 rather than a setting.</p>
+                                <p class="net-row-hint">Fixed. start.sh, start.bat, the README and <span class="font-mono">aether1 doctor</span> all assume this port, so it is a fact about AURORA1 rather than a setting.</p>
                             </div>
                             <p id="lan-port" class="net-row-value">8378</p>
                         </div>
@@ -2855,7 +3254,7 @@
                         <div class="net-row">
                             <div class="net-row-text">
                                 <p class="net-row-title">Start automatically</p>
-                                <p class="net-row-hint">Put this machine on the network each time AETHER1 starts. Stopping LAN access now will not turn this off. Game Mode holds it back, like everything else it quiets.</p>
+                                <p class="net-row-hint">Put this machine on the network each time AURORA1 starts. Stopping LAN access now will not turn this off. Game Mode holds it back, like everything else it quiets.</p>
                             </div>
                             <label class="a1-switch net-row-switch">
                                 <input id="setting-lan-autostart" type="checkbox" class="a1-switch-input">
@@ -2873,7 +3272,7 @@
                         <div class="net-card-head">
                             <span class="net-card-icon" aria-hidden="true">📡</span>
                             <div class="net-card-heading">
-                                <h4 class="net-card-title">AETHER1s on this network</h4>
+                                <h4 class="net-card-title">AURORA1s on this network</h4>
                                 <p class="net-card-hint">
                                     Machines announcing themselves on your own network, found
                                     without anyone typing an address. Only a machine that is
@@ -2931,7 +3330,7 @@
                              question is asked -- this is how a device gets on the list. -->
                         <div class="net-row net-row-stacked">
                             <div class="net-row-text">
-                                <p class="net-row-title">Use a phrase from another AETHER1</p>
+                                <p class="net-row-title">Use a phrase from another AURORA1</p>
                                 <p class="net-row-hint">
                                     Paste the twelve words another copy showed you and this machine
                                     will answer to them too &mdash; one phrase to keep rather than one
@@ -2941,7 +3340,7 @@
                             </div>
                         </div>
                         <div class="net-field net-field-row">
-                            <label for="lan-phrase-input" class="sr-only">Pairing phrase from another AETHER1</label>
+                            <label for="lan-phrase-input" class="sr-only">Pairing phrase from another AURORA1</label>
                             <input id="lan-phrase-input" type="text" autocomplete="off" spellcheck="false"
                                    placeholder="twelve words, separated by spaces"
                                    class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
@@ -2989,7 +3388,7 @@
                     <div class="space-y-1">
                         <div class="flex items-center gap-2">
                             <input id="setting-autostart-app" type="checkbox" class="rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0">
-                            <label for="setting-autostart-app" class="text-xs font-mono text-slate-300">Launch AETHER1 at login</label>
+                            <label for="setting-autostart-app" class="text-xs font-mono text-slate-300">Launch AURORA1 at login</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
                             Starts resident in the tray as soon as you log in, exactly like
@@ -3004,7 +3403,7 @@
                             <label for="setting-autostart-ollama" class="text-xs font-mono text-slate-300">Start the local model server automatically</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            When AETHER1 starts, also start Ollama if it isn't already
+                            When AURORA1 starts, also start Ollama if it isn't already
                             running &mdash; without you having to ask for it. Does nothing
                             if Ollama isn't installed, or if something is already listening.
                         </p>
@@ -3020,9 +3419,9 @@
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
                             A model server with nobody talking to it is the most expensive
                             idle thing on this machine &mdash; it holds the whole model in
-                            memory. After this long with no local reply, AETHER1 stops the
+                            memory. After this long with no local reply, AURORA1 stops the
                             one it started; the next thing you ask starts it again, at the
-                            cost of waiting for the first token. Only servers AETHER1 started
+                            cost of waiting for the first token. Only servers AURORA1 started
                             itself &mdash; one you are running yourself is left alone. Set it
                             to 0 to keep it running.
                         </p>
@@ -3034,7 +3433,7 @@
                             <label for="setting-voice-startup-audible" class="text-xs font-mono text-slate-300">Speak the voice self-test out loud</label>
                         </div>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug pl-6">
-                            On launch, AETHER1 checks that speech really plays &mdash; not
+                            On launch, AURORA1 checks that speech really plays &mdash; not
                             just that synthesis ran without error, but that audio was
                             actually decoded and produced sound. On, you'll hear a short
                             phrase confirming it. Off, the same check runs silently and
@@ -3064,11 +3463,11 @@
                 <details id="settings-group-doctor" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">🩺 Is it working?</span>
-                    <span class="settings-group-hint">every part of AETHER1, and what to do about the broken ones</span>
+                    <span class="settings-group-hint">every part of AURORA1, and what to do about the broken ones</span>
                 </summary>
                 <div class="settings-group-body">
                     <div class="flex items-center justify-between gap-2 flex-wrap">
-                        <span id="doctor-headline" class="text-xs font-mono text-slate-300">Press Diagnose to check every part of AETHER1.</span>
+                        <span id="doctor-headline" class="text-xs font-mono text-slate-300">Press Diagnose to check every part of AURORA1.</span>
                         <div class="flex items-center gap-2">
                             <button id="btn-doctor-heal" class="cyber-btn text-xs py-1 px-3 text-amber-300 whitespace-nowrap">
                                 🛠 Fix what you can
@@ -3119,12 +3518,19 @@
                 <details id="settings-group-app" class="settings-group">
                 <summary class="settings-group-summary">
                     <span class="settings-group-title">ℹ️ About &amp; Help</span>
-                    <span class="settings-group-hint">what Aether1 is, help and updates</span>
+                    <span class="settings-group-hint">what Aurora1 is, help and updates</span>
                 </summary>
                 <div class="settings-group-body">
                     <div class="hub-detail">
-                        <div class="hub-detail-name">Aether1</div>
+                        <div class="hub-detail-name">Aurora1</div>
                         <p class="hub-blurb">A local-first AI companion with a configurable model hub, voice, avatar, memory and coding workspace. Use the sections in Settings to connect models, adjust privacy and find diagnostics.</p>
+                        <!-- The one place the two names are said together, because this is the
+                             pane somebody opens to find out what they are running. Aurora1 is
+                             the companion; the Aether1 Platform is the machinery under it, which
+                             is what the logs, the environment variables and the developer
+                             command still call themselves. Saying so here means nobody has to
+                             work out whether they are the same program. -->
+                        <p class="hub-blurb">Aurora1 is the companion. The platform it runs on is the <span class="font-mono text-cyan-200">Aether1 Platform</span>, which is the name you will see in logs, in environment variables and on the <span class="font-mono text-cyan-200">aether1</span> command.</p>
                         <p class="hub-blurb">For setup and troubleshooting, open <span class="font-mono text-cyan-200">docs/GETTING_STARTED.md</span> in the project folder. “Is it working?” gathers diagnostics; “What it may do” explains tool access and approvals.</p>
                     </div>
                     <div id="setting-hotkey-wrap" class="space-y-1">
@@ -3209,6 +3615,46 @@
         </div>
     </div>
 
+    <!-- THE UPDATE SCREEN.
+         ================================================================================
+         An update that rebuilds the app takes minutes, and for most of them nothing on
+         screen changes. What was there before was a 36-wide strip in the header reading
+         "Applying update · Aether1 will r..." and a box three levels down in Settings;
+         between them they answered "is it still going?" only if you knew where the second
+         one was.
+
+         So: one screen, over everything, for the one thing happening. One spinner, one
+         line saying which step, one line of reassurance, and the build log behind a
+         toggle -- shut by default, because cargo's output is the answer to "what broke?"
+         and not to "how long?". The log is written as a text node (see
+         renderApplyProgress): it is git's and cargo's output, full of paths and source
+         snippets, and none of that belongs in HTML.
+
+         It is driven by the same `update-progress` events and the same state object as
+         the header strip and the Settings box, so the three cannot disagree about which
+         step is running. -->
+    <div id="update-overlay" class="update-overlay hidden" role="dialog" aria-modal="true"
+         aria-labelledby="update-overlay-step" aria-live="polite">
+        <div class="update-overlay-brand">
+            <span class="update-overlay-mark" aria-hidden="true"></span>
+            <span class="update-overlay-name font-orbitron">AURORA1</span>
+        </div>
+        <div class="update-overlay-body">
+            <div class="update-overlay-spinner" aria-hidden="true"></div>
+            <div id="update-overlay-step" class="update-overlay-step">Updating Aurora1&hellip;</div>
+            <div id="update-overlay-sub" class="update-overlay-sub">This may take a few minutes. Do not close the app.</div>
+            <button id="btn-update-details" type="button" class="update-overlay-toggle" aria-expanded="false" aria-controls="update-overlay-log">
+                <span id="update-details-label">Show update details</span>
+                <span class="update-overlay-toggle-caret" aria-hidden="true">&#9662;</span>
+            </button>
+            <pre id="update-overlay-log" class="update-overlay-log hidden" tabindex="0"></pre>
+            <!-- Only ever shown once the update has failed: while it is running there is
+                 nothing safe to press, and a Close that abandons a half-applied rebuild is
+                 worse than no Close at all. -->
+            <button id="btn-update-dismiss" type="button" class="update-overlay-dismiss hidden">Close</button>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <!-- hologram/* files build the HologramAvatar class across several classic scripts sharing
          one global scope; core.js must load first (it declares the class), the rest attach
@@ -3231,7 +3677,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=68"></script>
+    <script src="js/app.js?v=77"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

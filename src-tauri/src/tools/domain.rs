@@ -386,6 +386,54 @@ mod tests {
     /// The operator adding a folder is what makes the read stop being asked about -- that
     /// is the whole feature, and it is the assertion that would fail if the extra roots
     /// were stored but never consulted.
+    /// On the operator's instruction, 2026-10-25: "I shouldn't need to invoke search_web as
+    /// this is a free tool to use". Every persona, not a chosen few -- a web search does not
+    /// become more sensitive because the companion is wearing a different name.
+    ///
+    /// Pinned across all of them because the lists are three separate constants, and adding
+    /// the tool to one of them would leave most personas still filing an approval card.
+    #[test]
+    fn every_persona_can_search_the_web_without_being_asked_about_it() {
+        for persona in [
+            Persona::Default,
+            Persona::Alt,
+            Persona::Halcy,
+            Persona::Red9000,
+            Persona::Nexus,
+            Persona::Llm,
+            Persona::Custom,
+            Persona::ArxLocas,
+            Persona::ArxLegionare,
+            Persona::ArxLoregenda,
+            Persona::ArxLyksaum,
+            Persona::ArxLimes,
+            Persona::ArxLogos,
+            Persona::ArxLexico,
+            Persona::ArxLucre,
+            Persona::ArxLkemi,
+        ] {
+            assert!(
+                persona.domain().allows_tool("search_web"),
+                "{persona:?} still has to ask before searching the web"
+            );
+        }
+    }
+
+    /// And the line that actually protects the operator is somewhere else entirely. The
+    /// domain was never the thing stopping a search from leaving the machine -- local-only
+    /// mode is, at the point the request is built, whatever the persona is allowed to call.
+    #[test]
+    fn a_free_search_is_still_refused_with_local_only_mode_on() {
+        assert!(
+            crate::local_only::setting_reaches_the_internet(
+                "llm_provider",
+                &serde_json::json!("openai")
+            )
+            .is_some(),
+            "the mode's own test of what reaches the internet has to still be in force"
+        );
+    }
+
     #[test]
     fn a_folder_the_operator_adds_becomes_part_of_the_field() {
         let db = temp_db("extra_roots_gate");

@@ -504,7 +504,11 @@ impl Persona {
                  actually shows the problem rather than describing it. Separate what you observed from what you \
                  infer, and give the most likely cause first with the evidence for it, then what to check to \
                  confirm or rule it out. When the telemetry looks normal, say so plainly instead of manufacturing \
-                 a concern. Keep it structured and short: what is wrong, how you know, what to do next."
+                 a concern. When you are diagnosing a fault, keep it structured and short -- what is \
+                 wrong, how you know, what to do next. That shape is for faults only. An ordinary \
+                 question gets an ordinary answer in plain sentences, and a question about the world \
+                 rather than about this machine is answered the way anyone would answer it: do not put \
+                 headings on a conversation."
             }
             // Whatever the model comes with. Returning an empty string here is what makes
             // system_prompt leave the personality block out entirely -- see the caller.
@@ -670,11 +674,33 @@ impl Persona {
     /// fs_guard's deny list is checked first and is not overridable by a domain, by an
     /// approval, or by elevation.
     pub fn domain(&self) -> Domain {
-        // The two tools with no path argument that every persona keeps: what the HUD is
+        // The tools with no path argument that every persona keeps: what the HUD is
         // already displaying, and the operator's own notes.
+        //
+        // `search_web` is here on the operator's instruction (2026-10-25: "I shouldn't need
+        // to invoke search_web as this is a free tool to use"). It was previously outside
+        // every persona's field, which made each search an approval card -- and a model
+        // told it has a web search, then finding that calling one returns "proposed,
+        // waiting", invents the results instead. That is the failure three sessions in a
+        // row produced, and the approval card was not protecting anything the operator
+        // wanted protected.
+        //
+        // What still holds the line is `net::require_online`: with local-only mode on, the
+        // request cannot be built at all, whatever the domain says. The mode is the
+        // boundary; this was only ever a prompt.
+        //
+        // `fetch_url` is here for the same reason and is the other half of the same tool.
+        // A search returns titles and one-line snippets, so a companion that can search and
+        // not read has to answer from the snippet or from memory -- and a result list it
+        // cannot open is what made "I searched and found" a sentence with nothing behind
+        // it. The grant that matters is the network, which is one setting away and is the
+        // same grant the search already needed; a second approval card in front of the page
+        // would only reproduce the failure one step later.
         const MINIMUM_TOOLS: &[&str] = &[
             "telemetry_detail",
             "search_memory",
+            "search_web",
+            "fetch_url",
             // A program explaining its own failure is not a privilege: every persona
             // can read AETHER1's self-check and its crash record, whatever else its
             // field covers.
@@ -686,6 +712,8 @@ impl Persona {
             "list_dir",
             "telemetry_detail",
             "search_memory",
+            "search_web",
+            "fetch_url",
             "self_check",
             "recent_crashes",
         ];
@@ -703,6 +731,8 @@ impl Persona {
             // meant the two machine-facing personas fell *below* the minimum, which is not
             // a minimum -- and made "have I told you about this box before?" a proposal.
             "search_memory",
+            "search_web",
+            "fetch_url",
             "self_check",
             "recent_crashes",
         ];
@@ -870,17 +900,33 @@ impl Provider {
     /// Whether the provider takes a tool list in its own request format and answers with
     /// structured calls, rather than needing the fenced-text protocol.
     ///
-    /// The two local providers are deliberately out. Ollama is driven through
-    /// `/api/generate`, which has no tools field at all -- tools live on `/api/chat`, a
-    /// different endpoint with a different shape. LM Studio's OpenAI-compatible server
-    /// does accept tools on recent builds, but it is the provider most likely to be an
-    /// older install on someone's desktop, and a silent 400 there costs more than the
-    /// text protocol does. Both stay on the fenced protocol, which is what it was written
-    /// for.
+    /// Ollama is in, now that it is driven through `/api/chat` rather than
+    /// `/api/generate`: `/api/chat` carries `tools` in the same shape OpenAI uses and
+    /// returns `tool_calls` on the assistant message. It was out while the only endpoint
+    /// in use had no tools field at all, and the consequence was that *every* local model
+    /// was on the fenced-text protocol however capable it was -- which is most of why a
+    /// local companion could not search the web. Whether the *model* behind Ollama can
+    /// call tools is a separate question, answered per model by
+    /// `providers::ollama_facts`; this says only that the transport can carry one.
+    ///
+    /// LM Studio stays out. Its OpenAI-compatible server accepts tools on recent builds,
+    /// but it is the provider most likely to be an older install on somebody's desktop,
+    /// it reports no capabilities to probe, and a 400 from sending a field it does not
+    /// know costs more than the text protocol does.
     pub fn supports_native_tools(&self) -> bool {
+        // LM Studio was left off this list when native calling was added, on the reasoning
+        // that it is the provider most likely to be an old build that rejects a request
+        // for carrying an unknown field. That reasoning has the same shape as the comment
+        // on `openai_send`'s effort-field retry: "which is which is a list that stops
+        // being true within a month, so it is not kept here". Keeping LM Studio off was
+        // keeping exactly such a list, and it stopped being true -- the cost was that no
+        // model behind it could ever call a tool, whatever it was capable of, and nothing
+        // said so. It is asked now, and `refused_tools` remembers a no.
         matches!(
             self,
-            Provider::OpenAi
+            Provider::Ollama
+                | Provider::LmStudio
+                | Provider::OpenAi
                 | Provider::Groq
                 | Provider::Gemini
                 | Provider::Anthropic
@@ -909,7 +955,15 @@ impl Provider {
     pub fn label(&self) -> &'static str {
         match self {
             Provider::Ollama => "Ollama",
-            Provider::LmStudio => "LM Studio",
+            /* Not "LM Studio". This setting drives *any* server speaking the
+            OpenAI-compatible shape on this machine -- `model_scanner::LocalApi::OpenAi`
+            maps every one of them to this key, and the scanner is careful to say "Local
+            server on port 1234" rather than guess at a product. The guess was being made
+            here instead, at the last moment, in the one place the operator reads: someone
+            with no LM Studio installed was told "lmstudio rejected the request itself",
+            which sends them to look for a program they do not have. Which program it is
+            cannot be known from a probe, so this does not claim to know. */
+            Provider::LmStudio => "the local OpenAI-compatible server",
             Provider::OpenAi => "OpenAI",
             Provider::Groq => "Groq",
             Provider::Gemini => "Gemini",
@@ -928,6 +982,25 @@ impl fmt::Display for Provider {
 
 #[cfg(test)]
 mod tests {
+    /// `search_web`'s description and `websearch::render`'s header both send the model to
+    /// `fetch_url` without checking that it is reachable, which is only honest while the
+    /// two are granted together. They are -- both sit in all three tool lists -- and this
+    /// is what keeps it that way, because promising a lookup that will be refused is worse
+    /// than a snippet.
+    #[test]
+    fn every_persona_that_can_search_can_also_read_a_page() {
+        for persona in super::Persona::all() {
+            let tools = persona.domain().tools;
+            if tools.contains(&"search_web") {
+                assert!(
+                    tools.contains(&"fetch_url"),
+                    "{persona:?} can search but cannot open a result, so it can only hand \
+                     over a link or answer from a snippet"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -1122,5 +1195,26 @@ mod tests {
     fn provider_from_key_defaults_to_offline() {
         assert_eq!(Provider::from_key("ollama"), Provider::Ollama);
         assert_eq!(Provider::from_key("totally-unknown"), Provider::Offline);
+    }
+
+    /// HALCY is the diagnostician, and was told to answer in "what is wrong, how you know,
+    /// what to do next". A small local model applies that to everything -- an operator
+    /// asking for Formula 1 results got three headings and no race -- so the shape is
+    /// scoped to faults now, in words a 7B can act on.
+    #[test]
+    fn the_diagnostic_format_is_for_faults_and_not_for_conversation() {
+        let directive = Persona::Default.template("HALCY");
+        assert!(
+            directive.contains("what is wrong, how you know, what to do next"),
+            "the structure is still asked for where it belongs"
+        );
+        assert!(
+            directive.contains("diagnosing a fault") && directive.contains("for faults only"),
+            "and it has to say that is the only place it belongs: {directive}"
+        );
+        assert!(
+            directive.contains("do not put headings on a conversation"),
+            "{directive}"
+        );
     }
 }

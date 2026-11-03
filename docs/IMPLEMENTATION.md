@@ -4011,3 +4011,370 @@ anyway.
 builds two throwaway projects with the real CLI, tracks both, and asserts the primed prompt
 carries nodes from each and names both projects. It is `#[ignore]`d because it needs `graft` on
 PATH, and it was run: two projects asked, both labelled, 2.0 seconds including both builds.
+
+## Step 63 — the readers learn the new name before anything writes it
+
+Aether1 becomes **Aurora1** to the operator, and stays the **Aether1 Platform** behind the
+curtain. The rename is a handful of string edits and a long tail of places where one of those
+strings is a key to somebody's data. This step is only the long tail: nothing visible changes,
+nothing is renamed, and the point of merging it on its own is that every reader has learned
+the new spelling *before* the first thing writes it.
+
+**Why that order is the whole design.** The code that has to cope with a renamed install is
+the code already installed. Its parser, its list of bundle names and its keychain service name
+were compiled into it, so a rename shipped in one release is a release the previous one cannot
+read. Four concrete failures, each silent:
+
+- **The version.** `Aurora1 rev0.261018.227` went through the old parser's `rev` branch, which
+  takes the digits straight after the word -- and got pull request *0*. `installs remove old`
+  then reads the newest copy on the machine as the oldest one. `v0-261018-227` was worse: it
+  is not three dot-separated numbers, so it fell through to the opaque branch and compared
+  against nothing, which is how a copy stops offering updates without ever saying so.
+- **The bundle.** `pick_asset` matches `aether1-offline-linux` as a prefix. A release whose
+  assets are named `aurora1-…` has nothing an installed copy recognises, so the update check
+  finds a new version and then cannot download it.
+- **The data directory.** `~/.local/share/aether1` holds the memory vault, the conversation
+  database, the settings and the audio cache. Writing a new name into the source moves none of
+  it: the companion launches with no memory and nothing says where it went.
+- **The keychain, and the project policy file.** A keychain entry is filed under its service
+  name and a policy file under its directory name. Rename either and the value is still there,
+  just never found again -- every provider key gone from the form, every project asking its
+  trust question for a second time.
+
+**So every one of those reads both spellings, and writes to one.** `Version` grows a `Dated`
+variant and compares it to a `Build` on the pull request number, because the two schemes are
+two spellings of a position in the same repository's history and a rename does not reset it.
+`wanted_asset_prefixes` lists both brandings. `paths::branded_dir` joins whichever of the two
+directory names is already there, which is what makes the flip find the existing directory
+instead of starting a new one beside it; `code_policy::dir_in` does the same for a project's
+`.aether` or `.aurora`. `secrets` and `github_auth` read both service names and delete from
+both, and write only to the one this build prefers -- so the release that flips the preference
+finds the old entry and carries it across the next time it is saved.
+
+**One directional choice, worth stating.** The scanner in `installs` reads both names
+everywhere, including in `data_roots`, which is the guard that stops a removal taking the
+vault with it. That list names both directories whether or not they exist: a guard that knows
+one name is no guard at all on the machine that has the other, and a directory that is not
+there costs nothing to protect.
+
+**The Tauri identifier does not move.** `com.tridentspoon.aether1` is what the single-instance
+plugin keys on and what Tauri derives its own app directories from, and it is behind the
+curtain by the same reasoning that keeps the platform called Aether1. Renaming it would buy
+nothing and orphan whatever Tauri has already put there.
+
+**The help text stops naming one command.** The rename gives this project two: `aurora1`, the
+companion, and `aether1`, the one behind the curtain. Both are the same binary, so `USAGE` is
+printed with the name in argv[0] -- only ever one of the two the project ships, falling back
+to the written-out name for a binary run out of `target/release`. A copy invoked as `aurora1`
+no longer tells its operator to go and type a command that may not be on their PATH.
+
+**And the workflow copes with the dashed tag.** `v0-261018-227` reads better as a git tag than
+`v0.261018.227` does, and Inno Setup's `AppVersion` is shown to whoever runs the installer,
+where `0-261018-227` reads as nothing. The dashes come back out as dots in the version step.
+This has to be on the default branch before the first such tag is pushed at it.
+
+**What is still to do, in order:** the printed version and the About box, the package and
+binary names, the config directory's preferred spelling, the README and the startup messages,
+and the tag scheme itself. Each of those is a writer, and each one now has a reader waiting
+for it.
+
+## Step 64 — the version says Aurora1, and says when
+
+Step 63 taught every reader the new spelling. This is the first writer: `AETHER1_VERSION` goes
+from `Ver 0.4.126` to **`Aurora1 rev0.261029.259`** — a revision number, the date the code was
+cut, and the pull request it was built from. `aether1 --version` prints
+`Aurora1 rev0.261029.259 (c7e87d1)`, and because everything that shows a version reads
+`APP_VERSION`, the tray, the About box, the mDNS announcement, the doctor report and
+`installs` all follow from the one line in build.rs.
+
+**The date is HEAD's commit date, not today's.** A wall-clock date would change the version of
+a binary without a line of its code changing, so two people comparing notes on which build
+they are on would get two answers to the same question; it would also let a rebuild of an old
+commit claim to be newer than it is. A commit date is a fact about the code, so the same commit
+produces the same version string whoever builds it and whenever. `rerun-if-changed` on
+`.git/HEAD` and `.git/refs/heads` already refreshes it when the checkout moves.
+
+**The revision is the package's major version**, read from Cargo.toml rather than written out
+again — the printed version used to be hand-written as "0.3" in main.rs while the package said
+0.4.0, and nothing made the two agree. The package's *minor* no longer appears: the scheme has
+three slots and the minor said nothing the pull request number did not already say.
+
+**What orders two versions is still the pull request alone.** The date says when, not which is
+newer: a release cut from an older branch on a later day is not the newer build. That also
+holds across the rename, because a pull request number on one repository only ever climbs — so
+`Ver 0.4.152` is older than `Aurora1 rev0.261029.259` and an installed copy from before the
+rename can still tell. Step 63 is what makes that true; without it this change would be the one
+that quietly stopped older copies seeing updates.
+
+**`this_build_can_read_its_own_version` is the test that matters.** `build.rs` assembles the
+string and `installs::Version` parses it, and nothing else connects the two — so without a test
+asserting that this build's own `APP_VERSION` parses as the new scheme and compares in both
+directions against a version from before it, a drift between writer and reader would be found
+by an operator noticing `installs` calling the newest copy the oldest. The direction is only
+asserted where the numbers are known: the pull request this is built from is not something a
+test can predict, so against an older version it asserts comparability, which is the invariant
+that actually matters — `None` is what a copy reports as "cannot tell", and then stops acting
+on.
+
+**The About box says both names, once.** It is the pane somebody opens to find out what they
+are running, so it is the right and only place to say that Aurora1 is the companion and the
+Aether1 Platform is the machinery under it — the name still on the logs, the environment
+variables and the `aether1` command. Everywhere else, each name is used without explanation.
+
+**Still to come:** the HUD wordmark and the startup messages, the README, the package and
+binary names, the config directory's preferred spelling, and the tag scheme.
+
+## Step 65 — two names the readers pass had missed
+
+An integration review of step 63 turned up two more places where the rename would have taken
+something that is not ours to take. Both are the readers pass, so both land before any more of
+the name changes.
+
+**The vault, which is the costliest name in the program.** `vault::DEFAULT_VAULT_DIR` is
+`Aether1Vault`, and `vault_path` reaches it only when the `vault_path` setting is empty —
+which is the default, so most operators' memory bank is at `$HOME/Aether1Vault` with nothing
+in the settings table recording that. It also sits in `$HOME` rather than under the project
+policy directory, so neither `code_policy::dir_in` nor the data directory's own resolution
+reaches it. Renamed with no fallback, `vault_path` would point at a folder that is not there
+and `ensure` would make it and write INDEX.md, profile.md and machine.md into it: the operator
+opens Memories, finds three starter notes where their history was, and the real vault is still
+on disk under a name nothing looks at any more. The default now goes through
+`paths::branded_dir` over `VAULT_DIR_NAMES`, the same rule as the data directory and a
+project's own policy directory. An explicit `vault_path` still wins over both, which is what
+it is for.
+
+**The LAN subprotocol, fixed by not renaming it.** `server::WS_PROTOCOL` is `"aether1"`,
+offered as a single value and matched exactly by both ends. A build offering only `aurora1`
+would be refused by every peer already installed, so pairing between a renamed machine and an
+un-renamed one would stop working — which is the mixed-version case the rest of this work
+exists to survive. Teaching both ends to offer and accept two values would be machinery for a
+problem that only exists if the string changes, and nothing asks it to: a subprotocol is never
+shown to an operator. So it keeps its name and gains a comment saying it must keep it. It
+belongs with the `[AETHER1]` log prefix, the `AETHER1_*` environment variables and the Tauri
+identifier `com.tridentspoon.aether1` — the platform's own names, which stay Aether1 by
+design.
+
+**The line, now that there have been three goes at finding it.** A name changes if an operator
+reads it: the companion's own name, the prose in the HUD and the settings panes, the window
+title, the README, the vault folder in their home directory. A name stays if only the machinery
+reads it: log prefixes, environment variables, settings keys, database filenames, wire formats,
+the Tauri identifier, and every `Aether1*` identifier in the JavaScript. Two were almost got
+wrong in opposite directions, so the test for each is which of those two a change would break,
+not how the string looks.
+
+## Step 66 — the companion is Aurora1, on screen and in the README
+
+Steps 63 to 65 made the rename safe; step 64 renamed the version. This is the name itself,
+everywhere an operator reads it.
+
+**The HUD wordmark turned out to have been built for this.** `refreshWordmark` already showed
+the *companion's* own name and turned over to `PLATFORM_WORDMARK = 'AETHER1 PLATFORM'` every
+fourteen seconds, with a `name !== 'AETHER1'` guard so that a companion named after the
+platform did not alternate with itself. The default companion was AETHER1, so that guard fired
+and the wordmark simply sat on AETHER1 PLATFORM. Rename the default to AURORA1 and the two
+names are different, so the top-left now reads AURORA1, turns over to AETHER1 PLATFORM, and
+comes back — which is exactly the two-name design, with not one line of the rotation changed.
+The guard is kept rather than retargeted: somebody who names their companion after the
+platform should still see one name, and nothing says AURORA1 has to be that somebody.
+
+**What changed, and how it was chosen.** 34 rendering strings in `frontend/index.html`, 45 in
+`frontend/js/app.js`, two in other panes, and 43 mentions in the README. The pass was done by
+machine against the line step 65 states, not by replacing the string everywhere:
+
+- In the markup, only text outside HTML comments.
+- In the JavaScript, only text inside string and template literals — found with a small
+  lexer, because `Aether1Theme` and a `//` comment are both code and the platform's, while
+  `'Checking every part of AETHER1...'` is on screen.
+- Protected by name throughout: the `[AETHER1]` console prefix, `AETHER1_*` variables,
+  `aether1_model` and `runs_aether1` payload keys, `Aether1 Platform`, `AETHER1 PLATFORM`,
+  `Aether1Vault`, the `aether1` command, the repository and `Aether1-Setup.exe`.
+
+**One bug the second pass caught, worth naming.** The first README pass skipped any mention
+followed by `.`, `-`, `/` or `_`, meaning to protect `aether1.iss` and `Aether1-Setup.exe` —
+and silently skipped every mention that ended a sentence. The fix is to require a letter or
+digit after the punctuation, which is what makes it an extension rather than a full stop. A
+blanket exclusion is a quiet way to miss things; it was found by listing what survived rather
+than trusting the count of what changed.
+
+**The README is re-headed "Aurora1, on the Aether1 Platform"**, with one paragraph saying
+which name is which — the only place that is spelled out, as in the About box. Two parts were
+edited by hand rather than swept: the licence line, because GPL-3.0-only covers the platform's
+code, and the trademark clause, which now withholds all four spellings instead of two. The
+clone paths keep the repository's name, which is not being renamed.
+
+**Not changed, deliberately:** every `aether1 <subcommand>` in copy. The plan splits the
+commands — `aurora1` for the companion, `aether1` for behind the curtain — and copy must never
+name a command that is not on the operator's PATH yet, so those move in the PR that renames
+the binary. `cli::invoked_as` from step 63 already prints the help text with whichever name was
+used to run it. Rust strings that reach the operator through error messages move with the same
+PR, where the whole command surface is revisited at once.
+
+## Step 67 — the app is called Aurora1 by the system too
+
+Step 66 renamed the name inside the window. This renames it where the operating system shows
+it: the bundle's product name, the entry in the application menu, and what the Windows
+installer calls itself.
+
+**Three things do not move, and the reason is the same for all three: identity is not
+branding.**
+
+- **The Inno Setup `AppId`.** It keys Windows' own uninstall registry entry and it is what
+  `installs::windows_install` reads to find a copy that is already here. Change it and an
+  existing install becomes invisible to both, so the next installer puts a second copy beside
+  it and neither uninstaller knows about the other. The `.iss` now says so in a comment, since
+  the next person to sweep brand names through this file will reach it.
+- **`DefaultDirName`.** That is the folder an existing install's files are already in.
+- **`mainBinaryName`, now pinned to `aether1`.** This is the defensive half. In Tauri 2 the
+  bundled main binary takes its name from `productName` unless `mainBinaryName` says
+  otherwise, so renaming the product silently renames the binary — and `install_desktop_app.sh`,
+  `aether1.iss`, `package_offline_linux.sh` and the self-update path all name
+  `target/release/aether1` directly. Cargo's own output is driven by the package name and was
+  never going to move, but relying on that is relying on the difference between two things
+  that look the same in the config file. Pinning it costs one line and makes the intent
+  explicit: the product is Aurora1, the binary is the platform's.
+
+**The launcher entry keeps its filename and changes its label.** `desktop/Aether1.desktop`
+stays `Aether1.desktop` with `Name=Aurora1`, which is what puts "Aurora1" in the application
+menu. Renaming the file would orphan the one already in `~/.local/share/applications`, leaving
+two entries in the menu — and `installs::DESKTOP_FILES` pairs each binary name with its
+launcher and icon, so the pair has to keep agreeing.
+
+**Still open, and waiting on a decision:** the plan gives this project two commands,
+`aurora1` for the companion and `aether1` for behind the curtain. Whether the two names should
+offer the *same* subcommands or different ones is the operator's call, not a thing to guess —
+hiding a command somebody is used to typing is cheap to build and annoying to live with. The
+mechanism either way is one binary reachable under two names, which `cli::invoked_as` from
+step 63 already handles. The tag scheme is the last piece after that.
+
+## Step 68 — the download is called Aurora1
+
+The last of the rename's writers: the files a release actually hands somebody. The Linux
+bundles become `aurora1-offline-linux-x86_64.tar.gz` and `aurora1-slim-linux-x86_64.tar.gz`,
+and the Windows installer becomes `Aurora1-Setup.exe` — a filename is the first thing an
+operator reads about this project, often before they have run anything.
+
+**Safe to flip because step 63 landed the reader and no release was ever cut.** A copy
+installed before step 63 looks for the `aether1-` prefixes only, so a renamed release would
+be one it finds and then cannot download. There is no such copy: `git ls-remote --tags` was
+empty throughout, so nothing has ever been distributed under the old names. The old prefixes
+stay in `wanted_asset_prefixes` anyway, for the operator who has an older bundle on disk and
+asks `aether1 verify` about it.
+
+**The new name is listed first, and there is a test for that.** A transitional release could
+carry both, and `pick_asset` returned whichever prefix matched first — which, with the old
+name ahead of the new one, would have quietly preferred the old. `a_release_carrying_both_names_resolves_to_the_new_one`
+asserts it both ways round, because "whichever the GitHub API happened to return first" is not
+a decision.
+
+**One pre-existing bug fixed on the way past.** Both README install snippets said:
+
+```sh
+tar -xzf aether1-offline-linux-x86_64.tar.gz
+cd aether1-offline-linux-x86_64
+```
+
+Neither packaging script creates that directory. Both end with
+`tar -czf "$BUNDLE" -C "$STAGE" .`, so the archive has no top-level directory at all and
+extracting it scatters `bin/`, `share/` and `install-offline.sh` into whatever directory the
+operator was standing in — then the `cd` fails and the instructions stop. It would have been
+wrong under either name; renaming the file is what made somebody read the line. Both snippets
+now make a directory and extract into it, and say why.
+
+**Not in this step, because it is not ours to do:** cutting the first tagged release. The tag
+shape is already handled end to end — `v0-261018-227` matches the `v*` trigger, step 63 turns
+its dashes back into dots for Inno Setup's AppVersion, and `is_newer` compares it against both
+version spellings. What is missing is the GitHub App and the minisign keypair the pipeline
+signs with, which only the repository's owner can create (see step 46). `release.yml` fails on
+half a keypair by design, so there is nothing to half-do here.
+
+## Step 69 — `aurora1` as a second command name
+
+The rename's last visible piece: typing `aurora1` works. Both names reach the same binary and
+every subcommand works under either; the only difference is the help banner, which names
+whichever name was typed (`cli::invoked_as`, step 67). Nothing is hidden or refused under
+either name — the split between "the companion" and "behind the curtain" is about which name
+an operator reaches for, not about what each one can do.
+
+**A hard link, not a second copy.** The three Linux install scripts
+(`install_desktop_app.sh`, `offline_install_linux.sh`, `install_slim_linux.sh`) and the
+Windows installer all make the second name point at the same file:
+
+```sh
+ln -f "$BIN_DIR/aether1" "$TMP_ALT" || cp "$BIN_DIR/aether1" "$TMP_ALT"
+mv -f "$TMP_ALT" "$BIN_DIR/aurora1"
+```
+
+A copy would double a large install for nothing and let the two drift apart on the next
+update, which is the failure that is hard to diagnose: one name a version behind the other.
+The link is made through a temporary name and then `mv`-ed into place because `ln` and `cp`
+onto a binary that is currently running fail with `Text file busy`, while a rename over it
+does not — the same reason the self-update path already does this dance. `cp` is the fallback
+for the filesystem that refuses hard links, and the whole block is non-fatal: if neither
+works the install is still complete, because `aether1` is there and runs everything.
+
+On Windows it is `mklink /H` in the installer's `[Run]` section, which needs no elevation on
+NTFS within one volume — and a per-user install under `{localappdata}` always is one. It is
+listed there rather than in `[Files]` precisely because it is allowed to fail quietly. The
+cost of that is that Inno does not track a file it did not install, so `[UninstallDelete]`
+removes `aurora1.exe` explicitly; without it an uninstall would leave a name pointing at a
+deleted file.
+
+**The install scanner had to learn that two names are one install.** Both names are real
+files on disk, so the loop over `DESKTOP_FILES` would have reported one copy twice: two rows
+for the operator to choose between that are the same bytes, and `installs remove` able to
+delete one name and leave the other dangling. The names are now grouped by the file they
+actually are, with `same_file` comparing device and inode on Unix:
+
+```rust
+match groups.iter_mut().find(|(first, ..)| same_file(first, &bin)) {
+    Some((_, names, _, _)) => names.push(bin),
+    None => groups.push((bin.clone(), vec![bin], desktop, icon)),
+}
+```
+
+Device and inode rather than `canonicalize`, because hard links are *peers*: there is no
+"real" path among them for a resolver to collapse them to, so comparing resolved paths says
+they are two different files. `one_install_under_two_command_names_is_one_install` asserts the
+row count and that removal takes both names; `two_separate_binaries_under_the_two_names_stay_two_installs`
+asserts the other direction, that the grouping is by the file and not by the pair of names.
+
+**Same pre-existing bug as step 68, two places further on.** Both packaging scripts ended by
+telling the operator `tar -xzf … && ./install-offline.sh`, which has the same problem the
+README snippets had: the archive carries no top-level directory, so that extracts into
+whatever directory they were standing in and the installer is not where the `&&` expects it.
+Both now print a `mkdir` and an extract into it.
+
+**Untested here:** the Windows `mklink` half. This container has no Windows and the installer
+is compiled by `package_offline_windows.ps1` on a runner, so the `[Run]` entry has been read
+but never watched running.
+
+## Step 70 — the header stops saying two names
+
+Trident saw `AETHER1 PLATFORM` in the header while the studio sidebar beside it said
+`AURORA1`, on rev0.261031.279. It was not a bug in the sense of a thing that malfunctioned:
+the wordmark alternated between the companion's name and the platform's every fourteen
+seconds, deliberately, and the screenshot caught it mid-rotation. It was still wrong.
+
+**Why the rotation stopped being defensible.** It was written when the companion and the
+platform shared a name: `AETHER1` alternating with `AETHER1 PLATFORM` is barely a change at
+all, and step 66 noted the rename would finally make the alternation do something. It did —
+it made it *visible*, and what it showed is a product that cannot decide what it is called.
+The locked plan puts `Aurora1` in front of the operator and keeps the `Aether1 Platform` for
+whoever is building on it; a header that spends half its time on the internal name reads as a
+rename somebody abandoned halfway. Two names side by side on one screen is exactly what he
+noticed, and the studio shell is what put them there: its sidebar carries `AURORA1`
+permanently, which the HUD never did.
+
+So the wordmark is the companion's name and nothing else. The platform keeps the two places
+that are addressed to somebody who wants to know it — this element's tooltip
+(`AURORA1 — running on the Aether1 Platform`) and the About box. A fourteen-second rotation
+was never a way to tell anybody anything: whoever needs the platform's name is not waiting on
+a timer, and whoever does not is being shown a second brand for no reason.
+
+**Two things went with it.** The `name !== 'AETHER1'` guard existed only to stop the
+alternation being a no-op, so it had nothing left to do. And the empty-name fallback now
+reads `AURORA1` rather than the platform: the only moment the name is empty is before
+settings load, so that fallback was the one thing still flashing the old brand on every
+start — the frame nobody designed and everybody sees.
+
+`setInterval` is gone with it, which is one timer fewer running forever behind an idle window.

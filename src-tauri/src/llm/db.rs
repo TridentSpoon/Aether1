@@ -151,6 +151,10 @@ pub struct ActionRecord {
     /// checkbox the consent layer would refuse. None when the tool is no longer known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub always_allowable: Option<bool>,
+    /// The conversation this was proposed in, so an approved action's output can be handed
+    /// back to the model that asked for it. None when it was not proposed inside a chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Who let this run: "operator" for an explicit approval, "always-allow" for one the
     /// operator had pre-approved for this tool, "automatic" for a read-only call that
     /// needed no approval at all. None while a proposal is still waiting.
@@ -269,6 +273,14 @@ impl MemoryDb {
         }
         if !columns.iter().any(|c| c == "reason") {
             conn.execute("ALTER TABLE action_log ADD COLUMN reason TEXT", [])?;
+        }
+        // Which conversation asked for this. Without it an approved tool's output has
+        // nowhere to go: it was shown to the operator and never reached the model that
+        // asked, so the model answered from memory while the answer sat on screen beside
+        // it. A proposal raised outside a chat (the CLI, a test) has none, and then there
+        // is simply nothing to resume.
+        if !columns.iter().any(|c| c == "session_id") {
+            conn.execute("ALTER TABLE action_log ADD COLUMN session_id TEXT", [])?;
         }
         Ok(())
     }
@@ -486,6 +498,91 @@ impl MemoryDb {
             .unwrap_or_else(|_| ("unknown-date".to_string(), "??:??".to_string()))
     }
 
+    /// Today, written out the way a person would say it: `"Wednesday, 21 October 2026,
+    /// 23:50 local time"`.
+    ///
+    /// This exists for the system prompt. A model's only sense of "now" is its training
+    /// cutoff, so asked for the latest anything it answers for whatever year it was
+    /// trained in -- which is how an operator in 2026 was told the most recent Grand Prix
+    /// was in 2023. Telemetry already carries uptime and load; the one number that makes
+    /// "latest" mean anything was the one missing.
+    ///
+    /// Spelled out rather than left as `2026-10-21`, and the weekday included, because a
+    /// bare ISO date reads as data to be echoed while a sentence reads as a fact to reason
+    /// from. Local time, for the same reason `local_now` is local: the operator's today is
+    /// the one they are living in.
+    pub fn local_date_sentence(&self) -> String {
+        let parts = self.connect().and_then(|conn| {
+            conn.query_row(
+                "SELECT strftime('%w', 'now', 'localtime'), \
+                        strftime('%d', 'now', 'localtime'), \
+                        strftime('%m', 'now', 'localtime'), \
+                        strftime('%Y', 'now', 'localtime'), \
+                        strftime('%H:%M', 'now', 'localtime')",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+        });
+
+        let Ok((weekday, day, month, year, clock)) = parts else {
+            // The date is unavailable rather than wrong. Saying so is better than a
+            // confident fiction, which is the failure this whole function exists to stop.
+            return "the current date is unavailable on this machine".to_string();
+        };
+
+        const WEEKDAYS: [&str; 7] = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ];
+        const MONTHS: [&str; 12] = [
+            "January",
+            "February",
+            "March",
+            "April",
+            "May",
+            "June",
+            "July",
+            "August",
+            "September",
+            "October",
+            "November",
+            "December",
+        ];
+
+        let named = |value: &str, names: &[&str], offset: usize| -> Option<String> {
+            value
+                .parse::<usize>()
+                .ok()
+                .and_then(|n| n.checked_sub(offset))
+                .and_then(|n| names.get(n))
+                .map(|s| s.to_string())
+        };
+
+        // A name we cannot resolve is dropped from the sentence rather than guessed at.
+        let weekday = named(&weekday, &WEEKDAYS, 0)
+            .map(|w| format!("{w}, "))
+            .unwrap_or_default();
+        let month = named(&month, &MONTHS, 1).unwrap_or(month);
+        // Leading zero off the day: "21" and "02 November" is how a database writes a
+        // date, not how anyone says one.
+        let day = day.trim_start_matches('0');
+
+        format!("{weekday}{day} {month} {year}, {clock} local time")
+    }
+
     /// Removes a setting, so it falls back to its default. Used by undo, where "there was
     /// no value before" has to be restorable as faithfully as an old value would be.
     pub fn delete_setting(&self, key: &str) -> rusqlite::Result<()> {
@@ -540,6 +637,27 @@ impl MemoryDb {
         Ok(JsonValue::Object(map))
     }
 
+    /// Which settings have actually been answered: the keys with a row of their own.
+    ///
+    /// **The distinction this restores.** `get_setting_bool(key, default)` collapses two
+    /// quite different machines into one answer -- one where the operator chose this value,
+    /// and one where nobody has ever been asked. The row is the only record of which, and
+    /// every typed accessor above throws it away at the point of reading. So the Settings
+    /// pane renders a declared default indistinguishably from a decision, and because it
+    /// writes every field back on Save, the first Save of anything at all freezes that
+    /// declared value into a real answer. That is the whole mechanism of the fault PR #261
+    /// found in `tools_enabled`, and it will recur for as long as a default and a choice
+    /// look the same on the wire.
+    ///
+    /// This is the fact a caller needs to tell them apart. It is sent alongside the
+    /// settings and never inside them -- see the note in `commands::get_settings`.
+    pub fn answered_settings(&self) -> rusqlite::Result<Vec<String>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare("SELECT key FROM settings ORDER BY key")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
     /// Records a tool call and returns its id. Every call is logged, mutating or not, and
     /// logged *before* it runs -- an action that panics or never returns still leaves a
     /// trace of having been attempted, which is the whole point of having the log.
@@ -550,17 +668,19 @@ impl MemoryDb {
         mutating: bool,
         status: ActionStatus,
         reason: Option<&str>,
+        session_id: Option<&str>,
     ) -> rusqlite::Result<i64> {
         let conn = self.connect()?;
         conn.execute(
-            "INSERT INTO action_log (tool, args_json, mutating, status, reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO action_log (tool, args_json, mutating, status, reason, session_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 tool,
                 args.to_string(),
                 mutating as i64,
                 status.as_str(),
-                reason
+                reason,
+                session_id
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -595,7 +715,8 @@ impl MemoryDb {
     pub fn pending_actions(&self) -> rusqlite::Result<Vec<ActionRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason \
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
              FROM action_log WHERE status = 'proposed' ORDER BY id ASC",
         )?;
         let rows = stmt.query_map([], action_from_row)?;
@@ -617,7 +738,8 @@ impl MemoryDb {
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
         self.connect()?
             .query_row(
-                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason \
+                "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
                  FROM action_log WHERE id = ?1",
                 params![id],
                 action_from_row,
@@ -629,7 +751,8 @@ impl MemoryDb {
     pub fn recent_actions(&self, limit: u32) -> rusqlite::Result<Vec<ActionRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
-            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason \
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
              FROM action_log ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], action_from_row)?;
@@ -808,6 +931,7 @@ fn action_from_row(row: &rusqlite::Row) -> rusqlite::Result<ActionRecord> {
         reason: row.get(9)?,
         preview: None,
         always_allowable: None,
+        session_id: row.get(10)?,
     })
 }
 
@@ -1078,7 +1202,14 @@ mod tests {
         // Logged as proposed, with no outcome yet -- this is the state a mutating call
         // sits in while it waits for the operator.
         let id = db
-            .log_action("write_file", &args, true, ActionStatus::Proposed, None)
+            .log_action(
+                "write_file",
+                &args,
+                true,
+                ActionStatus::Proposed,
+                None,
+                None,
+            )
             .unwrap();
         let logged = db.get_action(id).unwrap().expect("action should be stored");
         assert_eq!(logged.tool, "write_file");
@@ -1113,6 +1244,7 @@ mod tests {
                 &serde_json::json!({"n": i}),
                 false,
                 ActionStatus::Executed,
+                None,
                 None,
             )
             .unwrap();

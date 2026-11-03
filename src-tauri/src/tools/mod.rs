@@ -21,6 +21,7 @@ pub mod mutating;
 mod notes;
 pub mod protocol;
 pub(crate) mod selfcheck;
+pub mod skills;
 
 use std::sync::LazyLock;
 
@@ -93,6 +94,14 @@ pub struct ToolContext<'a> {
     /// Who is asking. The persona decides which read-only calls run without the operator
     /// being asked first (see `domain`), so it belongs to the call rather than to the tool.
     pub persona: Persona,
+    /// The conversation this call belongs to, when it has one.
+    ///
+    /// Carried only so that a *proposal* can record where it came from. An approved action
+    /// has to be able to hand its output back to the model that asked for it: before this,
+    /// `approve` ran the tool, returned the result to the frontend, and the conversation
+    /// never heard about it -- so the model answered from memory while its own search
+    /// results sat on screen underneath. Nothing a tool does depends on this value.
+    pub session_id: Option<String>,
 }
 
 impl<'a> ToolContext<'a> {
@@ -104,7 +113,15 @@ impl<'a> ToolContext<'a> {
         ToolContext {
             db,
             persona: Persona::from_key(&key),
+            session_id: None,
         }
+    }
+
+    /// The same context, told which conversation it is running in. Used by the chat's tool
+    /// loop; a call from the CLI or a test has no session and resumes nothing.
+    pub fn in_session(mut self, session_id: Option<&str>) -> ToolContext<'a> {
+        self.session_id = session_id.map(str::to_string);
+        self
     }
 
     /// The context for a specific persona, so a test can state which one it is exercising.
@@ -113,7 +130,11 @@ impl<'a> ToolContext<'a> {
     /// one the operator selected.
     #[cfg(test)]
     pub fn for_persona(db: &'a MemoryDb, persona: Persona) -> ToolContext<'a> {
-        ToolContext { db, persona }
+        ToolContext {
+            db,
+            persona,
+            session_id: None,
+        }
     }
 }
 
@@ -211,17 +232,36 @@ impl Registry {
     /// The catalog as the model sees it in a system prompt, for providers without a native
     /// tool-call format. Empty when nothing is registered, so the caller can leave the
     /// tool section out of the prompt entirely rather than announcing an empty toolbox.
-    pub fn prompt_catalog(&self) -> String {
+    /// The catalog as one persona sees it. `None` labels only the mutating tools, which is
+    /// what every caller did before a persona came into it.
+    ///
+    /// Every tool is still listed. What changes is the label: a tool outside the persona's
+    /// field is marked "(needs approval)" alongside the mutating ones, because that is what
+    /// happens when it is called -- `run` proposes it and waits for the operator.
+    ///
+    /// The unlabelled version was a quiet trap. The default persona's field is system logs
+    /// and service state, so `search_web` is outside it, yet the catalog offered it in the
+    /// same unqualified shape as `read_file`. A model told it has a web search, and then
+    /// finding that calling one does not return results, has an obvious and wrong way out:
+    /// write the results itself. Which is what happened.
+    ///
+    /// Nothing is hidden, on purpose. A persona that cannot search without being asked can
+    /// still search -- removing the tool from the list would turn one honest approval card
+    /// into "I have no way to do that", which is false.
+    pub fn prompt_catalog_for(&self, persona: Option<&Persona>) -> String {
         if self.is_empty() {
             return String::new();
         }
+        let domain = persona.map(|p| p.domain());
         self.tools
             .iter()
             .map(|t| {
+                let needs_approval =
+                    t.mutating() || domain.as_ref().is_some_and(|d| !d.allows_tool(t.name()));
                 format!(
                     "- {}{}: {}\n  arguments: {}",
                     t.name(),
-                    if t.mutating() {
+                    if needs_approval {
                         " (needs approval)"
                     } else {
                         ""
@@ -252,12 +292,21 @@ pub fn registry() -> &'static Registry {
             Box::new(builtin::ListProcesses),
             Box::new(builtin::TelemetryDetail),
             Box::new(builtin::SearchMemory),
+            // Procedural memory. Nothing names the installed skills anywhere else, so a
+            // model that does not call this does not know they exist -- which is the
+            // point: the cost is paid by the turns that use it.
+            Box::new(skills::FindSkill),
+            // Looks over the vault and says what wants attention. Reads only: it
+            // reports what to propose, and `archive_note` is what acts.
+            Box::new(crate::vault::curator::ReviewMemory),
             Box::new(builtin::SearchWeb),
+            Box::new(builtin::FetchUrl),
             Box::new(eventlog::ReadEventLog),
             // AETHER1's own two diagnostic records, so "why did that break?" has an
             // answer that is not the system log pasted into the conversation.
             Box::new(selfcheck::RecentCrashes),
             Box::new(selfcheck::SelfCheck),
+            Box::new(selfcheck::SelfRepair),
             // Everything below changes something, so everything below goes through the
             // consent path -- proposed to the operator, never run from a conversation.
             Box::new(mutating::WriteFile),
@@ -373,7 +422,14 @@ pub fn run(
     // say so, and gone the moment it has run. Elevation is per request and nothing else --
     // a second identical call is proposed again.
     if let Some(reason) = domain::elevation_needed(ctx, tool, args) {
-        let id = consent::propose(ctx.db, name, args, tool.mutating(), Some(&reason))?;
+        let id = consent::propose(
+            ctx.db,
+            name,
+            args,
+            tool.mutating(),
+            Some(&reason),
+            ctx.session_id.as_deref(),
+        )?;
         return Ok(format!(
             "PROPOSED (id {id}): {} is waiting for the operator to approve it. {reason} Do \
              not assume it happened, and do not propose it again -- tell them what you want \
@@ -389,7 +445,7 @@ pub fn run(
         // to be pre-approved stays proposed even if its name is somehow on that list --
         // from an older database, or a tool that used to allow it and no longer does.
         if !tool.always_allowable() || !consent::is_always_allowed(ctx.db, name) {
-            let id = consent::propose(ctx.db, name, args, true, None)?;
+            let id = consent::propose(ctx.db, name, args, true, None, ctx.session_id.as_deref())?;
             return Ok(format!(
                 "PROPOSED (id {id}): {} is waiting for the operator to approve it. Do not \
                  assume it happened, and do not propose it again -- tell them what you want \
@@ -414,7 +470,14 @@ fn run_now(
 ) -> Result<String, String> {
     let id = ctx
         .db
-        .log_action(name, args, tool.mutating(), ActionStatus::Proposed, None)
+        .log_action(
+            name,
+            args,
+            tool.mutating(),
+            ActionStatus::Proposed,
+            None,
+            None,
+        )
         .ok();
 
     let outcome = tool.call(args, ctx);
@@ -442,8 +505,84 @@ fn run_now(
 
 /// Whether the operator has turned the tool layer on. Off by default: a companion that can
 /// act on the machine is a decision to make deliberately, not a default to discover.
+/// Whether the companion may use tools at all.
+///
+/// **On by default now, and the change is the point.** It defaulted to off, and with it off
+/// nothing about tools happens: no catalogue in the system prompt, no schemas on the
+/// request, and `tool_loop` is never entered. A model in that state answers "I have no
+/// access to real-time data", which is *true* -- and indistinguishable, from the operator's
+/// side, from a model that cannot call a tool, or from a tool protocol that does not work.
+/// Four rounds of work on the search path were done while the switch in front of all of it
+/// was off, on an install that never said so.
+///
+/// The switch is also labelled "Looking at this computer -- lets the AI read files, list
+/// directories and check processes", which gives nobody a reason to connect it to a web
+/// search. So even finding it did not lead anywhere.
+///
+/// What this does *not* change is who decides: `Persona::domain()` still scopes what runs
+/// without asking, `consent` still proposes everything outside that field, `fs_guard`'s
+/// deny list still holds, and `net::require_online` still refuses the internet in
+/// local-only mode. Those are the boundary. This setting was a master switch in front of
+/// the boundary, and defaulting it to off meant shipping a companion whose advertised
+/// abilities were all unavailable until an undocumented toggle was found.
 pub fn tools_enabled(db: &crate::llm::MemoryDb) -> bool {
-    db.get_setting_bool("tools_enabled", false)
+    db.get_setting_bool("tools_enabled", true)
+}
+
+/// Whether the two tools that leave this machine -- `search_web` and `fetch_url` -- may be
+/// used at all.
+///
+/// A narrower switch than `tools_enabled`, and a different question. Tools off means the
+/// companion cannot read a file, check the telemetry or write a note either; this one
+/// leaves all of that alone and says only that this conversation is not going out to the
+/// internet to answer. It is the Search chip under the chat box, and it is the setting the
+/// engine reads rather than a per-message flag, because a per-message flag that the next
+/// message silently forgets is the kind of privacy control that is worse than none.
+///
+/// Defaults on, so nothing changes for an install that has never touched it.
+pub fn web_tools_enabled(db: &crate::llm::MemoryDb) -> bool {
+    db.get_setting_bool("web_search_enabled", true)
+}
+
+/// What the two web tools say when they are refused by the switch above. Shown to the
+/// model, so it says what to do about it rather than only that it failed: a model told
+/// "cannot search" with no reason has been seen answering from memory and presenting it
+/// as a lookup.
+pub const WEB_TOOLS_OFF: &str =
+    "Web lookups are switched off for this conversation (the Search chip under the chat \
+     box, or Settings). Say that you cannot look it up rather than answering from memory.";
+
+/// Marker for the one-time switch-on below.
+const DEFAULT_ON_MARKER: &str = "tools_default_on_applied";
+
+/// Turns tools on once, on an install that had them off without ever choosing to.
+///
+/// Changing the default alone fixes nothing for anybody already running AETHER1: the
+/// settings pane writes every field on every Save, so a `false` is stored on any install
+/// where somebody has opened Settings once -- and a stored `false` beats a default. The
+/// operators this is for are precisely the ones who have been using the app.
+///
+/// So it flips once, and records that it has. Anyone who turns tools off after this keeps
+/// them off: the marker is written whether or not the flip was needed, so this can only
+/// ever happen on the one open that follows the upgrade.
+///
+/// Called from `build_llm_engine`, the single path the native app, `--serve` and every CLI
+/// subcommand share -- the same place `net::install` is called, and for the same reason.
+pub fn apply_default_on(db: &crate::llm::MemoryDb) {
+    if db.get_setting_bool(DEFAULT_ON_MARKER, false) {
+        return;
+    }
+    // Best-effort, both of them: a settings write that fails must not stop the app
+    // starting, and the worst case is that this is tried again on the next open.
+    if !db.get_setting_bool("tools_enabled", true) {
+        let _ = db.set_setting("tools_enabled", &serde_json::Value::Bool(true));
+        eprintln!(
+            "[AETHER1] Tools were switched off, which left the companion unable to search \
+             the web or read anything. Switched on; turn them off again in Settings if that \
+             was deliberate."
+        );
+    }
+    let _ = db.set_setting(DEFAULT_ON_MARKER, &serde_json::Value::Bool(true));
 }
 
 /// The catalog and its on/off state, for the settings UI and for anything that wants to
@@ -555,6 +694,15 @@ mod tests {
                 "append_note",
                 "archive_note",
                 "run_command",
+                /* It starts the model server, downloads the configured model or voice, or
+                clears the stale proposals -- every one of them a change to the machine, so
+                it is proposed and waits like the rest of this list. What it does *not* do
+                is let the model choose which of those happens: it is given the name of a
+                check and `doctor::repair_for` decides the act, from a probe taken when the
+                operator answers the card. It refuses to be always-allowed for the reason
+                `run_command` does -- its name says which program acts and not what it will
+                do. See tools/selfcheck.rs. */
+                "self_repair",
                 "set_aether_setting",
                 "write_file",
                 "write_note"
@@ -821,6 +969,41 @@ mod tests {
         );
     }
 
+    /// The gap that made approving a tool pointless. A proposal has to remember which
+    /// conversation wanted it, or its output has nowhere to go once approved: the operator
+    /// sees the result on the card and the model that asked never does, so it answers from
+    /// memory with the real answer sitting on screen beside it.
+    #[test]
+    fn a_proposal_records_the_conversation_that_asked_for_it() {
+        let db = temp_db("domain_session");
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos).in_session(Some("sess-42"));
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+
+        run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
+        let waiting = consent::pending(&db, &registry);
+        assert_eq!(waiting[0].session_id.as_deref(), Some("sess-42"));
+    }
+
+    /// And a call from outside a conversation records none, rather than borrowing whichever
+    /// session happens to be open. Guessing here would drop one operator's search results
+    /// into an unrelated chat.
+    #[test]
+    fn a_proposal_from_outside_a_conversation_records_no_session() {
+        let db = temp_db("domain_no_session");
+        let ctx = ToolContext::for_persona(&db, Persona::ArxLogos);
+        let mut registry = Registry::new();
+        registry.register(probe("list_processes", false)).unwrap();
+
+        run(&registry, &ctx, "list_processes", &json!({"path": "/tmp"})).unwrap();
+        let waiting = consent::pending(&db, &registry);
+        assert!(
+            waiting[0].session_id.is_none(),
+            "{:?}",
+            waiting[0].session_id
+        );
+    }
+
     /// The test that catches elevation quietly becoming a mode. Approving runs that one
     /// call; the identical call straight afterwards is proposed all over again.
     #[test]
@@ -896,7 +1079,7 @@ mod tests {
         assert!(err.contains("off limits"), "{err}");
 
         // And through the approval path, which is the road an elevation takes.
-        let id = consent::propose(&db, "read_file", &args, false, Some("elevation")).unwrap();
+        let id = consent::propose(&db, "read_file", &args, false, Some("elevation"), None).unwrap();
         let err = consent::approve(registry, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("off limits"), "{err}");
     }
@@ -976,15 +1159,122 @@ mod tests {
 
     #[test]
     fn the_prompt_catalog_is_empty_when_nothing_is_registered() {
-        assert_eq!(Registry::new().prompt_catalog(), "");
+        assert_eq!(Registry::new().prompt_catalog_for(None), "");
 
         let mut registry = Registry::new();
         registry.register(probe("write_file", true)).unwrap();
-        let catalog = registry.prompt_catalog();
+        let catalog = registry.prompt_catalog_for(None);
         assert!(catalog.contains("write_file"));
         assert!(
             catalog.contains("needs approval"),
             "a mutating tool must be marked as such in the prompt: {catalog}"
         );
+    }
+
+    /// The quiet trap: the catalog used to offer a tool the persona cannot actually use in
+    /// the same unqualified shape as one it can, so a model called it, got "proposed,
+    /// waiting", and wrote the results itself.
+    ///
+    /// `fetch_url` is the example rather than `search_web`, which used to be: the operator
+    /// has since asked for web search to be free, and it is now in every persona's field
+    /// (see `domain::every_persona_can_search_the_web_without_being_asked_about_it`). The
+    /// labelling rule is unchanged -- what moved is which tool it applies to.
+    #[test]
+    fn the_catalog_marks_a_tool_outside_the_personas_field_as_needing_approval() {
+        let registry = registry();
+        let line_for = |catalog: &str, tool: &str| -> String {
+            catalog
+                .lines()
+                .find(|l| l.starts_with(&format!("- {tool}")))
+                .unwrap_or_default()
+                .to_string()
+        };
+
+        let shown = registry.prompt_catalog_for(Some(&Persona::Default));
+        let outside = registry
+            .schemas()
+            .iter()
+            .map(|s| s.name)
+            .find(|name| !Persona::Default.domain().allows_tool(name))
+            .expect("some tool has to sit outside the default persona's field");
+        assert!(
+            line_for(&shown, outside).contains("needs approval"),
+            "{outside} is outside the default persona's field: {}",
+            line_for(&shown, outside)
+        );
+        // And the tool the operator asked to be free does not carry the label at all.
+        assert!(
+            !line_for(&shown, "search_web").contains("needs approval"),
+            "search_web is in every persona's field now: {}",
+            line_for(&shown, "search_web")
+        );
+        // A tool the persona does hold must not pick up the label, or the label means
+        // nothing.
+        assert!(
+            !line_for(&shown, "read_event_log").contains("needs approval"),
+            "read_event_log is in its field: {}",
+            line_for(&shown, "read_event_log")
+        );
+
+        // Nothing is hidden: "I have no way to do that" would be a lie.
+        assert_eq!(
+            shown.lines().filter(|l| l.starts_with("- ")).count(),
+            registry
+                .prompt_catalog_for(None)
+                .lines()
+                .filter(|l| l.starts_with("- "))
+                .count(),
+            "a persona's catalog must list every tool, only labelled differently"
+        );
+    }
+
+    /// On by default, because off by default meant shipping a companion whose tools were
+    /// all unavailable until an undocumented toggle was found.
+    #[test]
+    fn tools_are_on_by_default() {
+        let db = temp_db("tools_default");
+        assert!(tools_enabled(&db));
+    }
+
+    /// The default alone fixes nothing for anybody already running AETHER1: the settings
+    /// pane writes every field on every Save, so a stored `false` sits on any install where
+    /// Settings has been opened once, and a stored value beats a default. This is the whole
+    /// reason `apply_default_on` exists.
+    #[test]
+    fn a_stored_false_beats_the_new_default() {
+        let db = temp_db("tools_stored_false");
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        assert!(!tools_enabled(&db), "the operator's own value stands");
+    }
+
+    #[test]
+    fn the_one_time_switch_on_flips_an_install_that_had_them_off() {
+        let db = temp_db("tools_flip");
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        apply_default_on(&db);
+        assert!(tools_enabled(&db), "switched on once");
+
+        // And once only: turning them off after this is a choice, and it has to stick.
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        apply_default_on(&db);
+        assert!(
+            !tools_enabled(&db),
+            "a deliberate off after the upgrade must not be overridden on the next open"
+        );
+    }
+
+    /// An install that already had them on is not touched, and the marker is still written
+    /// so the flip cannot happen later.
+    #[test]
+    fn the_one_time_switch_on_leaves_an_install_that_had_them_on_alone() {
+        let db = temp_db("tools_already_on");
+        db.set_setting("tools_enabled", &serde_json::Value::Bool(true))
+            .unwrap();
+        apply_default_on(&db);
+        assert!(tools_enabled(&db));
+        assert!(db.get_setting_bool(DEFAULT_ON_MARKER, false));
     }
 }

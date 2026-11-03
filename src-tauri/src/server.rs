@@ -199,6 +199,15 @@ pub async fn run(engine: LlmEngine, lan: bool) {
                     "telemetry": telemetry.to_wire_json(),
                     "tokens": engine.usage_snapshot(),
                     "agent_name": engine.agent_name(),
+                    /* The same line the desktop tick carries, and it was missing here --
+                    so every notice the engine wrote was dropped on the floor for anyone
+                    driving AETHER1 over `--serve`: which model the Auto router picked and
+                    why, a model that has been uninstalled, a judge that could not be
+                    reached. Found by driving the abstention below through a browser and
+                    watching nothing arrive. `take` rather than read, for the reason the
+                    desktop one says: collecting it is what clears it, so two windows
+                    cannot both claim to have shown it. */
+                    "routing_notice": engine.take_routing_notice(),
                 });
                 let _ = tx.send(payload); // Err just means the last client left mid-tick
                 pulse.park(Duration::from_millis(1000));
@@ -223,6 +232,11 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/scanner/status", get(scanner_status))
         .route("/api/llm/gateway-models", post(gateway_models))
         .route("/api/setup/advice", get(setup_advice))
+        .route("/api/models/brains", get(brains))
+        .route("/api/models/accounts", get(provider_accounts))
+        .route("/api/models/accounts/forget", post(forget_provider_account))
+        .route("/api/models/huggingface", get(hf_search))
+        .route("/api/models/huggingface/quants", get(hf_quants))
         .route("/api/voice/advice", get(voice_advice))
         .route("/api/code/advice", get(code_advice))
         .route("/api/code/models", get(code_local_models))
@@ -254,6 +268,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/setup/downloads", get(download_status))
         .route("/api/setup/download/forget", post(forget_download))
         .route("/api/voice/catalogue", get(voice_catalogue))
+        .route("/api/graft/version", get(graft_version))
+        .route("/api/graft/install", post(start_graft_install))
+        .route("/api/graft/install/status", get(graft_install_status))
+        .route("/api/graft/install/forget", post(forget_graft_install))
         .route("/api/voice/download", post(start_voice_download))
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
@@ -264,6 +282,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/actions", get(get_actions))
         .route("/api/actions/pending", get(get_pending_actions))
         .route("/api/actions/{id}/approve", post(approve_action))
+        .route("/api/actions/{id}/resume", post(resume_after_action))
         .route("/api/actions/{id}/undo", post(undo_action))
         .route("/api/actions/{id}/reject", post(reject_action))
         .route("/api/tools/always-allow", post(set_always_allowed))
@@ -281,6 +300,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/vault/notes", get(vault_notes))
         .route("/api/vault/note", get(vault_note))
         .route("/api/vault/graph", get(vault_graph))
+        .route("/api/vault/review", get(vault_review))
         .route("/api/vault/search", get(vault_search))
         .route("/api/settings", get(get_settings).post(save_settings))
         .route("/api/tts", post(tts))
@@ -454,6 +474,16 @@ fn bearer_token(request: &Request) -> Option<String> {
 /// carries no credential; it exists so that a handshake which also offered a token has
 /// something the server can echo back, since a browser closes a socket whose requested
 /// subprotocol was not selected.
+///
+/// **Do not rename this, including for the Aurora1 rename.** It is offered as a single value
+/// and matched exactly, by both ends, so the name is a wire format and not a label: a build
+/// offering only `aurora1` is refused by every peer already installed, and pairing between a
+/// renamed machine and an un-renamed one stops working — which is the mixed-version case the
+/// rest of the rename work exists to survive. Teaching both ends to offer and accept two
+/// values would be machinery for a problem that only exists if this string changes, and
+/// nothing asks it to: a subprotocol is never shown to an operator. It belongs with the
+/// `[AETHER1]` log prefix, the `AETHER1_*` environment variables and the Tauri identifier
+/// `com.tridentspoon.aether1` — the platform's own names, which stay Aether1 by design.
 pub const WS_PROTOCOL: &str = "aether1";
 
 /// The prefix of the subprotocol that carries a single-use socket ticket.
@@ -875,6 +905,7 @@ async fn chat(
                 &media,
                 &mut |_| {},
                 &mut |_| {},
+                &mut |_| {},
             )
         })
         .await
@@ -1127,6 +1158,23 @@ async fn approve_action(
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
 }
 
+/// The browser twin of `resume_after_action_rust`. It waits for the whole answer rather than
+/// streaming it: the native window has an event channel for deltas and this does not, and a
+/// resumed turn is short enough that buffering it is not the thing worth fixing here.
+async fn resume_after_action(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let engine = state.engine.clone();
+    tokio::task::spawn_blocking(move || {
+        commands::resume_after_action(&engine, id, &mut |_delta| {}, &mut |_delta| {})
+    })
+    .await
+    .map_err(internal_error)?
+    .map(Json)
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
 async fn undo_action(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -1300,6 +1348,67 @@ async fn setup_advice(State(state): State<AppState>) -> Json<serde_json::Value> 
         tokio::task::spawn_blocking(move || commands::setup_advice(&state.engine))
             .await
             .expect("setup_advice panicked"),
+    )
+}
+
+/// Everywhere the companion could think from. Probes and settings reads, so a GET.
+async fn brains(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::brains(&state.engine))
+            .await
+            .expect("brains panicked"),
+    )
+}
+
+/// What is saved for each provider. Settings reads, no probes, so a GET.
+async fn provider_accounts(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(
+        tokio::task::spawn_blocking(move || commands::provider_accounts(&state.engine))
+            .await
+            .expect("provider_accounts panicked"),
+    )
+}
+
+#[derive(Deserialize)]
+struct ForgetAccountBody {
+    provider: String,
+}
+
+async fn forget_provider_account(
+    State(state): State<AppState>,
+    Json(body): Json<ForgetAccountBody>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let accounts = tokio::task::spawn_blocking(move || {
+        commands::forget_provider_account(&state.engine, &body.provider)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(accounts))
+}
+
+#[derive(Deserialize)]
+struct HfQuery {
+    q: Option<String>,
+    repo: Option<String>,
+}
+
+/// Searching Hugging Face reads a public listing and changes nothing here, so it is a GET.
+async fn hf_search(Query(query): Query<HfQuery>) -> Json<serde_json::Value> {
+    let q = query.q.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::hf_search(q))
+            .await
+            .expect("hf_search panicked"),
+    )
+}
+
+async fn hf_quants(Query(query): Query<HfQuery>) -> Json<serde_json::Value> {
+    let repo = query.repo.unwrap_or_default();
+    Json(
+        tokio::task::spawn_blocking(move || commands::hf_quants(repo))
+            .await
+            .expect("hf_quants panicked"),
     )
 }
 
@@ -1807,6 +1916,34 @@ struct VoiceQuery {
     voice: Option<String>,
 }
 
+/* The panel's status line asked `graft_version_rust` and told a browser "requires Tauri",
+which left the served copy unable to say whether Graft was there -- and now unable to say
+whether an install worked. Same command behind both doors, the rule the model picker was
+fixed to follow in #251. */
+async fn graft_version() -> Json<serde_json::Value> {
+    Json(match commands::graft_version() {
+        Ok(value) => value,
+        Err(message) => serde_json::json!({ "installed": false, "message": message }),
+    })
+}
+
+async fn start_graft_install(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let engine = state.engine.clone();
+    Json(
+        tokio::task::spawn_blocking(move || commands::start_graft_install(&engine))
+            .await
+            .expect("start_graft_install panicked"),
+    )
+}
+
+async fn graft_install_status() -> Json<serde_json::Value> {
+    Json(commands::graft_install_status())
+}
+
+async fn forget_graft_install() -> Json<serde_json::Value> {
+    Json(commands::forget_graft_install())
+}
+
 async fn voice_catalogue() -> Json<serde_json::Value> {
     Json(commands::voice_catalogue())
 }
@@ -2018,6 +2155,15 @@ async fn vault_graph(State(state): State<AppState>) -> Json<Value> {
     })
 }
 
+async fn vault_review(State(state): State<AppState>) -> Json<Value> {
+    let engine = state.engine.clone();
+    let review = tokio::task::spawn_blocking(move || commands::vault_review(&engine)).await;
+    Json(match review {
+        Ok(r) => serde_json::to_value(r).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    })
+}
+
 #[derive(Deserialize)]
 struct SearchQuery {
     q: String,
@@ -2166,12 +2312,16 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
     enum Chunk {
         Handover(serde_json::Value),
         Delta(String),
+        /// The model's own reasoning. A frame of its own rather than a delta, so the
+        /// browser transport says exactly what the native one does.
+        Reasoning(String),
     }
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Chunk>();
     let generation = {
         let session_id = session_id.clone();
         let handover_tx = tx.clone();
+        let thought_tx = tx.clone();
         tokio::task::spawn_blocking(move || {
             commands::generate_response_streamed_with_media(
                 &engine,
@@ -2180,6 +2330,9 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
                 &media,
                 &mut |delta| {
                     let _ = tx.send(Chunk::Delta(delta.to_string()));
+                },
+                &mut |delta| {
+                    let _ = thought_tx.send(Chunk::Reasoning(delta.to_string()));
                 },
                 &mut |handover| {
                     let _ = handover_tx.send(Chunk::Handover(commands::handover_json(handover)));
@@ -2201,6 +2354,9 @@ async fn chat_socket(mut socket: WebSocket, state: AppState) {
                 frame
             }
             Chunk::Delta(delta) => serde_json::json!({"type": "delta", "delta": delta}),
+            Chunk::Reasoning(delta) => {
+                serde_json::json!({"type": "reasoning", "delta": delta})
+            }
         };
         if socket
             .send(Message::Text(frame.to_string().into()))

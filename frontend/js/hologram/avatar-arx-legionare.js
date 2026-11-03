@@ -24,7 +24,7 @@ HologramAvatar.registerAvatar({
     id: 'arx-legionare',
     label: 'A.R.X.LEGIONARE',
     // The Umbrals: the A.R.X. line -- see registerAvatar's optional def.group in
-    // js/hologram/README.md and index.html's avatar-menu / js/avatar-lab.js's BUILT_IN,
+    // js/hologram/README.md and index.html's avatar-menu,
     // which group the same way.
     group: 'The Umbrals',
 

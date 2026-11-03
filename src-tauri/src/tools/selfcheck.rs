@@ -16,6 +16,16 @@
 // Both are read-only, and both are in every persona's domain (see `persona::domain`): a
 // program explaining its own failure is not a privilege any character should have to be
 // elevated for.
+//
+// `self_repair` is the third, and it is the one that acts. Until it existed, `self_check`
+// could say "AETHER1 can offer to fix this from Settings" and then leave the operator to go
+// and find the panel -- the companion could name the fault precisely and not reach the one
+// button that fixes it. **What it does not do is choose the fix.** The model names the part
+// of the install that is unwell; `doctor::repair_for` decides what happens to it, from a
+// fresh probe, at the moment of acting. That split is the whole design: the repair table is
+// deterministic and hand-written precisely because the machine whose model endpoint is down
+// is the machine that cannot ask a model what to do about it, and a tool that let the model
+// pick the repair would put the weakest link back in the middle of it.
 
 use serde_json::{json, Value};
 
@@ -243,9 +253,13 @@ pub fn summarise(health: &doctor::Health, everything: bool) -> String {
             }
         }
         if let Some(repair) = &check.repair {
+            // Says where the act lives, now that there are two places it can be asked for.
+            // The sentence used to end at Settings, which left the companion naming a fault
+            // it could not reach the fix for -- see the note at the top of this file.
             out.push_str(&format!(
-                "      AETHER1 can offer to fix this from Settings: {}\n",
-                repair.title
+                "      Repairable: {} -- call self_repair with check=\"{}\" if the operator \
+                 wants it fixed, or they can press it in Settings > Diagnostics.\n",
+                repair.title, check.key,
             ));
         }
     }
@@ -275,6 +289,149 @@ pub fn summarise(health: &doctor::Health, everything: bool) -> String {
         ));
     }
 
+    out
+}
+
+// ------------------------------------------------------------ self_repair
+
+pub struct SelfRepair;
+
+impl Tool for SelfRepair {
+    fn name(&self) -> &'static str {
+        "self_repair"
+    }
+
+    fn description(&self) -> &'static str {
+        "Make the repair AETHER1's own self-check offers for one broken part of its install -- starting the model server, downloading the configured model or voice, clearing stale proposals. Name the part with `check`, as self_check reported it; which repair runs is decided by AETHER1 from a fresh check, not by you. Call this only after self_check has said that part is broken, and only when the operator wants it fixed."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "check": {
+                    "type": "string",
+                    "description": "Which check to repair, named exactly as `self_check` \
+                                    printed it. Nothing is guessed at: a name that is not a \
+                                    check is refused.",
+                    "enum": doctor::CheckId::ALL.iter().map(|id| id.key()).collect::<Vec<_>>(),
+                },
+            },
+            "required": ["check"],
+        })
+    }
+
+    fn mutating(&self) -> bool {
+        // It starts processes and downloads files. Every call is proposed and waits.
+        true
+    }
+
+    fn always_allowable(&self) -> bool {
+        // "Never ask me about self_repair again" would pre-approve starting servers and
+        // fetching gigabytes for every check in the table, for ever, on the strength of one
+        // tick. The tool's name says which program is acting and not what it will do, which
+        // is the test `always_allowable` exists to apply -- see the note on `run_command`.
+        false
+    }
+
+    fn preview(&self, args: &Value) -> String {
+        let check = args.get("check").and_then(|v| v.as_str()).unwrap_or("");
+        match doctor::CheckId::from_key(check) {
+            // Deliberately does not promise which repair: the card is drawn when the model
+            // asks, and the repair is chosen from a probe taken when the operator answers.
+            // Naming one here would be naming the fix for a machine as it was minutes ago.
+            Some(id) => format!(
+                "Repair what is wrong with AETHER1's \"{}\" check -- the one fix it offers \
+                 for that, decided from a fresh check when you approve this",
+                id.title()
+            ),
+            None => format!("Repair {check:?}, which is not a part of AETHER1 it checks"),
+        }
+    }
+
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        let check = args
+            .get("check")
+            .and_then(|v| v.as_str())
+            .ok_or("self_repair needs `check`: which part of the install to repair")?;
+        let check_id = doctor::CheckId::from_key(check)
+            .ok_or_else(|| format!("there is no check called {check:?}"))?;
+
+        // The engine is built here from the database this call already has. Everything a
+        // repair touches reaches it through `engine.db()`, and the engine's own fields are
+        // per-turn caches for routing -- so a fresh one makes the same repair, and this
+        // avoids threading an `LlmEngine` through every tool for the sake of one.
+        let engine = crate::llm::LlmEngine::new(ctx.db.clone());
+
+        // A fresh probe, not the one the model read. An approval sits in front of the
+        // operator for as long as it takes them to look at it, and the repair offered for a
+        // machine ten minutes ago is not necessarily the right act on it now. This is the
+        // same recomputation `commands::doctor_repair` does behind the button.
+        let (observation, _) = doctor::report(ctx.db, &doctor::Facts::default());
+        let offered = doctor::repair_for(check_id, &observation).ok_or_else(|| {
+            format!(
+                "there is nothing AETHER1 knows how to repair about its \"{}\" check right \
+                 now. Run self_check and tell the operator what it says.",
+                check_id.title()
+            )
+        })?;
+
+        match &offered.kind {
+            doctor::RepairKind::Run => {}
+            // Refused before `apply`, not inside it: applying records an attempt and spends
+            // the one try this check gets per session, and spending it on something that
+            // cannot work from here would mean the operator's own button then refuses too.
+            doctor::RepairKind::InApp => {
+                return Err(format!(
+                    "AETHER1's \"{}\" check can only be repaired by the running desktop \
+                     app, not from a tool call. Tell the operator to open Settings > \
+                     Diagnostics and press \"{}\".",
+                    check_id.title(),
+                    offered.title
+                ))
+            }
+            // The line doctor.rs does not cross, and neither does this. The command is
+            // handed over verbatim for the operator to run.
+            doctor::RepairKind::HandOver { command } => {
+                return Err(format!(
+                    "AETHER1's \"{}\" check needs a change only the operator can make -- \
+                     AETHER1 does not run commands that need root. Give them this command to \
+                     run themselves, exactly as it is written, and tell them to restart \
+                     AETHER1 after it: {command}",
+                    check_id.title()
+                ))
+            }
+        }
+
+        let outcome = doctor::apply(&engine, check_id, offered.id)?;
+        Ok(Outcome::text(describe_repair(&offered, &outcome)))
+    }
+}
+
+/// A repair's result, written for the model that asked for it.
+///
+/// The re-check is the point. `doctor::apply` re-probes and records a repair whose check is
+/// still broken as a failure whatever the command's own exit code said, and this says so in
+/// the same terms -- so the companion reports "that did not fix it" rather than reading a
+/// zero exit status back to the operator as success.
+pub fn describe_repair(repair: &doctor::Repair, outcome: &doctor::RepairOutcome) -> String {
+    let mut out = format!("{}: {}\n", repair.title, outcome.message);
+    match outcome.rechecked {
+        Some(Verdict::Ok) => out.push_str("Checked again afterwards: that part is well now.\n"),
+        Some(verdict) => {
+            out.push_str(&format!(
+                "Checked again afterwards and it is still not well [{}]: {}\nDo not repeat \
+                 this -- AETHER1 refuses the same repair twice in one session. Tell the \
+                 operator what the re-check says.\n",
+                verdict.mark(),
+                outcome
+                    .recheck_detail
+                    .as_deref()
+                    .unwrap_or("no detail was available"),
+            ));
+        }
+        None => out.push_str("It did not run, so nothing changed.\n"),
+    }
     out
 }
 
@@ -407,5 +564,126 @@ mod tests {
     fn a_clean_report_says_so_instead_of_ending_on_the_headline() {
         let health = health_with(vec![check(Verdict::Ok, "Database", "fine")]);
         assert!(summarise(&health, false).contains("Every check passed."));
+    }
+
+    fn repair(kind: doctor::RepairKind) -> doctor::Repair {
+        doctor::Repair {
+            id: doctor::RepairId::StartModelServer,
+            title: "Start the model server".to_string(),
+            detail: "Runs `ollama serve` in the background.".to_string(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn a_repairable_check_tells_the_model_how_to_ask_for_it() {
+        // The sentence used to end at "from Settings", which named a fault and then left the
+        // companion unable to reach the fix for it. It has to carry the tool and the exact
+        // argument, or the model has to guess the key -- and a guessed key is refused.
+        let mut broken = check(Verdict::Failed, "Model endpoint", "nothing answered");
+        broken.repair = Some(repair(doctor::RepairKind::Run));
+        let text = summarise(&health_with(vec![broken]), false);
+        assert!(text.contains("self_repair"), "{text}");
+        assert!(text.contains("check=\"database\""), "{text}");
+        assert!(text.contains("Start the model server"), "{text}");
+    }
+
+    #[test]
+    fn the_approval_card_names_the_part_and_promises_no_particular_fix() {
+        // The card is drawn when the model asks and answered whenever the operator gets to
+        // it. The repair is chosen from a probe taken at that second, so naming one here
+        // would be describing the machine as it was before they went to make coffee.
+        let preview = SelfRepair.preview(&json!({"check": "model-endpoint"}));
+        // The check's own title, quoted: they are written as sentences ("A model answers"),
+        // so a card that dropped them in bare would read as broken English.
+        let title = doctor::CheckId::ModelEndpoint.title();
+        assert!(preview.contains(&format!("\"{title}\"")), "{preview}");
+        assert!(preview.contains("fresh check"), "{preview}");
+    }
+
+    #[test]
+    fn a_check_that_does_not_exist_is_refused_rather_than_matched_loosely() {
+        let preview = SelfRepair.preview(&json!({"check": "modelendpoint"}));
+        assert!(
+            preview.contains("not a part of AETHER1 it checks"),
+            "{preview}"
+        );
+
+        let db = crate::llm::MemoryDb::open(
+            std::env::temp_dir().join("a1-self-repair-unknown-check.sqlite"),
+        )
+        .expect("temp db");
+        let ctx = ToolContext::new(&db);
+        let err = SelfRepair
+            .call(&json!({"check": "the-vibes"}), &ctx)
+            .expect_err("an invented check is not repaired");
+        assert!(err.contains("there is no check called"), "{err}");
+    }
+
+    #[test]
+    fn every_check_the_model_may_name_is_a_real_one() {
+        // The enum in the schema is the list the model picks from, so it has to be the same
+        // list `CheckId::from_key` accepts -- otherwise the prompt offers names that are
+        // refused the moment they are used.
+        let schema = SelfRepair.parameters();
+        let offered = schema["properties"]["check"]["enum"]
+            .as_array()
+            .expect("the check argument is an enum")
+            .iter()
+            .map(|v| v.as_str().expect("check names are strings").to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(offered.len(), doctor::CheckId::ALL.len());
+        for name in &offered {
+            assert!(
+                doctor::CheckId::from_key(name).is_some(),
+                "the schema offers {name:?}, which is not a check"
+            );
+        }
+    }
+
+    #[test]
+    fn repairing_is_never_pre_approved_and_always_mutating() {
+        assert!(SelfRepair.mutating());
+        assert!(
+            !SelfRepair.always_allowable(),
+            "one tick would pre-approve starting servers and fetching gigabytes for every \
+             check in the table, for ever"
+        );
+    }
+
+    fn outcome(rechecked: Option<Verdict>, detail: &str) -> doctor::RepairOutcome {
+        doctor::RepairOutcome {
+            check: "model-endpoint",
+            repair: doctor::RepairId::StartModelServer,
+            ran: true,
+            message: "started".to_string(),
+            rechecked,
+            recheck_detail: Some(detail.to_string()),
+            record: None,
+        }
+    }
+
+    #[test]
+    fn a_repair_that_ran_and_did_not_work_is_reported_as_not_working() {
+        // The whole value of the re-check. A command that exits zero and leaves the check
+        // broken is a failed repair, and reporting its exit status to the operator as
+        // success is how a repair table rots into a pile of workarounds.
+        let text = describe_repair(
+            &repair(doctor::RepairKind::Run),
+            &outcome(Some(Verdict::Failed), "still nothing at localhost:11434"),
+        );
+        assert!(text.contains("still not well"), "{text}");
+        assert!(text.contains("still nothing at localhost:11434"), "{text}");
+        assert!(text.contains("Do not repeat this"), "{text}");
+    }
+
+    #[test]
+    fn a_repair_that_worked_says_the_check_passed_afterwards() {
+        let text = describe_repair(
+            &repair(doctor::RepairKind::Run),
+            &outcome(Some(Verdict::Ok), "answering"),
+        );
+        assert!(text.contains("that part is well now"), "{text}");
+        assert!(!text.contains("Do not repeat"), "{text}");
     }
 }

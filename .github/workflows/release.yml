@@ -5,6 +5,15 @@
 #   - the slim Linux one (scripts/package_slim_linux.sh), which skips all of that and has
 #     install-slim-linux.sh pip-install Piper/Whisper on the target machine instead, trading
 #     offline-forever for a much smaller download
+#   - the Linux AppImage (scripts/package_appimage_linux.sh): one file, no installer, no
+#     speech, for somebody who wants to try it rather than install it, plus the `.zsync`
+#     beside it that lets an AppImage manager find the next release on its own
+#   - the two macOS disk images (scripts/package_dmg_macos.sh), Apple Silicon and Intel,
+#     unsigned and unnotarized because notarization needs a paid Apple Developer account
+#
+# Six assets, five shapes, three platforms, and the AppImage's zsync. Each is signed with minisign in publish-release
+# below, which is the signature AURORA1's own updater checks; the Windows installer is
+# additionally Authenticode-signed for Windows' sake when the certificate secrets are set.
 #
 # Triggered by pushing a version tag (v1.2.3) or manually via workflow_dispatch for a test
 # run without cutting a real release.
@@ -68,8 +77,8 @@ jobs:
       # after a single run.
       - uses: actions/upload-artifact@v4
         with:
-          name: aether1-offline-linux-x86_64
-          path: dist/aether1-offline-linux-x86_64.tar.gz
+          name: aurora1-offline-linux-x86_64
+          path: dist/aurora1-offline-linux-x86_64.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -101,8 +110,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: aether1-slim-linux-x86_64
-          path: dist/aether1-slim-linux-x86_64.tar.gz
+          name: aurora1-slim-linux-x86_64
+          path: dist/aurora1-slim-linux-x86_64.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -131,10 +140,18 @@ jobs:
       # Strips the leading "v" (v1.2.3 -> 1.2.3) for Inno Setup's AppVersion, which the
       # tag itself isn't in the right shape for. Falls back to the .iss's own "0.0.0-dev"
       # default on a workflow_dispatch run with no tag.
+      #
+      # The Aurora1 tag is dashed -- v0-261018-227, because a git tag reads better that way
+      # than v0.261018.227 -- and Inno Setup's AppVersion is shown to whoever runs the
+      # installer, where "0-261018-227" reads as nothing at all. So the dashes come back out
+      # as dots here. This runs before any such tag is ever pushed, deliberately: the
+      # workflow that has to cope with the new shape is the one already on the default
+      # branch when the first renamed tag lands on it.
       - name: Compute the version
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ($version -match '^\d+-\d+-\d+$') { $version = $version -replace '-', '.' }
           if ("${{ github.ref_type }}" -ne "tag") { $version = "" }
           echo "AETHER1_VERSION=$version" >> $env:GITHUB_ENV
 
@@ -223,7 +240,7 @@ jobs:
           endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ secrets.AZURE_SIGNING_CERT_PROFILE }}
-          files: ${{ github.workspace }}\dist\Aether1-Setup.exe
+          files: ${{ github.workspace }}\dist\Aurora1-Setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -238,7 +255,7 @@ jobs:
         shell: pwsh
         run: |
           $failed = $false
-          foreach ($file in @("src-tauri\target\release\aether1.exe", "dist\Aether1-Setup.exe")) {
+          foreach ($file in @("src-tauri\target\release\aether1.exe", "dist\Aurora1-Setup.exe")) {
             $sig = Get-AuthenticodeSignature $file
             if ($sig.Status -eq 'NotSigned') {
               Write-Host "::error::$file is not signed, but signing was configured."
@@ -252,8 +269,116 @@ jobs:
       # Same one-day retention as the Linux bundle above, for the same reason.
       - uses: actions/upload-artifact@v4
         with:
-          name: aether1-offline-windows-installer
-          path: dist/Aether1-Setup.exe
+          name: aurora1-offline-windows-installer
+          path: dist/Aurora1-Setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  linux-appimage:
+    name: Linux AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # build.rs reads `git log` for the version it compiles in, which a depth-1 clone
+          # cannot answer.
+          fetch-depth: 0
+
+      # The same list as the slim bundle's: no cmake, because nothing here builds
+      # whisper.cpp. The AppImage bundler needs `file` and `fuse`-free extraction, both of
+      # which ubuntu-latest already has. `zsync` is the one addition: it carries
+      # `zsyncmake`, which writes the delta file that makes the AppImage updatable, and the
+      # packaging script refuses to build without it.
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl wget file libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libnotify-bin zsync
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # The packaging script runs the Tauri CLI through npx, so this job needs Node even
+      # though nothing it builds is JavaScript.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Package the AppImage
+        run: ./scripts/package_appimage_linux.sh dist
+
+      # Both files, and both required. The zsync alone is useless and the AppImage alone is
+      # a dead end: the update information baked into it names a zsync beside it in the
+      # release, so shipping one without the other is worse than shipping neither.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora1-linux-appimage
+          path: |
+            dist/Aurora1-x86_64.AppImage
+            dist/Aurora1-x86_64.AppImage.zsync
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-dmg:
+    name: macOS disk image (${{ matrix.arch }})
+    # Both images are built on the Apple Silicon runner. The SDK there carries both
+    # architectures, so the Intel one is `rustup target add` and a `--target` flag -- and
+    # keeping them on one runner image means the two differ in exactly that flag rather than
+    # in which macOS, which Xcode and which linker built them.
+    #
+    # `macos-latest` rather than a pinned image, which is the opposite of what the rest of
+    # this file does. It was `macos-14` first and both jobs were cancelled two seconds in
+    # with no runner assigned, no steps and no log -- what GitHub does with a label it will
+    # not serve, rather than the "no runner matching the labels" error it gives for a label
+    # it has never heard of. Pinning buys reproducibility only while the pin is honoured; an
+    # image that quietly stops being served costs the whole job instead, and there is no Mac
+    # here to notice it on. If a macOS upgrade ever breaks a build, pin it then, to whatever
+    # is being served that day.
+    runs-on: macos-latest
+    strategy:
+      # One architecture failing is worth knowing about separately from the other, and a
+      # cancelled sibling job teaches nothing.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Otherwise both matrix jobs share one cache key and the second to start restores
+          # the first's artifacts for the wrong architecture.
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Unsigned and unnotarized, deliberately: notarization needs a paid Apple Developer
+      # account, and there is not one. The disk image works; the first launch is right-click
+      # -> Open rather than a double-click, which the README says. Same position as the
+      # unsigned Windows installer, which this workflow has shipped from the start.
+      - name: Package the disk image
+        run: ./scripts/package_dmg_macos.sh dist ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aurora1-macos-dmg-${{ matrix.arch }}
+          path: dist/Aurora1-${{ matrix.arch }}.dmg
           if-no-files-found: error
           retention-days: 1
 
@@ -262,7 +387,7 @@ jobs:
     # Only for a real tag push -- workflow_dispatch is for testing the packaging itself
     # without also needing a release to exist to attach to.
     if: github.ref_type == 'tag'
-    needs: [linux-offline-bundle, linux-slim-bundle, windows-installer]
+    needs: [linux-offline-bundle, linux-slim-bundle, linux-appimage, windows-installer, macos-dmg]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -323,9 +448,12 @@ jobs:
           printf '%s' "$MINISIGN_KEY" > minisign.key
           chmod 600 minisign.key
 
-          for file in dist/aether1-offline-linux-x86_64.tar.gz \
-                      dist/aether1-slim-linux-x86_64.tar.gz \
-                      dist/Aether1-Setup.exe; do
+          for file in dist/aurora1-offline-linux-x86_64.tar.gz \
+                      dist/aurora1-slim-linux-x86_64.tar.gz \
+                      dist/Aurora1-x86_64.AppImage \
+                      dist/Aurora1-Setup.exe \
+                      dist/Aurora1-aarch64.dmg \
+                      dist/Aurora1-x86_64.dmg; do
             # -H prehashes. Not optional: the client verifies while it streams the download to
             # disk rather than reading half a gigabyte back afterwards, and a streaming verifier
             # can only check a prehashed signature.
@@ -352,8 +480,12 @@ jobs:
           # one. `dist/*.minisig` rather than three names: a release with no keypair configured
           # has none of them, and a missing glob is not an error the way a missing name is.
           files: |
-            dist/aether1-offline-linux-x86_64.tar.gz
-            dist/aether1-slim-linux-x86_64.tar.gz
-            dist/Aether1-Setup.exe
+            dist/aurora1-offline-linux-x86_64.tar.gz
+            dist/aurora1-slim-linux-x86_64.tar.gz
+            dist/Aurora1-x86_64.AppImage
+            dist/Aurora1-x86_64.AppImage.zsync
+            dist/Aurora1-Setup.exe
+            dist/Aurora1-aarch64.dmg
+            dist/Aurora1-x86_64.dmg
             dist/*.minisig
           generate_release_notes: true

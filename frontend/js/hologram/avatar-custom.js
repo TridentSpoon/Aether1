@@ -1,9 +1,9 @@
 /* The avatar you build yourself.
  *
  * One registered avatar, id "custom", assembled at build time from a *recipe*: a small
- * object saying which core, which inner ring, which outer ring, which effect, and how
- * it moves. The recipe lives in localStorage, written by the avatar workbench
- * (frontend/avatar-lab.html).
+ * object saying which core, which inner ring, which outer ring, which effect, which face
+ * -- eyes, brows and a mouth, each picked separately -- and how it moves. The recipe
+ * lives in localStorage, written by the avatar workbench (frontend/avatar-lab.html).
  *
  * The recipe is the thing that gets shared, not the code. That is deliberate -- a
  * recipe is a few lines of JSON that cannot do anything, so passing one to someone is
@@ -27,11 +27,28 @@
         innerRing: 'equalizerRing',
         outerRing: 'rings',
         effect: 'none',
+        eyes: 'none',
+        brows: 'none',
+        mouth: 'none',
         size: 26,
         radius: 62,
         spin: 0.15,
         bob: 4,
     };
+
+    /* The three face tiers, and which collection in the kit each recipe field names. The
+       field is singular where the kit's collection is plural, which is the convention the
+       first four tiers already set (innerRing names innerRings). Stated once here rather
+       than spelled out in normalise, build and the workbench, so adding a fourth face
+       tier later is one line in one place.
+
+       All three default to 'none'. A face is something you choose; an avatar that grew
+       eyes because its owner upgraded would be a fright. */
+    const FACE_TIERS = [
+        { field: 'eyes', kinds: 'eyes', label: 'Eyes' },
+        { field: 'brows', kinds: 'brows', label: 'Brows' },
+        { field: 'mouth', kinds: 'mouths', label: 'Mouth' },
+    ];
 
     /* Anything missing, misspelled or of the wrong type falls back to the default for
        that one field, so a recipe written by hand -- or by an older version of the
@@ -50,6 +67,9 @@
         if (!parts.innerRings[recipe.innerRing]) recipe.innerRing = DEFAULT_RECIPE.innerRing;
         if (!parts.outerRings[recipe.outerRing]) recipe.outerRing = DEFAULT_RECIPE.outerRing;
         if (!parts.effects[recipe.effect]) recipe.effect = DEFAULT_RECIPE.effect;
+        FACE_TIERS.forEach(({ field, kinds }) => {
+            if (!parts[kinds][recipe[field]]) recipe[field] = DEFAULT_RECIPE[field];
+        });
         const number = (value, fallback, min, max) =>
             (Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
         recipe.size = number(recipe.size, DEFAULT_RECIPE.size, 4, 70);
@@ -83,7 +103,11 @@
             const parts = window.AvatarParts;
             const group = new THREE.Group();
 
-            const options = { size: recipe.size, radius: recipe.radius };
+            /* A core that draws its own face needs telling, or the one it drew and the
+               one picked here both appear. Only facetedHeadCore does at the moment, and
+               it reads this; see the comment on its faceGroup. */
+            const faceSupplied = FACE_TIERS.some(({ field }) => recipe[field] !== 'none');
+            const options = { size: recipe.size, radius: recipe.radius, faceSupplied };
             const built = [
                 parts.cores[recipe.core].build(api, options),
                 parts.innerRings[recipe.innerRing].build(api, options),
@@ -105,7 +129,25 @@
             });
             group.add(built[3].object);
 
-            return { group, parts: built, zoomWraps, recipe };
+            /* The face goes inside the core's wrapper, so it zooms and leans with the head
+               it belongs to and draws after it. The parts themselves only know x and y:
+               one group carries all three forward to where the front of this particular
+               core is, which is what a head's faceZ says. A core that does not say -- every
+               core written before the face tiers existed -- gets a plane just outside a
+               sphere of its size, which is the right guess for most of them and is why the
+               older cores can wear a face at all. */
+            const face = new THREE.Group();
+            face.position.z = Number.isFinite(built[0].faceZ) ? built[0].faceZ : recipe.size * 0.9;
+            zoomWraps[0].add(face);
+            FACE_TIERS.forEach(({ field, kinds }) => {
+                const part = parts[kinds][recipe[field]].build(api, options);
+                face.add(part.object);
+                /* Appended, so built[0..3] stay the four tiers the zoom wrapping above
+                   indexes by position, while applyPalette and animate reach all of them. */
+                built.push(part);
+            });
+
+            return { group, parts: built, zoomWraps, face, recipe };
         },
 
         applyPalette(model, palette) {
@@ -170,6 +212,7 @@
     window.CustomAvatarRecipe = {
         key: RECIPE_KEY,
         defaults: DEFAULT_RECIPE,
+        faceTiers: FACE_TIERS,
         normalise,
         load: loadRecipe,
         save(recipe) {

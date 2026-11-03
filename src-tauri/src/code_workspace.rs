@@ -317,6 +317,7 @@ pub fn edit_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
         true,
         crate::llm::ActionStatus::Executed,
         None,
+        None,
     );
 
     Ok(format!(
@@ -362,6 +363,7 @@ pub fn create_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
         &serde_json::json!({ "path": resolved.to_string_lossy(), "overwrote": existed }),
         true,
         crate::llm::ActionStatus::Executed,
+        None,
         None,
     );
 
@@ -542,6 +544,7 @@ fn run_inner(db: &MemoryDb, args: &Value, approved_once: bool) -> Result<String,
             &serde_json::json!({ "argv": argv, "cwd": cwd.to_string_lossy() }),
             true,
             crate::llm::ActionStatus::Executed,
+            None,
             None,
         )
         .unwrap_or(0);

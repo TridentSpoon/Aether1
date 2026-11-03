@@ -7,7 +7,7 @@
 // one of them either captures what it needs to undo itself or admits up front that it
 // can't be undone.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -411,7 +411,7 @@ impl Tool for RunCommand {
             })
             .unwrap_or_default();
 
-        let mut child = Command::new(&binary)
+        let mut child = crate::paths::quiet_command(&binary)
             .args(&argv)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

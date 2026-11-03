@@ -331,7 +331,7 @@ impl Tool for SearchWeb {
     }
 
     fn description(&self) -> &'static str {
-        "Search the web for recent information using DuckDuckGo. Returns the top results with their titles and URLs. There is no page fetcher here, so report what the results say and give the operator the URL to open."
+        "Search the web for current information. Returns the top results with their titles, URLs and snippets. A snippet is a few words, not an answer: when the question turns on the detail, call fetch_url on the result most likely to carry it and answer from the page. Handing the operator a URL to open is not an answer -- you can open it yourself. If the search comes back empty, say so -- do not answer from memory instead."
     }
 
     fn parameters(&self) -> Value {
@@ -340,7 +340,7 @@ impl Tool for SearchWeb {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Search terms."
+                    "description": "What to search for, taken from what the operator actually asked. A model told off for forging a result has been seen retrying with a memorised stock query -- \"definition of artificial intelligence\" in answer to a question about a MotoGP race -- so this has to carry their subject, not an example."
                 }
             },
             "required": ["query"]
@@ -351,24 +351,21 @@ impl Tool for SearchWeb {
         false
     }
 
-    fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
-        let query = string_arg(args, "query")?;
-
-        if query.trim().is_empty() {
-            return Err("search query cannot be empty".to_string());
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        // Refused here as well as left out of the prompt. A model that has seen the tool
+        // in an earlier turn of the same conversation will call it anyway, and a gate that
+        // only edits the instructions is a gate the transcript can walk around.
+        if !super::web_tools_enabled(ctx.db) {
+            return Err(super::WEB_TOOLS_OFF.to_string());
         }
-
-        // DuckDuckGo's public API endpoint
-        let api_url = format!(
-            "https://api.duckduckgo.com/?q={}&format=json&no_html=1",
-            urlencoding::encode(query)
-        );
+        let query = crate::websearch::query_of(args)?;
+        let url = crate::websearch::url_for(&crate::websearch::endpoint(ctx.db), query);
 
         // This path had no local-only check of its own before the gate existed -- the
         // companion's own web search would still have reached DuckDuckGo with the mode
         // on. It cannot now, because the request cannot be built without asking.
-        let response = crate::net::get(&api_url, "the search was not made")?
-            .header("User-Agent", "AETHER1")
+        let response = crate::net::get(&url, "the search was not made")?
+            .header("User-Agent", crate::websearch::USER_AGENT)
             .call()
             .map_err(|e| format!("cannot search the web: {e}"))?;
 
@@ -377,54 +374,128 @@ impl Tool for SearchWeb {
             .read_to_string()
             .map_err(|e| format!("cannot read search results: {e}"))?;
 
-        let json: Value = serde_json::from_str(&body)
-            .map_err(|e| format!("search API returned invalid JSON: {e}"))?;
-
-        let mut results = String::new();
-        results.push_str(&format!("Search results for: {}\n\n", query));
-
-        // Add abstract/featured result if available
-        if let Some(abstract_text) = json.get("AbstractText").and_then(Value::as_str) {
-            if !abstract_text.trim().is_empty() {
-                if let Some(abstract_url) = json.get("AbstractURL").and_then(Value::as_str) {
-                    results.push_str(&format!(
-                        "Featured: {}\n{}\n\n",
-                        abstract_text.trim(),
-                        abstract_url
-                    ));
-                }
-            }
-        }
-
-        // Add main results
-        if let Some(search_results) = json.get("Results").and_then(Value::as_array) {
-            if search_results.is_empty() {
-                results.push_str("No results found.");
-            } else {
-                results.push_str("Results:\n");
-                for (idx, result) in search_results.iter().take(10).enumerate() {
-                    let title = result
-                        .get("Text")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Untitled");
-                    let url = result.get("FirstURL").and_then(Value::as_str).unwrap_or("");
-
-                    if !url.is_empty() {
-                        results.push_str(&format!("{}. {}\n   {}\n", idx + 1, title, url));
-                    }
-                }
-            }
-        } else {
-            results.push_str("No results found.");
-        }
+        let results = crate::websearch::render(query, &crate::websearch::parse(&body));
 
         const MAX_PAGE_BYTES: usize = 32 * 1024;
         Ok(Outcome::text(super::truncate(&results, MAX_PAGE_BYTES)))
     }
 }
 
+// ------------------------------------------------------------ fetch_url
+
+/// Reads one web page.
+///
+/// `search_web` answers "what exists"; this answers "what does it say". Without it a
+/// companion that has searched can only repeat an eight-word snippet or fill the rest in
+/// from its own memory, and filling it in from memory -- confidently, with the search as
+/// cover -- is the exact failure the search work has kept running into. A result list with
+/// nothing to open is half a tool.
+///
+/// The same egress gate as every other outbound request: `net::get` refuses in local-only
+/// mode, and the refusal names what did not happen.
+pub struct FetchUrl;
+
+/// Enough of a page for an answer, and not enough to spend a local model's whole context
+/// on one document. A 7B with an 8K window cannot be handed 200KB of HTML.
+const MAX_PAGE_CHARS: usize = 12_000;
+
+impl Tool for FetchUrl {
+    fn name(&self) -> &'static str {
+        "fetch_url"
+    }
+
+    fn description(&self) -> &'static str {
+        "Read one web page and return its text. Use it after search_web to read a result rather than answering from its snippet. http and https only, and the page comes back as plain text with the markup stripped -- a site that needs JavaScript to say anything will come back nearly empty, which means read a different result rather than guess at this one."
+    }
+
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The full address of the page, including http:// or https://."
+                }
+            },
+            "required": ["url"]
+        })
+    }
+
+    fn mutating(&self) -> bool {
+        false
+    }
+
+    fn call(&self, args: &Value, ctx: &ToolContext) -> Result<Outcome, String> {
+        // The same switch search_web answers to. Reading a page the search could not have
+        // found is still this conversation going out to the internet.
+        if !super::web_tools_enabled(ctx.db) {
+            return Err(super::WEB_TOOLS_OFF.to_string());
+        }
+        let url = args
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "fetch_url needs a url: {\"url\": \"https://...\"}".to_string())?
+            .trim();
+
+        // A model that has been told to fetch a page will sometimes offer a `file://` or a
+        // bare hostname. Neither is a web page, and `file://` in particular is a way to ask
+        // this tool to read the disk without going through the path guard that exists for
+        // exactly that -- so the scheme is checked here rather than left to ureq.
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            return Err(format!(
+                "fetch_url reads web pages, so the address has to start with http:// or \
+                 https:// -- {url:?} does not. To read a file on this computer, use read_file."
+            ));
+        }
+
+        let response = crate::net::get(url, "the page was not fetched")?
+            .header("User-Agent", crate::websearch::USER_AGENT)
+            .call()
+            .map_err(|e| format!("cannot fetch {url}: {e}"))?;
+
+        let body = response
+            .into_body()
+            .read_to_string()
+            .map_err(|e| format!("cannot read {url}: {e}"))?;
+
+        let text = crate::websearch::readable_text(&body);
+        if text.trim().is_empty() {
+            // Said plainly, because the alternative is a model receiving an empty string
+            // and treating it as permission to describe the page from memory.
+            return Ok(Outcome::text(format!(
+                "{url} returned no readable text. It may need JavaScript, or it may not be a \
+                 page. Nothing is known about its contents -- read another result rather \
+                 than describing this one."
+            )));
+        }
+
+        Ok(Outcome::text(format!(
+            "[PAGE] {url}\n\n{}",
+            super::truncate(&text, MAX_PAGE_CHARS)
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// `search_web` described itself as the only web tool there was -- "there is no page
+    /// fetcher here, so report what the results say and give the operator the URL to
+    /// open". `fetch_url` was added in #243 and this sentence was not revisited, so for a
+    /// release the model was told in the tool catalogue itself that the follow-up did not
+    /// exist. It obeyed.
+    #[test]
+    fn search_web_does_not_claim_there_is_no_page_fetcher() {
+        let described = super::SearchWeb.description();
+        assert!(
+            !described.contains("no page fetcher"),
+            "there is one, and it is listed beside this tool: {described}"
+        );
+        assert!(
+            described.contains("fetch_url"),
+            "the search has to name its own follow-up: {described}"
+        );
+    }
+
     use super::*;
     use crate::llm::MemoryDb;
 
@@ -433,6 +504,47 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_tools_{name}_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(path).unwrap()
+    }
+
+    /* The Search chip under the chat box is a setting, not a per-message flag, and the
+    engine leaves the two web tools out of the prompt when it is off. That alone is not
+    a gate: a model that saw `search_web` in an earlier turn of the same conversation
+    will call it again from the transcript, and the instructions it is reading now never
+    mentioned it. Both tools are refused here as well, and the refusal says what to do
+    about it -- a model told only "cannot search" has been seen answering from memory
+    and presenting it as a lookup. */
+    #[test]
+    fn the_web_tools_are_refused_when_web_lookups_are_switched_off() {
+        let db = temp_db("web_off");
+        db.set_setting("web_search_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        let ctx = ToolContext::new(&db);
+
+        let searched = SearchWeb
+            .call(&json!({"query": "who won the 2026 title"}), &ctx)
+            .unwrap_err();
+        assert!(searched.contains("switched off"), "{searched}");
+        assert!(
+            searched.contains("rather than answering from memory"),
+            "the refusal has to say what to do instead: {searched}"
+        );
+
+        let fetched = FetchUrl
+            .call(&json!({"url": "https://example.com"}), &ctx)
+            .unwrap_err();
+        assert!(fetched.contains("switched off"), "{fetched}");
+    }
+
+    /// Defaults on, so an install that has never touched the chip behaves exactly as it
+    /// did before there was one. Checked through the gate rather than through the tool,
+    /// which would need the network to get any further.
+    #[test]
+    fn web_lookups_are_on_until_they_are_switched_off() {
+        let db = temp_db("web_default");
+        assert!(super::super::web_tools_enabled(&db));
+        db.set_setting("web_search_enabled", &serde_json::Value::Bool(false))
+            .unwrap();
+        assert!(!super::super::web_tools_enabled(&db));
     }
 
     #[test]
@@ -624,5 +736,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `file://` through a web fetcher would be a way to read the disk without passing the
+    /// path guard that exists for exactly that, so the scheme is refused before any request
+    /// is built -- which is also why this test needs no network.
+    #[test]
+    fn fetch_url_reads_web_pages_and_not_the_disk() {
+        let db = temp_db("fetch_scheme");
+        let ctx = ToolContext::new(&db);
+        for address in [
+            "file:///etc/passwd",
+            "/etc/passwd",
+            "ftp://example.com/x",
+            "example.com",
+        ] {
+            let err = FetchUrl
+                .call(&json!({"url": address}), &ctx)
+                .expect_err("{address} is not a web page");
+            assert!(err.contains("http://"), "{address}: {err}");
+            assert!(err.contains("read_file"), "{address}: {err}");
+        }
+    }
+
+    #[test]
+    fn fetch_url_needs_an_address() {
+        let db = temp_db("fetch_noargs");
+        let ctx = ToolContext::new(&db);
+        let err = FetchUrl.call(&json!({}), &ctx).unwrap_err();
+        assert!(err.contains("url"), "{err}");
     }
 }

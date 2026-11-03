@@ -276,7 +276,7 @@ pub(crate) fn detect_linux(drm_root: &std::path::Path, pci_ids: Option<&str>) ->
 /// Asks `nvidia-smi`, which is the only thing that knows an NVIDIA card's memory on Linux.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn nvidia_smi_gpus() -> Vec<Gpu> {
-    let Ok(output) = std::process::Command::new("nvidia-smi")
+    let Ok(output) = crate::paths::quiet_command("nvidia-smi")
         .args([
             "--query-gpu=name,memory.total",
             "--format=csv,noheader,nounits",
@@ -336,7 +336,7 @@ Get-ChildItem $class | ForEach-Object {
   }
 } | ConvertTo-Json -Compress
 "#;
-    let Ok(output) = std::process::Command::new("powershell")
+    let Ok(output) = crate::paths::quiet_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
         .output()
     else {
@@ -380,7 +380,7 @@ pub(crate) fn parse_windows_adapters(json: &str) -> Vec<Gpu> {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn detect_macos() -> Vec<Gpu> {
-    let Ok(output) = std::process::Command::new("system_profiler")
+    let Ok(output) = crate::paths::quiet_command("system_profiler")
         .args(["SPDisplaysDataType", "-json"])
         .output()
     else {

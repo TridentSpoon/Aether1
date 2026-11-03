@@ -17,6 +17,13 @@
 //! worst outcome is that speech sounds wrong; corrupt an engine download and the worst
 //! outcome is code running as the operator. Those are not the same risk and are not treated
 //! as one.
+//!
+//! That still holds, and `graft_install` is not a counter-example to it: that module installs
+//! a program, but it does not *fetch* one. It runs `npm install -g`, so the URL, the integrity
+//! check and the placement on PATH all belong to the operator's own package manager, which is
+//! the same "installed through their own package manager" this paragraph already trusts for
+//! the engine half. If something ever wants to download a program here directly, the rule
+//! above is the one it has to argue with.
 
 use std::io::{Read, Write};
 use std::path::Path;

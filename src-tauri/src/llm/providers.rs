@@ -37,6 +37,18 @@ pub type Sink<'a> = &'a mut dyn FnMut(&str);
 pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String {
     let lowered = raw.to_lowercase();
     let local = matches!(provider, Provider::Ollama | Provider::LmStudio);
+    /* What to call it in front of the operator. `Display` is the settings key, which is
+    right for a log line and wrong here: it put "lmstudio rejected the request itself" in
+    front of somebody who does not have LM Studio installed, because that key drives every
+    OpenAI-compatible local server. `label` no longer guesses at a product -- and for a
+    local server the endpoint is the only thing that actually identifies which program
+    refused, so it is said. */
+    let named = provider.label();
+    let at = if local {
+        format!(" at {endpoint}")
+    } else {
+        String::new()
+    };
 
     // Where the operator would go to fix it, named as it appears in Settings. A gateway
     // has its own key field, and sending someone to the provider one -- which they may
@@ -49,23 +61,65 @@ pub fn explain_failure(provider: Provider, endpoint: &str, raw: &str) -> String 
     };
 
     if lowered.contains("401") || lowered.contains("unauthorized") {
-        return format!("{provider} rejected the API key -- check the {key_field}.");
+        return format!("{named}{at} rejected the API key -- check the {key_field}.");
     }
     if lowered.contains("403") || lowered.contains("forbidden") {
         if lowered.contains("proxy") {
             return format!(
-                "a proxy on this network refused the connection to {provider}, so the request never arrived."
+                "a proxy on this network refused the connection to {named}, so the request never arrived."
             );
         }
         return format!(
-            "{provider} refused the API key -- it may lack access to this model, or be for the wrong account."
+            "{named} refused the API key -- it may lack access to this model, or be for the wrong account."
         );
     }
     // 400 is the provider saying the request was wrong rather than the key or the network,
     // and its body says which part. That body is worth more than anything that could be
     // written here, so this passes it through instead of paraphrasing it away.
+    /* One 400 is worth paraphrasing, because its body names the problem and says nothing
+    about the fix. "request (5242 tokens) exceeds the available context size (4096
+    tokens)" on a *first* question is not a long conversation -- it is the system prompt
+    not fitting, and it will happen again on every question until the model is reloaded.
+    An OpenAI-shaped server takes the context from however the model was loaded, not from
+    the request, so there is nothing AETHER1 can set to get round it. See `num_ctx` in
+    `ollama_payload` for the provider where there is. */
+    if lowered.contains("exceeds the available context size")
+        || (lowered.contains("context") && lowered.contains("exceed"))
+    {
+        /* Which program to go and change this in cannot be known from here -- the
+        endpoint is the only honest identification -- so both common spellings of the
+        same knob are named and the operator picks the one their server has. */
+        let where_to = if local {
+            " Load the model again with a bigger context -- 8192 or more. On a llama.cpp              server that is `--ctx-size 8192`; in LM Studio it is the context length on              the model's load settings; through Ollama's OpenAI-compatible endpoint it is              the model's `num_ctx`."
+        } else {
+            ""
+        };
+        return format!(
+            "the server{at} loaded this model with a context too small for a single \
+             question: the prompt alone did not fit, so the length of the conversation had \
+             nothing to do with it. That context is fixed when the model is loaded rather \
+             than per request, so AETHER1 cannot raise it from here.{where_to} The refusal \
+             as it arrived: {raw}"
+        );
+    }
+    /* A second 400 worth paraphrasing, for the same reason: the body names the problem
+    precisely and the fix is not the one it reads like. An Anthropic key created at the
+    organisation level rather than inside a workspace is refused until the request carries
+    an `anthropic-workspace-id` header -- which AETHER1 has nowhere to put, since nothing
+    in Settings asks for a workspace. So the actionable half is the *other* half of what
+    Anthropic says: use a key that is scoped to a workspace. Without this the operator
+    reads a header name and reasonably goes looking for a header field. */
+    if lowered.contains("anthropic-workspace-id") || lowered.contains("scoped to a workspace") {
+        return format!(
+            "{named} refused this API key because it belongs to the organisation rather \
+             than to one workspace, and a key like that has to name a workspace on every \
+             request. AETHER1 has nowhere to put that, so the fix is a different key: \
+             create one inside a workspace in the Anthropic console and paste it into the \
+             {key_field}. The refusal as it arrived: {raw}"
+        );
+    }
     if lowered.contains("400") || lowered.contains("invalid_request") {
-        return format!("{provider} rejected the request itself: {raw}");
+        return format!("{named}{at} rejected the request itself: {raw}");
     }
     if lowered.contains("404") || lowered.contains("not found") {
         if provider == Provider::Gateway {
@@ -152,6 +206,9 @@ pub struct ChatContext<'a> {
     /// The tool rounds already taken *this turn*. Providers replay these in their own
     /// shape so the model sees what it asked for and what came back.
     pub exchanges: &'a [Exchange],
+    /// How much reasoning to ask this model for. Each provider turns it into whatever its
+    /// own API calls that, or into nothing at all where there is no safe way to ask.
+    pub reasoning: Reasoning,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -307,6 +364,13 @@ pub struct TokenUsage {
 #[derive(Debug, Clone, Default)]
 pub struct Completion {
     pub text: String,
+    /// The model's own reasoning, kept apart from the answer rather than left in it.
+    ///
+    /// Empty when the model did not think, was not asked to, or thought where nothing can
+    /// see it -- OpenAI's reasoning models bill for thinking tokens and return none of
+    /// them. It is never stored in the conversation and never spoken: it is working, not
+    /// the reply, and a transcript that keeps it reads as something nobody said.
+    pub reasoning: String,
     pub usage: Option<TokenUsage>,
     /// Tools the model asked for through the provider's own tool-calling shape. Empty when
     /// it asked for none, and always empty for providers driven by the text protocol --
@@ -316,53 +380,497 @@ pub struct Completion {
 
 /// A stream that produced no text at all is a failure even when the transport succeeded --
 /// an empty reply would otherwise reach the operator as silence.
-fn finish(accumulated: String, usage: Option<TokenUsage>) -> Result<Completion, String> {
-    finish_with(accumulated, usage, Vec::new())
-}
-
-/// As `finish`, for the native tool-calling paths.
 ///
-/// A turn that asked for a tool and said nothing else is not an empty reply -- it is the
-/// most ordinary shape there is, and the emptiness check that protects the text path would
-/// reject every one of them.
+/// A turn that asked for a tool and said nothing else is not an empty reply, though -- it
+/// is the most ordinary shape there is -- so the emptiness check applies only when there
+/// are no calls either.
+///
+/// Nor is a turn that was only reasoning, and this is the one place that could have
+/// reported it as one: a thinking model cut off after `</think>` has said something, it
+/// just has not finished saying it. Showing the thought beats "stream ended without any
+/// content", which is what the operator used to get.
 fn finish_with(
-    accumulated: String,
+    relay: &mut Relay,
     usage: Option<TokenUsage>,
     calls: Vec<NativeCall>,
 ) -> Result<Completion, String> {
-    let trimmed = accumulated.trim().to_string();
-    if trimmed.is_empty() && calls.is_empty() {
+    let (text, reasoning) = relay.finish();
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() && calls.is_empty() && reasoning.trim().is_empty() {
         return Err("stream ended without any content".to_string());
     }
     Ok(Completion {
         text: trimmed,
+        reasoning: reasoning.trim().to_string(),
         usage,
         calls,
     })
 }
 
+// ---------------------------------------------------------------- Reasoning
+
+/// The tag pairs a model wraps its reasoning in when the server hands it back inside the
+/// answer rather than in a field of its own. qwen3, deepseek-r1 and the rest of the local
+/// thinking models all do this, and llama.cpp, LM Studio and Ollama-without-`think` all
+/// pass it straight through -- which is how `<think>` ended up on screen as if it were the
+/// reply. Longest-first is not needed here: `<think>` is not a prefix of `<thinking>`,
+/// because of the closing bracket.
+const THOUGHT_TAGS: [(&str, &str); 2] = [("<think>", "</think>"), ("<thinking>", "</thinking>")];
+
+/// How much of its own reasoning the model is asked to do, and to show.
+///
+/// `Auto` is the default and the reason this is five values rather than a checkbox. Asking
+/// for reasoning is not free and not universally safe: Ollama refuses `think` outright for
+/// a model that cannot do it, an older OpenAI-compatible server can 400 on a field it has
+/// never heard of, and Anthropic and Gemini both bill for thinking tokens. So `Auto` means
+/// "take the reasoning whenever the model offers it, and switch thinking on only where
+/// doing so cannot break or bill anything" -- which turns out to cover the case that
+/// matters on this machine, a local thinking model that was already thinking and was
+/// writing `<think>` into the chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reasoning {
+    /// Never ask. A model that thinks anyway still has its thinking taken out of the
+    /// answer -- it is simply not shown. Keeping it in would put `<think>` in the
+    /// transcript and in the tool parser's way, which is what this whole change is about.
+    Off,
+    #[default]
+    Auto,
+    Low,
+    Medium,
+    High,
+}
+
+impl Reasoning {
+    pub fn from_setting(key: &str) -> Reasoning {
+        match key.trim().to_lowercase().as_str() {
+            "off" | "none" | "false" => Reasoning::Off,
+            "low" => Reasoning::Low,
+            "medium" | "on" | "true" => Reasoning::Medium,
+            "high" | "max" => Reasoning::High,
+            // Including the empty string and anything unrecognised: a setting nobody has
+            // touched, or one written by a newer build, should leave the sensible default
+            // in place rather than silently turning reasoning off.
+            _ => Reasoning::Auto,
+        }
+    }
+
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Reasoning::Off => "off",
+            Reasoning::Auto => "auto",
+            Reasoning::Low => "low",
+            Reasoning::Medium => "medium",
+            Reasoning::High => "high",
+        }
+    }
+
+    /// Whether the operator wants to see reasoning at all. False only for `Off`.
+    pub fn shown(self) -> bool {
+        self != Reasoning::Off
+    }
+
+    /// The effort level, for providers that take one. None under `Auto` on purpose: the
+    /// field itself is what an older server rejects, so the safe default is to send none
+    /// and keep whatever the model does by default.
+    pub fn effort(self) -> Option<&'static str> {
+        match self {
+            Reasoning::Low => Some("low"),
+            Reasoning::Medium => Some("medium"),
+            Reasoning::High => Some("high"),
+            Reasoning::Off | Reasoning::Auto => None,
+        }
+    }
+
+    /// Anthropic's thinking budget in tokens. Its minimum is 1024, and the budget has to
+    /// leave room under `max_tokens` for the answer itself -- a budget equal to the cap is
+    /// a reply that thinks and then has nothing left to say with.
+    fn anthropic_budget(self) -> Option<u32> {
+        match self {
+            Reasoning::Low => Some(1024),
+            Reasoning::Medium => Some(4096),
+            Reasoning::High => Some(6144),
+            Reasoning::Off | Reasoning::Auto => None,
+        }
+    }
+
+    /// Gemini's `thinkingBudget`, in the same spirit.
+    fn gemini_budget(self) -> Option<i64> {
+        match self {
+            Reasoning::Low => Some(1024),
+            Reasoning::Medium => Some(8192),
+            Reasoning::High => Some(24576),
+            Reasoning::Off | Reasoning::Auto => None,
+        }
+    }
+}
+
+/// Pulls the reasoning out of an answer that has it written inline.
+///
+/// Streaming is the whole difficulty: `<think>` can arrive split across two deltas, so the
+/// same trick `FenceFilter` uses applies -- hold back anything that could still turn out to
+/// be the beginning of a tag, and release it once it cannot. Getting this wrong in the
+/// cheap way (strip the tags at the end of the turn) would put the reasoning on screen as
+/// the answer for as long as the model took to think, which on a 7B is most of the turn.
+#[derive(Default)]
+struct ThoughtSplitter {
+    holding: String,
+    /// Which pair of tags is open, as an index into `THOUGHT_TAGS`, so the closer looked
+    /// for is the one belonging to the opener that was actually seen.
+    inside: Option<usize>,
+}
+
+/// One delta, taken apart.
+#[derive(Default, PartialEq, Debug)]
+struct Split {
+    answer: String,
+    thought: String,
+}
+
+impl ThoughtSplitter {
+    fn push(&mut self, delta: &str) -> Split {
+        self.holding.push_str(delta);
+        let mut out = Split::default();
+
+        loop {
+            match self.inside {
+                Some(open) => {
+                    let close = THOUGHT_TAGS[open].1;
+                    match self.holding.find(close) {
+                        Some(end) => {
+                            out.thought.push_str(&self.holding[..end]);
+                            self.holding = self.holding[end + close.len()..].to_string();
+                            self.inside = None;
+                        }
+                        None => {
+                            let keep = partial_tag_len(&self.holding, &[close]);
+                            let release = self.holding.len() - keep;
+                            out.thought.push_str(&self.holding[..release]);
+                            self.holding = self.holding[release..].to_string();
+                            return out;
+                        }
+                    }
+                }
+                None => {
+                    let found = THOUGHT_TAGS
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, (open, _))| {
+                            self.holding.find(open).map(|at| (at, index))
+                        })
+                        .min();
+                    match found {
+                        Some((at, index)) => {
+                            out.answer.push_str(&self.holding[..at]);
+                            self.holding =
+                                self.holding[at + THOUGHT_TAGS[index].0.len()..].to_string();
+                            self.inside = Some(index);
+                        }
+                        None => {
+                            let openers: Vec<&str> =
+                                THOUGHT_TAGS.iter().map(|(open, _)| *open).collect();
+                            let keep = partial_tag_len(&self.holding, &openers);
+                            let release = self.holding.len() - keep;
+                            out.answer.push_str(&self.holding[..release]);
+                            self.holding = self.holding[release..].to_string();
+                            return out;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whatever is still held when the model stops talking.
+    ///
+    /// An unterminated block counts as reasoning rather than as answer. A thinking model
+    /// cut off mid-thought has produced no answer at all, and releasing half a thought into
+    /// the reply -- which is what dropping this on the answer side would do -- is how
+    /// `<think>` reached the screen in the first place.
+    fn finish(&mut self) -> Split {
+        let held = std::mem::take(&mut self.holding);
+        if self.inside.is_some() {
+            Split {
+                answer: String::new(),
+                thought: held,
+            }
+        } else {
+            Split {
+                answer: held,
+                thought: String::new(),
+            }
+        }
+    }
+}
+
+/// The longest proper prefix of any of `tags` that is a suffix of `text`.
+///
+/// Every tag is ASCII, so a suffix that matches one ends on a character boundary and the
+/// caller can slice at it -- the same reason `partial_fence_len` can do this.
+fn partial_tag_len(text: &str, tags: &[&str]) -> usize {
+    let bytes = text.as_bytes();
+    let longest = tags.iter().map(|tag| tag.len()).max().unwrap_or(0);
+    for len in (1..longest).rev() {
+        if bytes.len() < len {
+            continue;
+        }
+        let tail = &bytes[bytes.len() - len..];
+        if tags
+            .iter()
+            .any(|tag| tag.len() > len && tag.as_bytes()[..len] == *tail)
+        {
+            return len;
+        }
+    }
+    0
+}
+
+/// The two things a model says, on their way to two different places.
+///
+/// Every provider writes through this rather than straight to a sink, which is what makes
+/// "the reasoning is not the answer" true in one place instead of four. Text handed to
+/// `say` goes through the splitter, so a model that writes `<think>` inline is divided
+/// exactly like one whose server reports thinking in a field of its own -- and the
+/// `thinking` channel exists for the servers that do.
+///
+/// It accumulates as well as forwarding, so the completion's text is by construction the
+/// same text the sink saw. Keeping the two in step by hand is what went wrong often enough
+/// elsewhere in this file to be worth designing out.
+pub struct Relay<'a> {
+    answer: Option<Sink<'a>>,
+    thought: Option<Sink<'a>>,
+    /// Off entirely under `Reasoning::Off`: the thinking is still taken out of the answer,
+    /// it just never reaches a sink or the completion.
+    show: bool,
+    split: ThoughtSplitter,
+    text: String,
+    reasoning: String,
+}
+
+impl<'a> Relay<'a> {
+    pub fn new(answer: Sink<'a>, thought: Sink<'a>, show: bool) -> Relay<'a> {
+        Relay {
+            answer: Some(answer),
+            thought: Some(thought),
+            show,
+            split: ThoughtSplitter::default(),
+            text: String::new(),
+            reasoning: String::new(),
+        }
+    }
+
+    /// A relay with nowhere to stream to, for the blocking paths. It still splits, so a
+    /// non-streamed reply from a thinking model is taken apart the same way.
+    pub fn quiet(show: bool) -> Relay<'a> {
+        Relay {
+            answer: None,
+            thought: None,
+            show,
+            split: ThoughtSplitter::default(),
+            text: String::new(),
+            reasoning: String::new(),
+        }
+    }
+
+    /// Text from the provider's answer channel, which may have reasoning written into it.
+    pub fn say(&mut self, delta: &str) {
+        let split = self.split.push(delta);
+        self.note_thought(&split.thought);
+        if !split.answer.is_empty() {
+            self.text.push_str(&split.answer);
+            if let Some(sink) = self.answer.as_deref_mut() {
+                sink(&split.answer);
+            }
+        }
+    }
+
+    /// Text the provider has already split out of its reasoning, pushed through without
+    /// the splitter. Used on the non-streaming retry: that path's text came back from a
+    /// relay of its own, so running it through this one's half-open state would be wrong.
+    pub fn answered(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.text.push_str(text);
+        if let Some(sink) = self.answer.as_deref_mut() {
+            sink(text);
+        }
+    }
+
+    /// The answer so far, for deciding whether a failed stream can be retried.
+    pub fn so_far(&self) -> &str {
+        &self.text
+    }
+
+    /// Reasoning the provider reported in a field of its own -- Ollama's `thinking`,
+    /// OpenAI's `reasoning_content`, Anthropic's `thinking_delta`, a Gemini thought part.
+    /// It never goes through the splitter: it is already separated, and a `<think>` tag
+    /// inside it would be the model quoting one.
+    pub fn thinking(&mut self, delta: &str) {
+        self.note_thought(delta);
+    }
+
+    fn note_thought(&mut self, delta: &str) {
+        if delta.is_empty() || !self.show {
+            return;
+        }
+        self.reasoning.push_str(delta);
+        if let Some(sink) = self.thought.as_deref_mut() {
+            sink(delta);
+        }
+    }
+
+    /// Releases anything the splitter was holding and hands back both halves.
+    ///
+    /// Takes `&mut self` rather than consuming, because the providers are handed a relay by
+    /// reference -- one relay spans the retry from the streaming path to the blocking one,
+    /// so that an answer half-streamed before a failure is not counted twice.
+    fn finish(&mut self) -> (String, String) {
+        let tail = self.split.finish();
+        if !tail.answer.is_empty() {
+            self.text.push_str(&tail.answer);
+            if let Some(sink) = self.answer.as_deref_mut() {
+                sink(&tail.answer);
+            }
+        }
+        let thought = tail.thought;
+        self.note_thought(&thought);
+        (
+            std::mem::take(&mut self.text),
+            std::mem::take(&mut self.reasoning),
+        )
+    }
+}
+
 // ---------------------------------------------------------------- Ollama
+//
+// Driven through `/api/chat`, not `/api/generate`.
+//
+// `/api/generate` takes one `prompt` string, so the only way to give it a conversation was
+// to flatten the whole thing into a fake transcript -- "USER: ...\nA1: ..." -- and hand it
+// over as a single user turn. Two things followed from that, and both were reported as the
+// product not working:
+//
+//   * The model's own chat template was applied to the transcript rather than to the turns
+//     inside it. A model trained to answer the last user message instead saw a block of
+//     dialogue, and answered the way a model does when it is asked to continue a script:
+//     echoing the question back, inventing the next few turns, losing the system prompt.
+//   * There is no `tools` field on `/api/generate` at all. Every local model was therefore
+//     on the fenced-text protocol whatever it was capable of, and a 7B asked to emit JSON
+//     in a fence mostly does not -- so the companion could not search the web, and said so
+//     in whatever words it liked.
+//
+// `/api/chat` takes `messages` with roles, `tools` in the same shape OpenAI uses, and
+// `tool_calls` back on the assistant message. So a model Ollama reports as tool-capable
+// gets real tool calling, and every model gets its own template applied to real turns.
+//
+// `num_ctx` is set explicitly for the same class of reason. Ollama's default context is
+// 4096 tokens regardless of what the model can do, and AETHER1's system prompt (persona,
+// telemetry, the code graph, the tool rules) plus eight messages of history goes past that
+// on a long conversation. What falls off the front when it does is the system prompt --
+// so the model stopped knowing it had tools, or who it was, for reasons nothing reported.
+
+/// How much context to ask a local model for when its own limit is larger.
+///
+/// Context is memory: a 128K window on a 7B is several gigabytes of KV cache, and asking
+/// for it on a 16GB card to hold a chat is how a model ends up swapping to CPU and taking
+/// a minute a reply. 16K is comfortably more than a system prompt plus a tool round plus
+/// the history AETHER1 sends, which is the whole requirement.
+const LOCAL_CTX_CEILING: u64 = crate::fit::CTX_CEILING as u64;
+
+/// The floor, for a model that reports something tiny or reports nothing at all. Ollama's
+/// own default is 4096 and that is the number that was overflowing.
+const LOCAL_CTX_FLOOR: u64 = crate::fit::CTX_FLOOR as u64;
 
 #[derive(Serialize)]
 struct OllamaOptions {
     temperature: f32,
     top_p: f32,
+    num_ctx: u64,
 }
 
 #[derive(Serialize)]
-struct OllamaRequest {
+struct OllamaChatRequest {
     model: String,
-    prompt: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    images: Vec<String>,
+    messages: Vec<OllamaMessage>,
     stream: bool,
     options: OllamaOptions,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiToolDef>>,
+    /// Sent only when the server has told us this model can think -- see
+    /// `LocalFacts::thinking`, which comes off the same `/api/show` capabilities list the
+    /// tool support is read from. Ollama rejects the field outright for a model without
+    /// the capability ("does not support thinking"), so sending it blind would break every
+    /// existing local setup to gain a feature on some of them.
+    ///
+    /// `Some(false)` is not the same as `None` and is the real off switch: a thinking
+    /// model thinks by default, so turning reasoning off means saying so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
+}
+
+/// One message in Ollama's chat shape. Images ride on the message they belong to as bare
+/// base64, and a tool result is role `tool` with the name of the tool that produced it --
+/// Ollama has no call ids, so the name is what pairs a result to its question.
+#[derive(Serialize, Clone, Debug)]
+struct OllamaMessage {
+    role: String,
+    content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_name: Option<String>,
+}
+
+impl OllamaMessage {
+    fn plain(role: &str, content: String) -> OllamaMessage {
+        OllamaMessage {
+            role: role.to_string(),
+            content,
+            images: Vec::new(),
+            tool_calls: None,
+            tool_name: None,
+        }
+    }
+}
+
+/// A tool call as Ollama reports it. No id and no streamed fragments: the whole call
+/// arrives in one object, and `arguments` is a JSON *object* rather than the string
+/// OpenAI sends.
+#[derive(Deserialize, Default, Clone)]
+struct OllamaToolCall {
+    #[serde(default)]
+    function: OllamaCallFunction,
+}
+
+#[derive(Deserialize, Default, Clone)]
+struct OllamaCallFunction {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Deserialize, Default)]
+struct OllamaChatMessage {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Option<Vec<OllamaToolCall>>,
+    /// Ollama's own channel for reasoning, filled when `think` was sent. A field beside
+    /// `content` rather than inside it, which is the one thing that makes this provider's
+    /// split trustworthy: no tag parsing is involved.
+    #[serde(default)]
+    thinking: String,
 }
 
 #[derive(Deserialize, Default)]
 struct OllamaResponse {
+    /// `/api/chat` answers under `message`; the field is optional because the final object
+    /// of a stream carries only the counts.
     #[serde(default)]
-    response: String,
+    message: Option<OllamaChatMessage>,
     /// Only on the final object of a stream (and on a non-streamed reply), which is why
     /// each is an Option rather than a count that happens to be zero most of the time.
     #[serde(default)]
@@ -371,6 +879,12 @@ struct OllamaResponse {
     eval_count: Option<u64>,
     #[serde(default)]
     eval_duration: Option<u64>,
+    /// Per-token log probabilities, present only when the request asked for them -- which
+    /// only the judge does. Absent entirely on a server too old to know the field, and
+    /// that absence is the whole fail-safe: no logprobs means no confidence, and no
+    /// confidence means the router never abstains. See `Confidence`.
+    #[serde(default)]
+    logprobs: Option<Vec<TokenLogprob>>,
 }
 
 impl OllamaResponse {
@@ -381,33 +895,197 @@ impl OllamaResponse {
             eval_nanos: self.eval_duration,
         })
     }
+
+    fn text(&self) -> &str {
+        self.message
+            .as_ref()
+            .map(|m| m.content.as_str())
+            .unwrap_or("")
+    }
+
+    /// The reasoning on this object, which is empty on every object of a stream but the
+    /// ones the model was still thinking on.
+    fn thought(&self) -> &str {
+        self.message
+            .as_ref()
+            .map(|m| m.thinking.as_str())
+            .unwrap_or("")
+    }
+
+    /// The calls on this object, given positional ids. Ollama issues none, and the loop
+    /// that sends results back needs something to pair them with.
+    fn calls(&self, from: usize) -> Vec<NativeCall> {
+        self.message
+            .as_ref()
+            .and_then(|m| m.tool_calls.as_ref())
+            .map(|calls| {
+                calls
+                    .iter()
+                    .enumerate()
+                    .map(|(index, call)| NativeCall {
+                        id: format!("call_{}", from + index),
+                        tool: call.function.name.clone(),
+                        arguments: if call.function.arguments.is_null() {
+                            Value::Object(Default::default())
+                        } else {
+                            call.function.arguments.clone()
+                        },
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
-fn ollama_payload(model: &str, ctx: &ChatContext, stream: bool) -> OllamaRequest {
-    let mut prompt_body = format!("{}\n\n", ctx.system_prompt);
-    for msg in ctx.history {
-        prompt_body.push_str(&format!("{}: {}\n", msg.sender.to_uppercase(), msg.text));
-    }
-    prompt_body.push_str(&format!("USER: {}\n{}:", ctx.prompt, ctx.agent_name));
+fn ollama_payload(
+    model: &str,
+    ctx: &ChatContext,
+    stream: bool,
+    facts: LocalFacts,
+) -> OllamaChatRequest {
+    let model = if model.is_empty() { "llama3.1" } else { model };
 
-    OllamaRequest {
-        model: if model.is_empty() { "llama3" } else { model }.to_string(),
-        prompt: prompt_body,
+    let mut messages = vec![OllamaMessage::plain(
+        "system",
+        ctx.system_prompt.to_string(),
+    )];
+    for msg in ctx.history {
+        messages.push(OllamaMessage::plain(
+            &role_for(&msg.sender, "assistant"),
+            msg.text.clone(),
+        ));
+    }
+    messages.push(OllamaMessage {
+        role: "user".to_string(),
+        content: ctx.prompt.to_string(),
         images: ctx
             .images
             .iter()
             .map(|image| image.data_base64.clone())
             .collect(),
+        tool_calls: None,
+        tool_name: None,
+    });
+
+    // This turn's tool rounds, replayed in Ollama's shape so the model sees what it asked
+    // for and what came back.
+    for exchange in ctx.exchanges {
+        match exchange {
+            Exchange::Called { text, calls } => messages.push(OllamaMessage {
+                role: "assistant".to_string(),
+                content: text.clone(),
+                images: Vec::new(),
+                tool_calls: Some(
+                    calls
+                        .iter()
+                        .map(|call| {
+                            json!({"function": {"name": call.tool, "arguments": call.arguments}})
+                        })
+                        .collect(),
+                ),
+                tool_name: None,
+            }),
+            Exchange::Returned(results) => {
+                for result in results {
+                    messages.push(OllamaMessage {
+                        role: "tool".to_string(),
+                        content: result.output.clone(),
+                        images: Vec::new(),
+                        tool_calls: None,
+                        tool_name: Some(result.tool.clone()),
+                    });
+                }
+            }
+        }
+    }
+
+    OllamaChatRequest {
+        model: model.to_string(),
+        messages,
         stream,
         options: OllamaOptions {
             temperature: 0.7,
             top_p: 0.9,
+            num_ctx: local_context_window(facts.context_tokens, local_context_room(facts)),
         },
+        // From the probe rather than from the caller: `tools` above is decided the same
+        // way, off the same cached body, so the two cannot disagree about one model.
+        think: facts
+            .thinking
+            .unwrap_or(false)
+            .then(|| ctx.reasoning.shown()),
+        tools: (!ctx.tools.is_empty()).then(|| {
+            ctx.tools
+                .iter()
+                .map(|t| OpenAiToolDef {
+                    kind: "function",
+                    function: OpenAiFunctionDef {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.input_schema.clone(),
+                    },
+                })
+                .collect()
+        }),
     }
 }
 
 fn ollama_url(endpoint: &str) -> String {
-    format!("{}/api/generate", endpoint.trim_end_matches('/'))
+    format!("{}/api/chat", endpoint.trim_end_matches('/'))
+}
+
+/// The context size to ask for: the smallest of what the model was built with, what
+/// AETHER1 will ever ask for, and **what this machine has room for once the weights are
+/// paid for**.
+///
+/// The third of those is the one that was missing, and #249 is what missing it costs. A
+/// 27B at IQ2_XS on a 16GB card was handed a window sized from system memory, the cache did
+/// not fit beside the weights, Ollama moved layers onto the processor, and a greeting took
+/// 167 seconds. Nothing in this function knew the model's size or the card's, so nothing
+/// in it could have refused.
+///
+/// `room` is `fit::plan(...).context` for this model on this machine, and `None` means
+/// *unknown* -- an older server that does not report `details`, or no reading of the
+/// machine -- in which case the first two clamps stand alone, exactly as before. It does
+/// **not** mean "nothing fits": a caller whose plan says nothing fits still has to ask for
+/// something, and `fit::CTX_FLOOR` is what it asks for while the picker says why.
+///
+/// It stays a pure function of its arguments, and stays the *only* place the figure is
+/// decided. That second part is the lesson of #249 rather than a tidiness preference: the
+/// server-wide `OLLAMA_CONTEXT_LENGTH` was a second number deciding the same thing, the
+/// looser of the two won, and `local_server` now asserts it can never exceed this ceiling.
+pub fn local_context_window(reported: Option<u64>, room: Option<u32>) -> u64 {
+    let by_model = match reported {
+        Some(limit) if limit > 0 => limit.min(LOCAL_CTX_CEILING).max(limit.min(LOCAL_CTX_FLOOR)),
+        _ => LOCAL_CTX_FLOOR,
+    };
+    match room {
+        Some(room) => by_model.min(u64::from(room)),
+        None => by_model,
+    }
+}
+
+/// The window this machine has room for, for one model on one local server.
+///
+/// The bridge between the pure arithmetic in `fit` and the two cached probes that feed it,
+/// kept here so `local_context_window` can stay a function of numbers. `None` whenever
+/// anything it needs is missing, which is the value that leaves the old behaviour in place.
+pub fn local_context_room(facts: LocalFacts) -> Option<u32> {
+    crate::fit::plan(facts.model?, this_machine()).context
+}
+
+/// This machine's memory, read once.
+///
+/// Probing the cards costs a syscall sweep and the answer does not change while the program
+/// runs, so it is read on first use and kept. It sits in front of a reply, which is the
+/// same reason every other probe in this file is cached.
+fn this_machine() -> crate::fit::Machine {
+    static MACHINE: std::sync::LazyLock<crate::fit::Machine> =
+        std::sync::LazyLock::new(|| crate::fit::Machine {
+            ram_total_gb: crate::llm::Telemetry::snapshot().ram_total_gb,
+            vram_gb: crate::gpu::dedicated(&crate::gpu::detect()).and_then(|gpu| gpu.vram_gb),
+        });
+    *MACHINE
 }
 
 pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
@@ -420,26 +1098,33 @@ pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Com
             .timeout_global(Some(CALL_TIMEOUT))
             .http_status_as_error(false)
             .build()
-            .send_json(ollama_payload(model, ctx, false)),
+            .send_json(ollama_payload(
+                model,
+                ctx,
+                false,
+                ollama_facts(endpoint, model),
+            )),
     )?
     .into_body()
     .read_json()
     .map_err(|e| e.to_string())?;
 
-    Ok(Completion {
-        text: response.response.trim().to_string(),
-        usage: response.usage(),
-        calls: Vec::new(),
-    })
+    // Through a relay even with nowhere to stream to: a model that writes `<think>` into
+    // its answer does it on the blocking path too, and the two paths must not disagree
+    // about what the answer was.
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
+    relay.thinking(response.thought());
+    relay.say(response.text());
+    finish_with(&mut relay, response.usage(), response.calls(0))
 }
 
 /// Ollama streams newline-delimited JSON rather than SSE: one object per token, each with
-/// the incremental text in `response`.
+/// the incremental text under `message.content`.
 pub fn stream_ollama(
     endpoint: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
     let response = checked(
         crate::net::post(&ollama_url(endpoint), "the model was not asked")?
@@ -447,11 +1132,16 @@ pub fn stream_ollama(
             .timeout_global(Some(STREAM_TIMEOUT))
             .http_status_as_error(false)
             .build()
-            .send_json(ollama_payload(model, ctx, true)),
+            .send_json(ollama_payload(
+                model,
+                ctx,
+                true,
+                ollama_facts(endpoint, model),
+            )),
     )?;
 
-    let mut full = String::new();
     let mut usage = None;
+    let mut calls: Vec<NativeCall> = Vec::new();
     for_each_line(response, |line| {
         let line = line.trim();
         if line.is_empty() {
@@ -459,10 +1149,13 @@ pub fn stream_ollama(
         }
         let chunk: OllamaResponse = serde_json::from_str(line)
             .map_err(|e| format!("unparseable chunk from Ollama: {e}"))?;
-        if !chunk.response.is_empty() {
-            full.push_str(&chunk.response);
-            sink(&chunk.response);
-        }
+        // Thinking first: a thinking model streams its whole thought before the first word
+        // of the answer, and both can land in one object on the boundary between them.
+        relay.thinking(chunk.thought());
+        relay.say(chunk.text());
+        // Unlike OpenAI, a call is not fragmented across chunks -- it arrives whole, on
+        // whichever object the model finished it on, so each one is appended as it lands.
+        calls.extend(chunk.calls(calls.len()));
         // The counts ride on the last object of the stream, so this overwrites nothing.
         if let Some(reported) = chunk.usage() {
             usage = Some(reported);
@@ -470,7 +1163,7 @@ pub fn stream_ollama(
         Ok(true)
     })?;
 
-    finish(full, usage)
+    finish_with(relay, usage, calls)
 }
 
 // -------------------------------------------------- OpenAI-compatible (OpenAI, Groq, LM Studio)
@@ -502,6 +1195,13 @@ struct OpenAiRequest {
     stream_options: Option<OpenAiStreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiToolDef>>,
+    /// OpenAI's own name for how hard to think, which Groq and most gateways have adopted.
+    /// Sent only at an explicit level and only to the providers that document it -- see
+    /// `takes_reasoning_effort`. LM Studio is deliberately never asked: it is the local
+    /// one, most likely to be an older build or a look-alike, and a 400 there costs a
+    /// working setup to gain a field whose effect we cannot see anyway.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -606,6 +1306,14 @@ struct OpenAiChoiceMessage {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OpenAiToolCallChunk>>,
+    /// Two spellings because the shape was extended by other people: DeepSeek, vLLM, LM
+    /// Studio and llama.cpp settled on `reasoning_content`, OpenRouter on `reasoning`.
+    /// Reading both costs nothing and is the difference between a reasoning panel that
+    /// works on a given server and one that does not.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -626,6 +1334,11 @@ struct OpenAiStreamDelta {
     content: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<OpenAiToolCallChunk>>,
+    /// As on `OpenAiChoiceMessage`: both spellings in use.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -682,28 +1395,10 @@ struct OllamaShowRequest<'a> {
 /// Deliberately short-timeout: this is decoration on a telemetry panel, and it must never
 /// be the reason a reply feels slow.
 pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability> {
-    let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
-    let body: serde_json::Value = crate::net::post(&url, "the model was not asked")
-        .ok()?
-        .config()
-        .timeout_global(Some(std::time::Duration::from_millis(2500)))
-        .build()
-        .send_json(OllamaShowRequest { model })
-        .ok()?
-        .into_body()
-        .read_json()
-        .ok()?;
-
+    let body = ollama_show(endpoint, model)?;
     let details = body.get("details");
     let capability = LocalCapability {
-        context_tokens: body
-            .get("model_info")
-            .and_then(|info| info.as_object())
-            .and_then(|info| {
-                info.iter()
-                    .find(|(key, _)| key.ends_with(".context_length"))
-                    .and_then(|(_, value)| value.as_u64())
-            }),
+        context_tokens: context_length_of(&body),
         parameter_size: details
             .and_then(|d| d.get("parameter_size"))
             .and_then(|v| v.as_str())
@@ -718,11 +1413,289 @@ pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability>
     (!capability.is_empty()).then_some(capability)
 }
 
+/// What a local model can be asked to do, as its own server describes it.
+///
+/// Two questions, both of which AETHER1 was previously guessing the answer to:
+///
+///   * **Can it call tools?** Ollama answers this directly -- `/api/show` returns a
+///     `capabilities` array, and `"tools"` is in it exactly when the model ships a template
+///     that can emit a tool call. A model without one cannot be made to by any amount of
+///     prompting, and the companion needs to know which of the two protocols it is on
+///     *before* it writes its system prompt.
+///   * **How much context has it got?** For `num_ctx`, which Ollama otherwise defaults to
+///     4096 whatever the model was built with.
+///
+/// `None` for either means the server did not say -- an older Ollama, or something else
+/// answering on the port. A missing answer is never filled in with a plausible one.
+/* No `Eq`: the model's size is a pair of floating-point figures, and a size is a thing to
+compare approximately or not at all. Nothing compares these for equality outside tests. */
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct LocalFacts {
+    pub tools: Option<bool>,
+    pub context_tokens: Option<u64>,
+    /// What the weights weigh and how many parameters a token routes through -- the two
+    /// figures `fit` needs to say how much room is left for a window.
+    ///
+    /// Read off the same `/api/show` body as everything else here, for the reason the
+    /// `thinking` note gives: one request, one reader, so two facts about one model cannot
+    /// disagree. `None` for a server too old to report `details`, and then the window is
+    /// clamped by what the model says and nothing else -- exactly what it was before.
+    pub model: Option<crate::fit::Model>,
+    /// Whether the model can reason, read off the same `capabilities` list as `tools` and
+    /// with the same three answers. Deliberately here rather than probed separately: it is
+    /// the same request to the same endpoint, and two readers of one fact are two answers
+    /// waiting to disagree.
+    pub thinking: Option<bool>,
+}
+
+/// Probes cost a round trip, and the answer is a property of the model rather than of the
+/// turn, so each (endpoint, model) pair is asked once per process. The negative answer is
+/// cached too: a model that cannot call tools would otherwise be re-probed on every
+/// message of a conversation that is already slower for being on the text protocol.
+static LOCAL_FACTS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, LocalFacts>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Asks Ollama what one model can do, once per process.
+///
+/// Nothing here can fail loudly: this runs in front of a reply, and a probe that could
+/// refuse a question would be a worse bug than the one it exists to fix. A server that is
+/// not Ollama, is not running, or is too old to report capabilities produces
+/// `LocalFacts::default()`, which puts the model on the fenced-text protocol with the
+/// floor context -- exactly what every local model got before this existed.
+pub fn ollama_facts(endpoint: &str, model: &str) -> LocalFacts {
+    if model.trim().is_empty() {
+        return LocalFacts::default();
+    }
+    let key = format!("{endpoint}\u{1f}{model}");
+    if let Some(known) = LOCAL_FACTS.lock().ok().and_then(|c| c.get(&key).copied()) {
+        return known;
+    }
+
+    let facts = probe_ollama_facts(endpoint, model).unwrap_or_default();
+    if let Ok(mut cache) = LOCAL_FACTS.lock() {
+        cache.insert(key, facts);
+    }
+    facts
+}
+
+fn probe_ollama_facts(endpoint: &str, model: &str) -> Option<LocalFacts> {
+    let body = ollama_show(endpoint, model)?;
+    Some(LocalFacts {
+        // Present and not containing "tools" is a real answer -- this model cannot. Absent
+        // entirely is no answer, and stays None rather than becoming a false.
+        tools: capability_of(&body, "tools"),
+        thinking: capability_of(&body, "thinking"),
+        context_tokens: context_length_of(&body),
+        model: model_size_of(&body, model),
+    })
+}
+
+/// Whether an `/api/show` body says this model has one named capability -- `tools`, or
+/// `thinking`.
+///
+/// Three answers, not two. `capabilities` present and containing the name is yes; present
+/// and not containing it is a real no, and no amount of prompting will change it; absent
+/// altogether is an older Ollama that does not report capabilities, which is not the same
+/// as a no and must not be recorded as one.
+///
+/// For `thinking` the distinction is not only tidiness: Ollama refuses a request carrying
+/// `think` for a model without the capability, so "did not say" has to mean "do not ask".
+fn capability_of(body: &serde_json::Value, name: &str) -> Option<bool> {
+    body.get("capabilities")
+        .and_then(|c| c.as_array())
+        .map(|list| list.iter().any(|c| c.as_str() == Some(name)))
+}
+
+/// Clears the cache, for a settings change that could have changed the answer -- pulling a
+/// newer tag of the same name, or restarting Ollama after an upgrade.
+pub fn forget_local_facts() {
+    if let Ok(mut cache) = LOCAL_FACTS.lock() {
+        cache.clear();
+    }
+    if let Ok(mut seen) = NO_NATIVE_TOOLS.lock() {
+        seen.clear();
+    }
+}
+
+/// How big the model is, out of an `/api/show` body and the name it was asked about: what
+/// it weighs, and how much of it a token actually uses.
+///
+/// Ollama reports `details.parameter_size` ("8.0B", "30.5B") and
+/// `details.quantization_level` ("Q4_K_M"), which multiply out to the weights through the
+/// same table the Hugging Face tab sizes a download with -- so the figure the picker
+/// promised and the figure the window is chosen from come from one place.
+///
+/// The **active** count is not reported at all, and it is the one the cache is sized by.
+/// It lives in the tag instead: `qwen3:30b-a3b` carries its own answer, which is why the
+/// name is read here as well as the body. Costing a 30B-A3B's cache at thirty billion is
+/// the one mistake in this file that would refuse a model that fits comfortably.
+///
+/// `None` unless both halves are there. Half a fit is not a fit, and a window sized from a
+/// weight invented out of a missing quantisation would be worse than the clamp it replaced.
+fn model_size_of(body: &serde_json::Value, name: &str) -> Option<crate::fit::Model> {
+    let details = body.get("details")?.as_object()?;
+    let text = |key: &str| details.get(key).and_then(serde_json::Value::as_str);
+    let (total, active_from_size) = crate::hf::parameters_billions(text("parameter_size")?)?;
+    let mut model =
+        crate::fit::Model::from_quant(total, active_from_size, text("quantization_level")?)?;
+
+    /* `parameter_size` is the whole model and says nothing about routing, so a
+    mixture-of-experts arrives from the body looking dense. The tag is where the `a3b`
+    lives, so read it too and take the smaller of the two answers -- a tag that mentions no
+    routing leaves the body's figure alone. */
+    if let Some((_, from_name)) = crate::hf::parameters_billions(name) {
+        model.active_params_b = model.active_params_b.min(from_name);
+    }
+    Some(model)
+}
+
+/// The context length out of an `/api/show` body.
+///
+/// The key is architecture-prefixed -- `llama.context_length`, `qwen2.context_length`,
+/// `gemma3.context_length` -- so rather than keeping a list of architectures that would be
+/// out of date by the next release, any key ending in `.context_length` counts.
+fn context_length_of(body: &serde_json::Value) -> Option<u64> {
+    body.get("model_info")
+        .and_then(|info| info.as_object())
+        .and_then(|info| {
+            info.iter()
+                .find(|(key, _)| key.ends_with(".context_length"))
+                .and_then(|(_, value)| value.as_u64())
+        })
+}
+
+/// One `/api/show` call. Deliberately short-timeout: every caller is decoration or a
+/// decision with a safe default, and none of them may be the reason a reply feels slow.
+fn ollama_show(endpoint: &str, model: &str) -> Option<serde_json::Value> {
+    let url = format!("{}/api/show", endpoint.trim_end_matches('/'));
+    crate::net::post(&url, "the model was not asked")
+        .ok()?
+        .config()
+        .timeout_global(Some(std::time::Duration::from_millis(2500)))
+        .build()
+        .send_json(OllamaShowRequest { model })
+        .ok()?
+        .into_body()
+        .read_json()
+        .ok()
+}
+
+/// Which models the local server has in memory right now.
+///
+/// Ollama answers this on `/api/ps`, and it is the difference between a judgment that costs
+/// nothing and one that costs a model load. The first desktop log of the Auto router timed
+/// out on every message because nothing asked this question: the router picked the smallest
+/// *installed* model, which on a machine with one large model resident meant reading a
+/// second one off disk -- and, on a card with no room for both, evicting the model the
+/// reply was about to use.
+///
+/// Empty rather than an error when the server does not answer, including for LM Studio,
+/// which has no equivalent endpoint in the OpenAI-compatible surface this talks to. Empty
+/// means "nothing known to be loaded", which only ever makes a caller more cautious.
+/// Deliberately short-timeout: this runs in front of a reply, and a probe that stalls has
+/// cost more than the knowledge is worth.
+pub fn loaded_models(provider: Provider, endpoint: &str) -> Vec<String> {
+    if provider != Provider::Ollama {
+        return Vec::new();
+    }
+    let url = format!("{}/api/ps", endpoint.trim_end_matches('/'));
+    let Some(body) = crate::net::get(&url, "the server was not asked what it has loaded")
+        .ok()
+        .and_then(|request| {
+            request
+                .config()
+                .timeout_global(Some(std::time::Duration::from_millis(2500)))
+                .build()
+                .call()
+                .ok()
+        })
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+    else {
+        return Vec::new();
+    };
+    body.get("models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How much video memory the local server is holding right now, in gigabytes.
+///
+/// The other half of `loaded_models`: which models are resident answers "will this cost a
+/// load", and this answers "will loading it turn something else out". Ollama reports
+/// `size_vram` per resident model on `/api/ps`, which is the figure that matters rather
+/// than `size` -- a model partly on the processor is only occupying the card with the part
+/// that is on it.
+///
+/// Zero when the server does not answer, is not Ollama, or is holding nothing. Zero always
+/// makes a caller *less* cautious, so it is the wrong way to be wrong -- but the
+/// alternative is refusing to answer a question whose answer is usually zero, and the
+/// caller's own `fit::Plan` has already settled whether the model fits the card at all.
+/// Deliberately short-timeout, for the reason `loaded_models` gives.
+pub fn resident_vram_gb(endpoint: &str) -> f64 {
+    let url = format!("{}/api/ps", endpoint.trim_end_matches('/'));
+    let Some(body) = crate::net::get(&url, "the server was not asked what it has loaded")
+        .ok()
+        .and_then(|request| {
+            request
+                .config()
+                .timeout_global(Some(std::time::Duration::from_millis(2500)))
+                .build()
+                .call()
+                .ok()
+        })
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+    else {
+        return 0.0;
+    };
+    body.get("models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| model.get("size_vram").and_then(Value::as_u64))
+                .map(|bytes| bytes as f64 / 1_000_000_000.0)
+                .sum()
+        })
+        .unwrap_or(0.0)
+}
+
+/// The model a provider answers with when the operator has named none.
+///
+/// The same defaults the payload builders already apply, named in one place so a picker can
+/// *show* what it is about to use rather than leaving the box empty and letting the
+/// builder decide out of sight. Empty for the two local providers and for a gateway, all
+/// three of which are a specific machine's business: a local server's models are whatever
+/// was pulled onto it, and a gateway's ids are whatever an administrator connected, so an
+/// invented one is a 404 with a confusing message on it.
+pub fn default_model_for(provider: Provider) -> &'static str {
+    match provider {
+        Provider::OpenAi => "gpt-4o-mini",
+        Provider::Groq => "llama-3.3-70b-versatile",
+        Provider::Gemini => "gemini-2.0-flash",
+        Provider::Anthropic => "claude-opus-5",
+        Provider::Ollama | Provider::LmStudio | Provider::Gateway | Provider::Offline => "",
+    }
+}
+
 /// The per-provider base URL and the model to use when none is configured.
 fn openai_defaults(provider: Provider, endpoint: &str) -> (&str, &str) {
     match provider {
-        Provider::OpenAi => ("https://api.openai.com/v1", "gpt-4o-mini"),
-        Provider::Groq => ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+        Provider::OpenAi => (
+            "https://api.openai.com/v1",
+            default_model_for(Provider::OpenAi),
+        ),
+        Provider::Groq => (
+            "https://api.groq.com/openai/v1",
+            default_model_for(Provider::Groq),
+        ),
         Provider::LmStudio => {
             let ep = if endpoint.is_empty() {
                 "http://localhost:1234/v1"
@@ -838,6 +1811,9 @@ fn openai_payload(
                     })
                     .collect()
             }),
+            reasoning_effort: takes_reasoning_effort(provider)
+                .then(|| ctx.reasoning.effort())
+                .flatten(),
         },
     )
 }
@@ -896,6 +1872,18 @@ pub fn reports_generation_time(provider: Provider) -> bool {
     matches!(provider, Provider::Ollama)
 }
 
+/// Whether this provider documents `reasoning_effort` on a chat completion.
+///
+/// Gateways are included because the field is what a gateway is for: it passes the request
+/// on to a provider that does understand it, and a gateway that does not simply ignores
+/// unknown fields. LM Studio is excluded for the reason given on the field itself.
+fn takes_reasoning_effort(provider: Provider) -> bool {
+    matches!(
+        provider,
+        Provider::OpenAi | Provider::Groq | Provider::Gateway
+    )
+}
+
 /// Whether this provider documents `stream_options.include_usage`. LM Studio is left out
 /// deliberately: it is the local one, it is the one most likely to be an older build or a
 /// look-alike server, and a rejected request there costs a working setup.
@@ -934,6 +1922,106 @@ fn openai_request(
     Ok(request)
 }
 
+/// Whether a refusal is the provider objecting to `reasoning_effort` specifically.
+///
+/// Deliberately narrow. The field name has to be in the body, so a 400 about anything else
+/// is left alone and reaches the operator as itself -- a blanket "retry 400s without the
+/// extras" would hide a wrong model name behind a second identical failure.
+/// Servers that answered a request carrying `tools` by rejecting the field.
+///
+/// Keyed on endpoint and model, like `LOCAL_FACTS`, and cleared by the same
+/// `forget_local_facts` -- an operator who has changed something and reopened the hub is
+/// asking for everything cached about their server to be dropped, and this is that.
+static NO_NATIVE_TOOLS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<(String, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Whether this server has already said it cannot take a `tools` field for this model.
+///
+/// The question `native_tools_for` asks about an OpenAI-shaped server that has no
+/// capability endpoint to probe. Unknown means yes: a server is asked rather than assumed
+/// about, and it gets to say no once.
+pub fn refused_tools(endpoint: &str, model: &str) -> bool {
+    NO_NATIVE_TOOLS
+        .lock()
+        .map(|seen| seen.contains(&(endpoint.to_string(), model.to_string())))
+        .unwrap_or(false)
+}
+
+fn remember_tool_refusal(endpoint: &str, model: &str) {
+    if let Ok(mut seen) = NO_NATIVE_TOOLS.lock() {
+        seen.insert((endpoint.to_string(), model.to_string()));
+    }
+}
+
+/// Whether a refusal is the provider objecting to `tools` specifically.
+///
+/// As narrow as `refused_the_effort_field`, and for the same reason: the field name has to
+/// be in the body, so a 400 about a wrong model name still reaches the operator as itself.
+fn refused_the_tools_field(error: &str) -> bool {
+    let lowered = error.to_lowercase();
+    lowered.contains("tools")
+        && (lowered.contains("400")
+            || lowered.contains("unrecognized")
+            || lowered.contains("unsupported")
+            || lowered.contains("not supported")
+            || lowered.contains("invalid"))
+}
+
+fn refused_the_effort_field(error: &str) -> bool {
+    let lowered = error.to_lowercase();
+    lowered.contains("reasoning_effort")
+        && (lowered.contains("400")
+            || lowered.contains("unrecognized")
+            || lowered.contains("unsupported")
+            || lowered.contains("not supported")
+            || lowered.contains("invalid"))
+}
+
+/// Sends an OpenAI-shaped request, and sends it once more without the effort field if that
+/// is what the provider objected to.
+///
+/// `reasoning_effort` is not a field every model behind an OpenAI-shaped API accepts: the
+/// reasoning models take it and the ordinary ones reject the whole request for carrying
+/// it. Which is which is a list that stops being true within a month, so it is not kept
+/// here -- the provider is asked, and is allowed to say no once. Somebody who picked an
+/// effort level and then a model that cannot use one should get a plainer answer, not a
+/// conversation where every turn fails.
+///
+/// The cost when it happens is one refused request per turn. A model that cannot reason
+/// also cannot be asked again later with a different answer, so remembering the refusal
+/// would be better -- but remembering it wrongly, across a model the operator has since
+/// changed, is how a reasoning model ends up silently never asked.
+fn openai_send(
+    provider: Provider,
+    endpoint: &str,
+    url: &str,
+    api_key: &str,
+    timeout: std::time::Duration,
+    payload: &mut OpenAiRequest,
+) -> Result<ureq::http::Response<ureq::Body>, String> {
+    let sent = checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload));
+    match sent {
+        Err(refusal)
+            if payload.reasoning_effort.is_some() && refused_the_effort_field(&refusal) =>
+        {
+            payload.reasoning_effort = None;
+            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+        }
+        /* The same bargain for `tools`, and the reason LM Studio is allowed to be asked at
+        all now. The refusal is remembered so it costs one request rather than one per
+        turn, and so `native_tools_for` can put the next turn on the text protocol -- a
+        prompt that says the tools are attached to the request, sent to a server that has
+        just refused to carry them, describes a mechanism the model has no way to use. */
+        Err(refusal) if payload.tools.is_some() && refused_the_tools_field(&refusal) => {
+            remember_tool_refusal(endpoint, &payload.model);
+            payload.tools = None;
+            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+        }
+        other => other,
+    }
+}
+
 pub fn call_openai_compatible(
     provider: Provider,
     endpoint: &str,
@@ -941,13 +2029,19 @@ pub fn call_openai_compatible(
     model: &str,
     ctx: &ChatContext,
 ) -> Result<Completion, String> {
-    let (url, payload) = openai_payload(provider, endpoint, model, ctx, false);
+    let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, false);
 
-    let response: OpenAiResponse =
-        checked(openai_request(provider, &url, api_key, CALL_TIMEOUT)?.send_json(&payload))?
-            .into_body()
-            .read_json()
-            .map_err(|e| e.to_string())?;
+    let response: OpenAiResponse = openai_send(
+        provider,
+        endpoint,
+        &url,
+        api_key,
+        CALL_TIMEOUT,
+        &mut payload,
+    )?
+    .into_body()
+    .read_json()
+    .map_err(|e| e.to_string())?;
 
     let usage = response.usage.map(TokenUsage::from);
     let choice = response
@@ -963,12 +2057,22 @@ pub fn call_openai_compatible(
         builder.absorb(chunks);
     }
     let calls = builder.finish()?;
-    let text = choice.message.content.unwrap_or_default();
-    if text.trim().is_empty() && calls.is_empty() {
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
+    if let Some(thought) = choice
+        .message
+        .reasoning_content
+        .or(choice.message.reasoning)
+    {
+        relay.thinking(&thought);
+    }
+    relay.say(&choice.message.content.unwrap_or_default());
+    let (text, reasoning) = relay.finish();
+    if text.trim().is_empty() && calls.is_empty() && reasoning.trim().is_empty() {
         return Err("empty choices in response".to_string());
     }
     Ok(Completion {
         text: text.trim().to_string(),
+        reasoning: reasoning.trim().to_string(),
         usage,
         calls,
     })
@@ -980,14 +2084,19 @@ pub fn stream_openai_compatible(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
-    let (url, payload) = openai_payload(provider, endpoint, model, ctx, true);
+    let (url, mut payload) = openai_payload(provider, endpoint, model, ctx, true);
 
-    let response =
-        checked(openai_request(provider, &url, api_key, STREAM_TIMEOUT)?.send_json(&payload))?;
+    let response = openai_send(
+        provider,
+        endpoint,
+        &url,
+        api_key,
+        STREAM_TIMEOUT,
+        &mut payload,
+    )?;
 
-    let mut full = String::new();
     let mut usage = None;
     let mut builder = OpenAiCallBuilder::default();
     for_each_line(response, |line| {
@@ -1006,17 +2115,17 @@ pub fn stream_openai_compatible(
             if let Some(chunks) = &delta.tool_calls {
                 builder.absorb(chunks);
             }
+            if let Some(thought) = delta.reasoning_content.or(delta.reasoning) {
+                relay.thinking(&thought);
+            }
             if let Some(text) = delta.content {
-                if !text.is_empty() {
-                    full.push_str(&text);
-                    sink(&text);
-                }
+                relay.say(&text);
             }
         }
         Ok(true)
     })?;
 
-    finish_with(full, usage, builder.finish()?)
+    finish_with(relay, usage, builder.finish()?)
 }
 
 // ---------------------------------------------------------------- Gemini
@@ -1057,6 +2166,12 @@ struct GeminiRequest {
     /// entry per tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<GeminiToolBlock>>,
+    /// Carries `thinkingConfig` and nothing else, so it is absent unless reasoning was
+    /// explicitly asked for. A `thinkingConfig` sent to a model without thinking is a 400,
+    /// and the Gemini 2.5 models think by default anyway -- so under `Auto` the right move
+    /// is to send nothing and read the thought parts if any arrive.
+    #[serde(rename = "generationConfig", skip_serializing_if = "Option::is_none")]
+    generation_config: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -1078,6 +2193,10 @@ struct GeminiRespPart {
     text: Option<String>,
     #[serde(default, rename = "functionCall")]
     function_call: Option<GeminiFunctionCall>,
+    /// Gemini marks a reasoning part rather than giving it a field of its own: same `text`,
+    /// with `thought: true` beside it. A part without the flag is the answer.
+    #[serde(default)]
+    thought: Option<bool>,
 }
 
 /// Gemini names a call rather than giving it an opaque id, and `id` is optional. The name
@@ -1141,7 +2260,7 @@ struct GeminiResponse {
 
 fn gemini_model(model: &str) -> &str {
     if model.is_empty() {
-        "gemini-2.0-flash"
+        default_model_for(Provider::Gemini)
     } else {
         model
     }
@@ -1228,6 +2347,9 @@ fn gemini_payload(ctx: &ChatContext) -> GeminiRequest {
     }
 
     GeminiRequest {
+        generation_config: ctx.reasoning.gemini_budget().map(
+            |budget| json!({"thinkingConfig": {"includeThoughts": true, "thinkingBudget": budget}}),
+        ),
         contents,
         tools: (!ctx.tools.is_empty()).then(|| {
             vec![GeminiToolBlock {
@@ -1270,18 +2392,23 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
         .next()
         .ok_or_else(|| "empty candidates in response".to_string())?;
 
-    let mut text = String::new();
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
     let mut calls = Vec::new();
     for part in candidate.content.parts {
+        let thought = part.thought == Some(true);
         if let Some(said) = part.text {
-            text.push_str(&said);
+            if thought {
+                relay.thinking(&said);
+            } else {
+                relay.say(&said);
+            }
         }
         if let Some(call) = part.function_call {
             calls.push(NativeCall::from(call));
         }
     }
 
-    finish_with(text, usage, calls)
+    finish_with(&mut relay, usage, calls)
 }
 
 /// `alt=sse` asks for Server-Sent Events; without it streamGenerateContent returns a
@@ -1290,7 +2417,7 @@ pub fn stream_gemini(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?alt=sse&key={api_key}",
@@ -1306,7 +2433,6 @@ pub fn stream_gemini(
             .send_json(gemini_payload(ctx)),
     )?;
 
-    let mut full = String::new();
     let mut usage = None;
     let mut calls: Vec<NativeCall> = Vec::new();
     for_each_line(response, |line| {
@@ -1322,9 +2448,13 @@ pub fn stream_gemini(
         }
         for candidate in chunk.candidates {
             for part in candidate.content.parts {
+                let thought = part.thought == Some(true);
                 if let Some(said) = part.text.filter(|t| !t.is_empty()) {
-                    full.push_str(&said);
-                    sink(&said);
+                    if thought {
+                        relay.thinking(&said);
+                    } else {
+                        relay.say(&said);
+                    }
                 }
                 if let Some(call) = part.function_call {
                     calls.push(NativeCall::from(call));
@@ -1334,7 +2464,7 @@ pub fn stream_gemini(
         Ok(true)
     })?;
 
-    finish_with(full, usage, calls)
+    finish_with(relay, usage, calls)
 }
 
 // ---------------------------------------------------------------- Anthropic
@@ -1355,6 +2485,17 @@ struct AnthropicRequest {
     /// in it.
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<AnthropicTool>>,
+    /// `{"type": "enabled", "budget_tokens": n}` when extended thinking was asked for.
+    ///
+    /// Not sent alongside tools, and that is a limitation rather than an oversight: with
+    /// thinking on, the API requires every thinking block to be replayed on the next
+    /// request *with the signature it came with*, and a tool round is exactly such a next
+    /// request. Aether1's `Exchange` carries no signature, so enabling both would turn
+    /// every tool-using turn into a 400 the operator cannot do anything about. Reasoning
+    /// on the other six providers does not have this constraint; closing it here needs the
+    /// signature captured and replayed, which is a change of its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -1378,6 +2519,10 @@ struct AnthropicContentBlock {
     block_type: String,
     #[serde(default)]
     text: Option<String>,
+    /// `thinking` blocks only -- the reasoning, in a field named after the block type
+    /// rather than sharing `text` with the answer.
+    #[serde(default)]
+    thinking: Option<String>,
     // tool_use blocks only.
     #[serde(default)]
     id: Option<String>,
@@ -1516,6 +2661,9 @@ struct AnthropicStreamEvent {
 struct AnthropicDelta {
     #[serde(default)]
     text: Option<String>,
+    /// `thinking_delta` only: one fragment of the reasoning.
+    #[serde(default)]
+    thinking: Option<String>,
     /// input_json_delta only: one fragment of the tool's arguments, as a JSON string that
     /// is not valid JSON on its own.
     #[serde(default)]
@@ -1634,7 +2782,7 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
 
     AnthropicRequest {
         model: if model.is_empty() {
-            "claude-opus-5"
+            default_model_for(Provider::Anthropic)
         } else {
             model
         }
@@ -1653,6 +2801,14 @@ fn anthropic_payload(model: &str, ctx: &ChatContext, stream: bool) -> AnthropicR
                 })
                 .collect()
         }),
+        // Only without tools -- see the field's own note for why both at once cannot work
+        // until thinking signatures are carried on an Exchange.
+        thinking: ctx
+            .tools
+            .is_empty()
+            .then(|| ctx.reasoning.anthropic_budget())
+            .flatten()
+            .map(|budget| json!({"type": "enabled", "budget_tokens": budget})),
     }
 }
 
@@ -1688,20 +2844,24 @@ pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<C
     });
     // A reply is a list of blocks, not one block: text and tool_use arrive side by side,
     // and taking only the first would silently drop whichever came second.
-    let mut text = String::new();
+    let mut relay = Relay::quiet(ctx.reasoning.shown());
     let mut calls = Vec::new();
     for block in &response.content {
         if let Some(call) = block.as_call() {
             calls.push(call);
+        } else if let Some(thought) = &block.thinking {
+            relay.thinking(thought);
         } else if let Some(chunk) = &block.text {
-            text.push_str(chunk);
+            relay.say(chunk);
         }
     }
-    if text.trim().is_empty() && calls.is_empty() {
+    let (text, reasoning) = relay.finish();
+    if text.trim().is_empty() && calls.is_empty() && reasoning.trim().is_empty() {
         return Err("empty content in response".to_string());
     }
     Ok(Completion {
         text: text.trim().to_string(),
+        reasoning: reasoning.trim().to_string(),
         usage,
         calls,
     })
@@ -1711,13 +2871,12 @@ pub fn stream_anthropic(
     api_key: &str,
     model: &str,
     ctx: &ChatContext,
-    sink: Sink,
+    relay: &mut Relay,
 ) -> Result<Completion, String> {
     let response = checked(
         anthropic_request(api_key, STREAM_TIMEOUT)?.send_json(anthropic_payload(model, ctx, true)),
     )?;
 
-    let mut full = String::new();
     // Input arrives once at the top, output as a running total near the end, so the two
     // halves are accumulated separately and combined when the stream closes.
     let mut prompt_tokens = 0u64;
@@ -1767,11 +2926,10 @@ pub fn stream_anthropic(
                     if let Some(index) = event.index {
                         builder.fragment(index, &fragment);
                     }
+                } else if let Some(thought) = delta.thinking {
+                    relay.thinking(&thought);
                 } else if let Some(text) = delta.text {
-                    if !text.is_empty() {
-                        full.push_str(&text);
-                        sink(&text);
-                    }
+                    relay.say(&text);
                 }
                 Ok(true)
             }
@@ -1791,7 +2949,533 @@ pub fn stream_anthropic(
         completion_tokens,
         eval_nanos: None,
     });
-    finish_with(full, usage, builder.finish())
+    finish_with(relay, usage, builder.finish())
+}
+
+// ----------------------------------------------------------- constrained judgment
+//
+// One short call to a local model whose answer is not prose but a shape: a fixed set of
+// fields, each from a fixed set of values. The router in `llm::auto` asks a small model
+// "what kind of question is this?" and needs the answer to be parseable every time,
+// because a verdict it cannot read is a turn it cannot route.
+//
+// Three deliberate differences from a chat call, and they are the reason this is a
+// function of its own rather than a flag on `ChatContext`:
+//
+//   * **The server does the constraining, not the prompt.** Ollama takes a JSON schema in
+//     `format` and LM Studio takes one in `response_format`, and in both cases the server
+//     restricts what the model is allowed to emit next. A prompt that merely *asks* for
+//     JSON gets JSON from a 7B most of the time, and "most of the time" in front of every
+//     reply is a fault report a week later.
+//   * **No history, no persona, no tools, no stream.** The judgment is about the sentence
+//     the operator just typed. Handing it the conversation makes it slower and its answer
+//     dependent on what came before; handing it tools would let a model that is only
+//     weighing up whether to search go and search.
+//   * **Local only, and a short timeout.** This runs in front of every reply, so it has to
+//     be cheap and it has to fail fast. A judge on a cloud provider would bill somebody per
+//     message to decide whether to bill them per message; see `llm::auto`.
+//
+// Failure is always `Err`, never a guessed verdict. The router's answer to a failed
+// judgment is to leave the operator's own choice alone, which is the one fallback that
+// cannot surprise them.
+
+/// How long a judgment may take, which is a question about the model's *state* and not
+/// about the request.
+///
+/// The first real log from a desktop said `timeout: global` on every message: a twenty
+/// second bound is ample for a model that is in memory and nowhere near enough for one that
+/// has to be read off a disk first, and the old code could not tell the two apart because
+/// it set the bound from the token budget. Each of these is a different question about who
+/// is waiting and for what.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pace {
+    /// The model is already loaded. A small model answers a schema this size in well under
+    /// a second, so anything past this bound means the server has gone away rather than
+    /// that the model is slow -- and the cost of waiting is paid before the reply starts.
+    Warm,
+    /// The model has to be loaded first, and it is the model the reply was going to load
+    /// anyway. The wait belongs to the reply, not to the router: judging does not add it,
+    /// it only moves it earlier. Generous for that reason, and paid once per model.
+    Loading,
+    /// Nothing is in front of a reply: a tuning round is something somebody typed and is
+    /// watching. The bound here means "the server has gone away", nothing finer.
+    Unhurried,
+}
+
+impl Pace {
+    fn timeout(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            Pace::Warm => 20,
+            Pace::Loading => 120,
+            Pace::Unhurried => 300,
+        })
+    }
+}
+
+/// Everything about one judgment except where to send it.
+///
+/// A struct rather than five more arguments, and the budget and the pace sit in it together
+/// on purpose: a page-sized answer at a twenty-second bound is a call setting itself up to
+/// fail, and pairing them here is what makes that visible at the call site.
+pub struct Ask<'a> {
+    pub system_prompt: &'a str,
+    pub question: &'a str,
+    pub schema: &'a Value,
+    /// How many tokens the answer may take. Without a cap, a model that ignores the schema
+    /// runs to the timeout producing nothing usable.
+    pub budget: u32,
+    pub pace: Pace,
+}
+
+/// One generated token, with what the server thought of the alternatives at that position.
+///
+/// The same shape in both dialects: Ollama puts an array of these at the top level of a
+/// non-streamed `/api/chat` reply, and an OpenAI-compatible server puts it under
+/// `choices[0].logprobs.content`. Only the judge asks for them.
+#[derive(Clone, Debug, Deserialize)]
+struct TokenLogprob {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    logprob: f64,
+    /// The most likely tokens at this position, which on both servers normally includes the
+    /// one that was chosen. Deduplicated by text when the mass is summed, so an entry for
+    /// the chosen token is neither required nor double-counted.
+    #[serde(default)]
+    top_logprobs: Vec<TokenLogprob>,
+}
+
+/// How sure the judge was of each field it answered, as a probability between 0 and 1.
+///
+/// Why this exists at all: a verdict is three values from fixed sets, and until now a small
+/// model's coin-flip and its confident call arrived here identically and were acted on
+/// identically. On a 4 GB card, where the judge is smallest, that is where the routing is
+/// wrong and silent. A field's number is the share of the probability mass the chosen token
+/// held against the alternatives the server named at that position -- the same
+/// normalisation a judgment made of one token per field admits of, and no more.
+///
+/// **A missing field is not an unsure field.** `of` returns None, and every caller must
+/// read None as "act on it as before". A server too old to know `logprobs`, a model whose
+/// tokeniser splits a value in a way this cannot follow, a dialect that answers without the
+/// array -- all of them arrive here as an empty map, and an empty map must leave the router
+/// behaving exactly as it did before this type existed. Anything else would make a feature
+/// meant to catch an unsure judge into one that stops a working one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Confidence(std::collections::BTreeMap<String, f64>);
+
+impl Confidence {
+    /// How sure the judge was of one field, or None where there is nothing to say.
+    pub fn of(&self, field: &str) -> Option<f64> {
+        self.0.get(field).copied()
+    }
+
+    /// What the judge was sure of, for the log a developer reads.
+    ///
+    /// This exists because of one thing the operator cannot otherwise tell apart, and it is
+    /// the thing that would make a field test inconclusive. A confident judge and a server
+    /// that never reported a probability both route in silence: the abstention only ever
+    /// prints when it fires, so "it worked and was sure" and "nothing is being read at all"
+    /// look identical from outside. Naming it here, per judged turn, is what separates them.
+    pub fn describe(&self) -> String {
+        if self.0.is_empty() {
+            return "no confidence reported -- the server returned no log probabilities, so \
+                    every field is acted on"
+                .to_string();
+        }
+        self.0
+            .iter()
+            .map(|(field, p)| format!("{field} {:.0}%", p * 100.0))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// A confidence made up by hand, for the tests of what is *done* with one -- which
+    /// live in `llm::auto`, where the fallbacks are, rather than here.
+    #[cfg(test)]
+    pub fn from_pairs(pairs: &[(&str, f64)]) -> Confidence {
+        Confidence(
+            pairs
+                .iter()
+                .map(|(field, p)| ((*field).to_string(), *p))
+                .collect(),
+        )
+    }
+}
+
+/// A judgment and how sure of it the judge was.
+pub struct Judged {
+    pub answer: Value,
+    pub confidence: Confidence,
+}
+
+/// Where each field's value begins in the answer text, by byte offset.
+///
+/// Deliberately a scan of the text rather than anything derived from `serde_json`: the
+/// offsets have to line up with the *raw* bytes the model produced, because that is what
+/// the token stream concatenates to, and a parsed value has lost them. Finds the key as a
+/// quoted string, steps over the colon and any space, and reports where the value starts --
+/// the opening quote of a string is stepped over too, so the offset lands on the first
+/// character the model had a real choice about.
+fn value_offsets(text: &str, fields: &[String]) -> Vec<(String, usize)> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    for field in fields {
+        let needle = format!("\"{field}\"");
+        let Some(key_at) = text.find(&needle) else {
+            continue;
+        };
+        let mut at = key_at + needle.len();
+        while at < bytes.len() && (bytes[at] as char).is_whitespace() {
+            at += 1;
+        }
+        if at >= bytes.len() || bytes[at] != b':' {
+            continue;
+        }
+        at += 1;
+        while at < bytes.len() && (bytes[at] as char).is_whitespace() {
+            at += 1;
+        }
+        if at < bytes.len() && bytes[at] == b'"' {
+            at += 1;
+        }
+        if at < bytes.len() {
+            found.push((field.clone(), at));
+        }
+    }
+    found
+}
+
+/// What share of the probability mass the chosen token held at its position.
+///
+/// The alternatives the server named are the only ones there is anything to say about, so
+/// the mass is summed over those, deduplicated by text, with the chosen token included
+/// whether or not the server listed it among its own alternatives. A position with no
+/// alternatives reported yields the chosen token's own probability, which is the honest
+/// answer: there is nothing to compare it against.
+fn share_of_mass(token: &TokenLogprob) -> f64 {
+    let chosen = token.logprob.exp();
+    if !chosen.is_finite() {
+        return 0.0;
+    }
+    let mut total = chosen;
+    let mut alternatives = 0;
+    for alternative in &token.top_logprobs {
+        if alternative.token != token.token {
+            total += alternative.logprob.exp();
+            alternatives += 1;
+        }
+    }
+    /* Nothing to normalise against, so the raw probability stands. Normalising a lone
+    token against itself would report every such position as a certainty -- which is the
+    exact overconfidence this type exists to catch, arrived at by arithmetic instead of by
+    a model. A test holds this: a token the server gave an even chance and named no
+    alternative for is a half, not a one. */
+    if alternatives == 0 {
+        return chosen.clamp(0.0, 1.0);
+    }
+    if total <= 0.0 || !total.is_finite() {
+        return 0.0;
+    }
+    (chosen / total).clamp(0.0, 1.0)
+}
+
+/// How sure the judge was of each field, read off the token stream.
+///
+/// The first token of a value is the one that decides it, and for the answers a judgment is
+/// made of that is the whole of it: `simple` and `hard` differ at their first token, and so
+/// do `true` and `false`. So each field's number comes from the token covering the byte
+/// where its value starts.
+///
+/// Every way this can fail returns a map without that field in it rather than a guess --
+/// see `Confidence` for why that is the only safe direction. The token stream not
+/// reconstructing the answer text is one of those ways: a tokeniser that emits bytes this
+/// cannot follow leaves the offsets wrong, and a wrong offset would attach one field's
+/// certainty to another field's value.
+fn confidence_from(text: &str, tokens: &[TokenLogprob], answer: &Value) -> Confidence {
+    let Some(fields) = answer.as_object() else {
+        return Confidence::default();
+    };
+    let names: Vec<String> = fields.keys().cloned().collect();
+    let offsets = value_offsets(text, &names);
+    if offsets.is_empty() || tokens.is_empty() {
+        return Confidence::default();
+    }
+    /* Where the generated text sits in what came back. The token stream covers what the
+    model produced, which is the whole reply -- but `text` here is the whole reply too, so
+    the stream starts at zero. Checked rather than assumed: if the concatenation does not
+    appear at the front, the offsets cannot be trusted and nothing is reported. */
+    let rebuilt: String = tokens.iter().map(|t| t.token.as_str()).collect();
+    if !rebuilt.is_empty() && !text.starts_with(&rebuilt) && !text.contains(&rebuilt) {
+        return Confidence::default();
+    }
+    let start = if text.starts_with(&rebuilt) {
+        0
+    } else {
+        text.find(&rebuilt).unwrap_or(0)
+    };
+
+    let mut spans = Vec::with_capacity(tokens.len());
+    let mut at = start;
+    for token in tokens {
+        let end = at + token.token.len();
+        spans.push((at, end, token));
+        at = end;
+    }
+
+    let mut sure = std::collections::BTreeMap::new();
+    for (field, offset) in offsets {
+        if let Some((_, _, token)) = spans
+            .iter()
+            .find(|(begin, end, _)| offset >= *begin && offset < *end)
+        {
+            sure.insert(field, share_of_mass(token));
+        }
+    }
+    Confidence(sure)
+}
+
+/// Asks a local model for one structured judgment, with the schema enforced by the server.
+///
+/// `schema` is a JSON Schema object describing the whole answer. `budget` is how many tokens
+/// the answer may take -- an explicit argument rather than one constant, because the two
+/// callers are far apart: a router's verdict is four short fields (`VERDICT_TOKENS`), and a
+/// rewritten page of instructions is a page. Without a cap at all, a model that ignores the
+/// schema runs to the timeout producing nothing usable. Returns the parsed object, or an
+/// error naming what went wrong -- the caller logs it and carries on unrouted.
+///
+/// Only the two local providers are accepted. The refusal for anything else is not a
+/// limitation waiting to be lifted: the router exists partly to *avoid* cloud calls, and a
+/// cloud judge would make the cheap half of the decision the expensive half.
+pub fn judge(
+    provider: Provider,
+    endpoint: &str,
+    model: &str,
+    ask: Ask<'_>,
+) -> Result<Judged, String> {
+    if model.trim().is_empty() {
+        return Err("no model to judge with".to_string());
+    }
+    let (text, tokens) = match provider {
+        Provider::Ollama => judge_ollama(endpoint, model, &ask)?,
+        Provider::LmStudio => judge_openai(endpoint, model, &ask)?,
+        other => return Err(format!("{other} cannot be used as a local judge")),
+    };
+    // A schema-constrained server still sometimes wraps the object in a fence or puts a
+    // sentence in front of it, and a model with no grammar support at all ignores the
+    // field entirely. Both end up here as text that is nearly JSON, so the object is cut
+    // out rather than the whole string parsed -- and if there is no object in it, that is
+    // an error and not a verdict.
+    let answer = parse_judgment(&text)?;
+    let confidence = confidence_from(&text, &tokens, &answer);
+    Ok(Judged { answer, confidence })
+}
+
+/// What came back, read as a verdict -- separated from the call so that every way a model
+/// can disappoint here is testable without a server.
+fn parse_judgment(text: &str) -> Result<Value, String> {
+    /* An empty answer is its own report. "The judgment was not JSON:" with nothing after
+    the colon is what the second desktop log said, and it reads as a parser that lost the
+    text rather than as a model that sent none -- which cost a round trip to find out. */
+    if text.trim().is_empty() {
+        return Err(
+            "the judge answered with nothing, which is what a model that thinks \
+                    does when the whole verdict budget goes on the thinking"
+                .to_string(),
+        );
+    }
+    let body = text
+        .find('{')
+        .zip(text.rfind('}'))
+        .filter(|(start, end)| end > start)
+        .map(|(start, end)| &text[start..=end])
+        .ok_or_else(|| format!("the judgment was not JSON: {}", first_line(text)))?;
+    let parsed: Value = serde_json::from_str(body)
+        .map_err(|e| format!("the judgment was not JSON ({e}): {}", first_line(body)))?;
+    if parsed.is_object() {
+        Ok(parsed)
+    } else {
+        Err("the judgment was JSON but not an object".to_string())
+    }
+}
+
+/// The front of a model's answer, for an error message that has to fit on a line.
+fn first_line(text: &str) -> String {
+    text.trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+/// Ollama's own grammar-constrained output: a schema in `format`, not a request for JSON.
+#[derive(Serialize)]
+struct OllamaJudgeRequest<'a> {
+    model: &'a str,
+    messages: Vec<OllamaMessage>,
+    stream: bool,
+    format: &'a Value,
+    /// `Some(false)` wherever the server says this model can think, and absent otherwise.
+    ///
+    /// A thinking model thinks by default, and the first desktop log of the Auto router
+    /// shows what that costs here: `qwen3:8b` spent the whole verdict budget reasoning and
+    /// handed back an empty answer, which arrived as "the judgment was not JSON:" with
+    /// nothing after the colon. A judgment is three fixed fields under a grammar; there is
+    /// nothing in it to think about, and the deliberation is pure cost in front of a reply.
+    ///
+    /// Sent only on the capability, never blind: Ollama refuses `think` outright for a
+    /// model that does not have it, which would turn every judgment into an error on the
+    /// models least able to afford one. Same rule as `OllamaRequest::think`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
+    /// Asked for on every judgment, and sent unconditionally rather than on a probed
+    /// capability. A server too old to know these two fields ignores them -- unknown
+    /// fields in a request body are dropped, not refused -- and then answers without the
+    /// array, which `confidence_from` reports as nothing known. That is the right
+    /// degradation and it is why there is no probe here: the cost of being wrong is a
+    /// router that behaves exactly as it did before, not a judgment that fails.
+    logprobs: bool,
+    /// Five is enough to tell a confident choice from a coin flip and small enough to cost
+    /// nothing. The mass is normalised over whatever arrives, so the exact number changes
+    /// how fine the reading is, not whether it is sound.
+    top_logprobs: u32,
+    options: OllamaJudgeOptions,
+}
+
+/// How many alternatives per position the judge asks the server to name.
+const JUDGE_ALTERNATIVES: u32 = 5;
+
+/// Temperature zero, because a judgment that differs between two identical questions is a
+/// judgment nobody can check. `num_ctx` at the floor where it is sent at all: this request
+/// is a system prompt and one sentence, and asking for a long window here would allocate a
+/// KV cache the size of the chat's for a call that lasts a moment -- see
+/// `local_context_window`. Left out entirely for a model already in memory, so that the
+/// loaded instance is the one that answers; `judge_ollama` says why that matters.
+#[derive(Serialize)]
+struct OllamaJudgeOptions {
+    temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_ctx: Option<u64>,
+    /// A verdict is a handful of tokens. Without a cap, a model that ignores the schema
+    /// runs on until the timeout and spends the whole budget saying nothing usable.
+    num_predict: u32,
+}
+
+fn judge_ollama(
+    endpoint: &str,
+    model: &str,
+    ask: &Ask<'_>,
+) -> Result<(String, Vec<TokenLogprob>), String> {
+    let request = OllamaJudgeRequest {
+        model,
+        messages: vec![
+            OllamaMessage::plain("system", ask.system_prompt.to_string()),
+            OllamaMessage::plain("user", ask.question.to_string()),
+        ],
+        stream: false,
+        format: ask.schema,
+        think: ollama_facts(endpoint, model)
+            .thinking
+            .unwrap_or(false)
+            .then_some(false),
+        logprobs: true,
+        top_logprobs: JUDGE_ALTERNATIVES,
+        options: OllamaJudgeOptions {
+            temperature: 0.0,
+            /* Named only when the model is being loaded for this call anyway. Ollama keys a
+            loaded instance partly on its context size, so naming a different `num_ctx` for
+            a model that is already in memory makes it load a *second* copy of the same
+            model -- which on a card with one large model on it means evicting the one the
+            reply is about to use, to decide where to send the reply. See
+            `local_context_window` and the server-wide cliff #249 walked into. */
+            num_ctx: (ask.pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
+            num_predict: ask.budget,
+        },
+    };
+    let response: OllamaResponse = checked(
+        crate::net::post(&ollama_url(endpoint), "no judgment was asked for")?
+            .config()
+            .timeout_global(Some(ask.pace.timeout()))
+            .http_status_as_error(false)
+            .build()
+            .send_json(request),
+    )?
+    .body_mut()
+    .read_json()
+    .map_err(|e| e.to_string())?;
+    let tokens = response.logprobs.clone().unwrap_or_default();
+    Ok((response.text().to_string(), tokens))
+}
+
+/// How many tokens a router's verdict may take. Three or four short fields.
+pub const VERDICT_TOKENS: u32 = 120;
+
+/// The OpenAI-compatible spelling of the same thing, for LM Studio. `json_schema` rather
+/// than `json_object`: the looser mode constrains the answer to *some* object, which for a
+/// router means a verdict with the wrong field names in it.
+#[derive(Serialize)]
+struct OpenAiJudgeRequest<'a> {
+    model: &'a str,
+    messages: Vec<Value>,
+    stream: bool,
+    temperature: f32,
+    max_tokens: u32,
+    response_format: Value,
+    /// The OpenAI spelling of the same two fields `OllamaJudgeRequest` explains, with the
+    /// same reasoning: sent always, ignored by a server that does not know them, and a
+    /// reply without the array means nothing is known rather than that anything failed.
+    logprobs: bool,
+    top_logprobs: u32,
+}
+
+fn judge_openai(
+    endpoint: &str,
+    model: &str,
+    ask: &Ask<'_>,
+) -> Result<(String, Vec<TokenLogprob>), String> {
+    let (base, _) = openai_defaults(Provider::LmStudio, endpoint);
+    let url = format!("{}/chat/completions", base.trim_end_matches('/'));
+    let request = OpenAiJudgeRequest {
+        model,
+        messages: vec![
+            json!({"role": "system", "content": ask.system_prompt}),
+            json!({"role": "user", "content": ask.question}),
+        ],
+        stream: false,
+        temperature: 0.0,
+        max_tokens: ask.budget,
+        response_format: json!({
+            "type": "json_schema",
+            "json_schema": {"name": "verdict", "strict": true, "schema": ask.schema},
+        }),
+        logprobs: true,
+        top_logprobs: JUDGE_ALTERNATIVES,
+    };
+    let response: Value = checked(
+        crate::net::post(&url, "no judgment was asked for")?
+            .config()
+            .timeout_global(Some(ask.pace.timeout()))
+            .http_status_as_error(false)
+            .build()
+            .send_json(request),
+    )?
+    .body_mut()
+    .read_json()
+    .map_err(|e| e.to_string())?;
+    let text = response
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "the server answered without a message".to_string())?;
+    // Absent on a server that ignored the request's `logprobs`, which is the ordinary case
+    // on anything but LM Studio and is not an error -- see `Confidence`.
+    let tokens = response
+        .pointer("/choices/0/logprobs/content")
+        .cloned()
+        .and_then(|content| serde_json::from_value::<Vec<TokenLogprob>>(content).ok())
+        .unwrap_or_default();
+    Ok((text, tokens))
 }
 
 #[cfg(test)]
@@ -1890,6 +3574,7 @@ mod tests {
             agent_name: "R.E.D. 9000",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let payload = anthropic_payload("claude-opus-5", &ctx, true);
 
@@ -1931,7 +3616,7 @@ mod tests {
     #[test]
     fn ollama_reports_its_counts_and_its_own_generation_time() {
         let final_chunk: OllamaResponse = serde_json::from_str(
-            r#"{"response":"","done":true,"prompt_eval_count":41,"eval_count":128,"eval_duration":2000000000}"#,
+            r#"{"message":{"content":""},"done":true,"prompt_eval_count":41,"eval_count":128,"eval_duration":2000000000}"#,
         )
         .unwrap();
         let usage = final_chunk
@@ -1943,7 +3628,8 @@ mod tests {
 
         // Every chunk before the last one has no counts, and must not claim any.
         let mid: OllamaResponse =
-            serde_json::from_str(r#"{"response":"hi","done":false}"#).unwrap();
+            serde_json::from_str(r#"{"message":{"content":"hi"},"done":false}"#).unwrap();
+        assert_eq!(mid.text(), "hi");
         assert_eq!(mid.usage(), None);
     }
 
@@ -1981,6 +3667,7 @@ mod tests {
             agent_name: "A1",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let (_, lm) = openai_payload(
             Provider::LmStudio,
@@ -2068,10 +3755,37 @@ mod tests {
         assert!(matches!(sse_line(": keep-alive"), SseLine::Ignore));
     }
 
+    /// A relay carrying `said`, as a provider would have filled it.
+    fn relayed(said: &str) -> Relay<'static> {
+        let mut relay = Relay::quiet(true);
+        relay.say(said);
+        relay
+    }
+
     #[test]
     fn an_empty_stream_is_an_error_not_an_empty_reply() {
-        assert!(finish("   \n ".to_string(), None).is_err());
-        assert_eq!(finish(" hello ".to_string(), None).unwrap().text, "hello");
+        assert!(finish_with(&mut relayed("   \n "), None, Vec::new()).is_err());
+        assert_eq!(
+            finish_with(&mut relayed(" hello "), None, Vec::new())
+                .unwrap()
+                .text,
+            "hello"
+        );
+    }
+
+    /// The failure this sits on: a thinking model whose stream ends after `</think>` has
+    /// produced no answer, and reporting that as "no content" throws away the one thing it
+    /// did produce.
+    #[test]
+    fn a_turn_that_was_only_thinking_is_not_an_empty_stream() {
+        let completion = finish_with(
+            &mut relayed("<think>nearly there</think>"),
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(completion.text.is_empty());
+        assert_eq!(completion.reasoning, "nearly there");
     }
 
     #[test]
@@ -2085,6 +3799,7 @@ mod tests {
             agent_name: "HALCY",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
         let blocking = serde_json::to_value(anthropic_payload("m", &ctx, false)).unwrap();
         let streaming = serde_json::to_value(anthropic_payload("m", &ctx, true)).unwrap();
@@ -2104,8 +3819,13 @@ mod tests {
             agent_name: "a",
             tools: &[],
             exchanges: &[],
+            reasoning: Reasoning::Off,
         };
-        assert_eq!(ollama_payload("", &ctx, true).model, "llama3");
+        assert_eq!(
+            ollama_payload("", &ctx, true, LocalFacts::default()).model,
+            "llama3.1",
+            "the fallback is a model that can call tools, not one that cannot"
+        );
         let (url, payload) = openai_payload(Provider::Groq, "", "", &ctx, true);
         assert_eq!(payload.model, "llama-3.3-70b-versatile");
         assert!(url.starts_with("https://api.groq.com/"));
@@ -2226,6 +3946,7 @@ mod failure_tests {
             agent_name: "R.E.D. 9000",
             tools,
             exchanges,
+            reasoning: Reasoning::Off,
         }
     }
 
@@ -2502,20 +4223,507 @@ mod failure_tests {
             tool: "get_time".to_string(),
             arguments: json!({}),
         };
-        let completion = finish_with(String::new(), None, vec![call]).unwrap();
+        let completion = finish_with(&mut Relay::quiet(true), None, vec![call]).unwrap();
         assert!(completion.text.is_empty());
         assert_eq!(completion.calls.len(), 1);
 
-        assert!(finish_with(String::new(), None, Vec::new()).is_err());
+        assert!(finish_with(&mut Relay::quiet(true), None, Vec::new()).is_err());
     }
 
-    /// The two local providers stay on the fenced text protocol: Ollama is driven through
-    /// an endpoint with no tools field, and LM Studio is the one most likely to be an old
-    /// build that would reject the request outright.
+    // ------------------------------------------------------- reasoning
+
+    /// Feeds `deltas` through a splitter one at a time, the way a stream arrives.
+    fn split_stream(deltas: &[&str]) -> (String, String) {
+        let mut splitter = ThoughtSplitter::default();
+        let mut answer = String::new();
+        let mut thought = String::new();
+        for delta in deltas {
+            let out = splitter.push(delta);
+            answer.push_str(&out.answer);
+            thought.push_str(&out.thought);
+        }
+        let tail = splitter.finish();
+        answer.push_str(&tail.answer);
+        thought.push_str(&tail.thought);
+        (answer, thought)
+    }
+
     #[test]
-    fn the_local_providers_stay_on_the_text_protocol() {
-        assert!(!Provider::Ollama.supports_native_tools());
-        assert!(!Provider::LmStudio.supports_native_tools());
+    fn an_inline_thought_is_taken_out_of_the_answer() {
+        let (answer, thought) =
+            split_stream(&["<think>the user wants F1 results</think>Lando won."]);
+        assert_eq!(answer, "Lando won.");
+        assert_eq!(thought, "the user wants F1 results");
+    }
+
+    /// The reason this cannot be done by stripping tags at the end of the turn: on a 7B the
+    /// thought is most of the turn, and a tag split across two deltas is the normal case,
+    /// not an edge one. Tokenizers break `<think>` into `<`, `think`, `>` routinely.
+    #[test]
+    fn a_tag_split_across_deltas_is_still_a_tag() {
+        let (answer, thought) = split_stream(&["<", "thi", "nk", ">", "hmm", "</", "think", ">ok"]);
+        assert_eq!(answer, "ok", "no part of the tag may reach the answer");
+        assert_eq!(thought, "hmm");
+    }
+
+    #[test]
+    fn the_longer_spelling_is_recognised_too() {
+        let (answer, thought) = split_stream(&["<thinking>so</thinking>done"]);
+        assert_eq!(answer, "done");
+        assert_eq!(thought, "so");
+    }
+
+    /// Text before a thought is answer text, and it must be released as it arrives rather
+    /// than held until the thought closes -- otherwise the operator watches a blank reply.
+    #[test]
+    fn prose_either_side_of_a_thought_is_answer() {
+        let mut splitter = ThoughtSplitter::default();
+        let first = splitter.push("One moment. <thi");
+        assert_eq!(first.answer, "One moment. ", "held only the partial tag");
+        let rest = splitter.push("nk>work</think> Done.");
+        assert_eq!(rest.answer, " Done.");
+        assert_eq!(rest.thought, "work");
+    }
+
+    /// A thought that never closes is a stream that was cut off mid-thought. Releasing it
+    /// into the answer is exactly the bug this exists to prevent.
+    #[test]
+    fn an_unclosed_thought_never_becomes_the_answer() {
+        let (answer, thought) = split_stream(&["<think>halfway through"]);
+        assert!(answer.is_empty(), "{answer:?}");
+        assert_eq!(thought, "halfway through");
+    }
+
+    /// Nothing to do, and nothing held back: the overwhelming majority of replies.
+    #[test]
+    fn an_answer_with_no_thought_in_it_passes_through_whole() {
+        let (answer, thought) = split_stream(&["Hello", " there", "."]);
+        assert_eq!(answer, "Hello there.");
+        assert!(thought.is_empty());
+    }
+
+    /// The interaction the coordinator asked to be sure of, and the reason the splitter runs
+    /// *before* the fence filter rather than after it.
+    ///
+    /// A thinking model reasons about whether to call a tool, and reasoning about a tool
+    /// call means writing one. If that reached the tool protocol, two things would break at
+    /// once: `FenceFilter` would open on the fence inside the thought and swallow the real
+    /// answer that follows, and `parse_round` would run a call the model was only weighing.
+    #[test]
+    fn a_tool_fence_inside_a_thought_reaches_neither_the_filter_nor_the_parser() {
+        let said = "<think>I could run ```tool\n{\"tool\": \"search_web\"}\n``` but I know \
+                    this one.</think>Paris.";
+
+        let (answer, thought) = split_stream(&[said]);
+        assert_eq!(answer, "Paris.", "the answer must survive intact");
+        assert!(thought.contains("search_web"), "{thought:?}");
+
+        // What the operator sees, and what the parser is handed, are both built from the
+        // answer side alone.
+        let mut filter = crate::tools::protocol::FenceFilter::new();
+        let mut shown = filter.push(&answer);
+        shown.push_str(&filter.finish());
+        assert_eq!(shown, "Paris.");
+
+        let round = crate::tools::protocol::parse_round(&answer);
+        assert!(round.calls.is_empty(), "{round:#?}");
+        assert!(round.malformed.is_empty(), "{round:#?}");
+
+        // And the same text, unsplit, is what used to happen: the call runs.
+        let unsplit = crate::tools::protocol::parse_round(said);
+        assert_eq!(
+            unsplit.calls.len(),
+            1,
+            "if this stops being true the test above proves nothing"
+        );
+    }
+
+    /// A real tool call, outside any thought, still has to work -- the splitter is not
+    /// allowed to buy safety by eating calls.
+    #[test]
+    fn a_tool_fence_outside_a_thought_still_reaches_the_parser() {
+        let (answer, _) = split_stream(&[
+            "<think>I should look.</think>Checking.\n```tool\n{\"tool\": \"get_time\"}\n```",
+        ]);
+        let round = crate::tools::protocol::parse_round(&answer);
+        assert_eq!(round.calls.len(), 1, "{round:#?}");
+        assert_eq!(round.calls[0].tool, "get_time");
+    }
+
+    #[test]
+    fn with_reasoning_off_the_thought_is_still_removed_but_not_kept() {
+        let mut relay = Relay::quiet(false);
+        relay.say("<think>working</think>Answer.");
+        let (answer, reasoning) = relay.finish();
+        assert_eq!(answer, "Answer.");
+        assert!(
+            reasoning.is_empty(),
+            "off means not shown, but never means left in the answer"
+        );
+    }
+
+    #[test]
+    fn the_setting_round_trips_and_an_unknown_word_leaves_the_default() {
+        for key in ["off", "auto", "low", "medium", "high"] {
+            assert_eq!(Reasoning::from_setting(key).as_key(), key);
+        }
+        assert_eq!(Reasoning::from_setting("OFF"), Reasoning::Off);
+        // Including the empty string: a setting nobody has saved must not read as "off".
+        assert_eq!(Reasoning::from_setting(""), Reasoning::Auto);
+        assert_eq!(Reasoning::from_setting("enthusiastically"), Reasoning::Auto);
+    }
+
+    /// The field that breaks a working local setup if it is sent carelessly: Ollama refuses
+    /// `think` outright for a model without the capability.
+    #[test]
+    fn ollama_is_only_asked_to_think_when_its_server_says_the_model_can() {
+        let base = with_tools(&[], &[]);
+        let can_think = LocalFacts {
+            thinking: Some(true),
+            ..LocalFacts::default()
+        };
+        let cannot = LocalFacts {
+            thinking: Some(false),
+            ..LocalFacts::default()
+        };
+        // An older Ollama that reports no capabilities at all. Not the same as a no, and
+        // the field still must not be sent -- it would be refused.
+        let did_not_say = LocalFacts::default();
+
+        let asked = ChatContext {
+            reasoning: Reasoning::High,
+            ..base
+        };
+        for facts in [cannot, did_not_say] {
+            assert_eq!(
+                ollama_payload("qwen3", &asked, true, facts).think,
+                None,
+                "a model not known to think must never be sent the field"
+            );
+        }
+
+        let automatic = ChatContext {
+            reasoning: Reasoning::Auto,
+            ..base
+        };
+        assert_eq!(
+            ollama_payload("qwen3", &automatic, true, can_think).think,
+            Some(true)
+        );
+
+        // And `false` rather than nothing when it is switched off: a thinking model thinks
+        // by default, so turning it off means saying so.
+        let silenced = ChatContext {
+            reasoning: Reasoning::Off,
+            ..base
+        };
+        assert_eq!(
+            ollama_payload("qwen3", &silenced, true, can_think).think,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn ollamas_own_thinking_field_is_read_as_reasoning() {
+        let chunk: OllamaResponse =
+            serde_json::from_str(r#"{"message":{"content":"Hi","thinking":"who is asking"}}"#)
+                .unwrap();
+        let mut relay = Relay::quiet(true);
+        relay.thinking(chunk.thought());
+        relay.say(chunk.text());
+        assert_eq!(
+            relay.finish(),
+            ("Hi".to_string(), "who is asking".to_string())
+        );
+    }
+
+    /// The failure this exists to stop: an operator picks an effort level, then a model
+    /// that cannot use one, and every reply fails for carrying a field they never typed.
+    #[test]
+    fn a_model_that_rejects_the_effort_field_is_asked_again_without_it() {
+        assert!(refused_the_effort_field(
+            "http status: 400 -- {\"error\":{\"message\":\"Unrecognized request argument \
+             supplied: reasoning_effort\"}}"
+        ));
+        assert!(refused_the_effort_field(
+            "http status: 400 -- reasoning_effort is not supported with this model"
+        ));
+    }
+
+    /// Narrow on purpose. A blanket "retry a 400 without the extras" would hide a wrong
+    /// model name behind a second identical failure, and the body naming the model is the
+    /// most useful thing the operator gets.
+    #[test]
+    fn any_other_refusal_is_left_to_reach_the_operator() {
+        assert!(!refused_the_effort_field(
+            "http status: 404 -- model gpt-4o-mimi does not exist"
+        ));
+        assert!(!refused_the_effort_field(
+            "http status: 400 -- invalid value for temperature"
+        ));
+        // The field named without a refusal around it is not a refusal of the field.
+        assert!(!refused_the_effort_field("reasoning_effort: high"));
+    }
+
+    /// Trident, 2026-10-26: "Honestly I don't think I have LM Studio installed" -- after
+    /// being told "lmstudio rejected the request itself". The `lmstudio` key drives every
+    /// OpenAI-compatible local server, and the scanner is careful to call them "Local
+    /// server on port 1234"; the product guess was being made at the last moment, in the
+    /// one place he reads.
+    #[test]
+    fn a_local_openai_server_is_not_called_a_product_it_might_not_be() {
+        let said = explain_failure(
+            Provider::LmStudio,
+            "http://localhost:1234/v1",
+            "http status: 400 -- something went wrong",
+        );
+        assert!(
+            !said.to_lowercase().contains("lm studio") && !said.contains("lmstudio"),
+            "it cannot know which program this is: {said}"
+        );
+        assert!(
+            said.contains("http://localhost:1234/v1"),
+            "the endpoint is the only thing that identifies it: {said}"
+        );
+    }
+
+    /// A context too small for the system prompt is not a long conversation, and the
+    /// operator cannot fix it from inside AETHER1 -- so the message has to say both.
+    #[test]
+    fn a_context_overflow_says_it_is_the_prompt_and_where_to_raise_it() {
+        let said = explain_failure(
+            Provider::LmStudio,
+            "http://localhost:1234/v1",
+            "http status: 400 -- request (5242 tokens) exceeds the available context size \
+             (4096 tokens), try increasing it",
+        );
+        assert!(said.contains("prompt alone did not fit"), "{said}");
+        assert!(said.contains("ctx-size"), "{said}");
+        assert!(
+            said.contains("5242"),
+            "the server's own words still come through: {said}"
+        );
+    }
+
+    /// An organisation-level Anthropic key names a header as its fix, and AETHER1 has
+    /// nowhere to put a header. The actionable half is the other half of what Anthropic
+    /// says, so the paraphrase has to lead with the key rather than with the header name.
+    #[test]
+    fn an_organisation_scoped_anthropic_key_is_told_to_use_a_workspace_key() {
+        let said = explain_failure(
+            Provider::Anthropic,
+            "",
+            "http status: 400 -- {\"type\":\"error\",\"error\":{\"type\":\
+             \"invalid_request_error\",\"message\":\"This API key is not scoped to a \
+             workspace, so this request must include the anthropic-workspace-id header \
+             with the ID of the workspace to use.\"}}",
+        );
+        assert!(
+            said.contains("create one inside a workspace"),
+            "it says to get a different key, not to find a header field: {said}"
+        );
+        assert!(
+            said.contains("anthropic-workspace-id"),
+            "Anthropic's own words still come through: {said}"
+        );
+    }
+
+    /// LM Studio is asked rather than assumed about now, so the refusal has to be
+    /// recognised as narrowly as the effort field's -- a 400 naming a missing model must
+    /// still reach the operator as itself rather than being swallowed as "no tools here".
+    #[test]
+    fn a_server_rejecting_the_tools_field_is_recognised() {
+        assert!(refused_the_tools_field(
+            "http status: 400 -- unrecognized request argument supplied: tools"
+        ));
+        assert!(refused_the_tools_field(
+            "http status: 400 -- tools are not supported by this model"
+        ));
+        assert!(!refused_the_tools_field(
+            "http status: 404 -- model qwythos-9b does not exist"
+        ));
+        // The word in prose, with nothing refusing anything, is not a refusal.
+        assert!(!refused_the_tools_field("the model called two tools"));
+    }
+
+    /// Unknown has to mean yes, or this is the hardcoded "LM Studio cannot" all over
+    /// again. The memo only ever turns to no, and only when a server has said so.
+    #[test]
+    fn a_server_that_has_not_refused_is_still_asked() {
+        assert!(!refused_tools(
+            "http://localhost:1234/v1",
+            "never-seen-model"
+        ));
+        remember_tool_refusal("http://localhost:1234/v1", "a-model-that-said-no");
+        assert!(refused_tools(
+            "http://localhost:1234/v1",
+            "a-model-that-said-no"
+        ));
+        // One model's no is not another's, and not another endpoint's.
+        assert!(!refused_tools(
+            "http://localhost:1234/v1",
+            "a-different-model"
+        ));
+        assert!(!refused_tools(
+            "http://elsewhere:1234/v1",
+            "a-model-that-said-no"
+        ));
+        forget_local_facts();
+        assert!(
+            !refused_tools("http://localhost:1234/v1", "a-model-that-said-no"),
+            "reopening the hub asks the server again"
+        );
+    }
+
+    #[test]
+    fn both_spellings_of_the_openai_reasoning_field_are_read() {
+        let under_score: OpenAiStreamDelta =
+            serde_json::from_str(r#"{"reasoning_content":"a"}"#).unwrap();
+        assert_eq!(under_score.reasoning_content.as_deref(), Some("a"));
+        let plain: OpenAiStreamDelta = serde_json::from_str(r#"{"reasoning":"b"}"#).unwrap();
+        assert_eq!(plain.reasoning.as_deref(), Some("b"));
+    }
+
+    /// Only the providers that document the field, and never at `Auto`: the field itself is
+    /// what an older OpenAI-compatible server rejects.
+    #[test]
+    fn reasoning_effort_goes_only_where_it_is_documented() {
+        let asked = ChatContext {
+            reasoning: Reasoning::High,
+            ..with_tools(&[], &[])
+        };
+        for provider in [Provider::OpenAi, Provider::Groq, Provider::Gateway] {
+            let (_, payload) = openai_payload(provider, "https://x/v1", "m", &asked, false);
+            assert_eq!(
+                payload.reasoning_effort,
+                Some("high"),
+                "{provider} documents reasoning_effort"
+            );
+        }
+        let (_, local) = openai_payload(Provider::LmStudio, "http://x/v1", "m", &asked, false);
+        assert_eq!(
+            local.reasoning_effort, None,
+            "LM Studio is never sent a field it might reject"
+        );
+
+        let automatic = ChatContext {
+            reasoning: Reasoning::Auto,
+            ..with_tools(&[], &[])
+        };
+        let (_, payload) = openai_payload(Provider::OpenAi, "https://x/v1", "m", &automatic, false);
+        assert_eq!(payload.reasoning_effort, None, "auto asks for nothing");
+    }
+
+    /// Anthropic cannot be asked to think and to use tools in the same request until an
+    /// Exchange carries thinking signatures -- see the field's own note. Pinned here so the
+    /// combination cannot be switched on by accident.
+    #[test]
+    fn anthropic_is_not_asked_to_think_while_tools_are_on_the_request() {
+        let tools = [a_tool()];
+        let with = ChatContext {
+            reasoning: Reasoning::Medium,
+            ..with_tools(&tools, &[])
+        };
+        assert!(anthropic_payload("claude-opus-5", &with, true)
+            .thinking
+            .is_none());
+
+        let without = ChatContext {
+            reasoning: Reasoning::Medium,
+            ..with_tools(&[], &[])
+        };
+        let thinking = anthropic_payload("claude-opus-5", &without, true)
+            .thinking
+            .expect("asked for, with no tools in the way");
+        assert_eq!(thinking["type"], "enabled");
+        let budget = thinking["budget_tokens"].as_u64().unwrap();
+        assert!(
+            budget < u64::from(ANTHROPIC_MAX_TOKENS),
+            "a budget at the cap is a reply that thinks and then cannot answer"
+        );
+        assert!(budget >= 1024, "below Anthropic's minimum is a 400");
+    }
+
+    #[test]
+    fn gemini_is_only_sent_a_thinking_config_when_one_was_asked_for() {
+        let automatic = ChatContext {
+            reasoning: Reasoning::Auto,
+            ..with_tools(&[], &[])
+        };
+        assert!(gemini_payload(&automatic).generation_config.is_none());
+
+        let asked = ChatContext {
+            reasoning: Reasoning::Low,
+            ..with_tools(&[], &[])
+        };
+        let config = gemini_payload(&asked).generation_config.unwrap();
+        assert_eq!(config["thinkingConfig"]["includeThoughts"], true);
+        assert!(config["thinkingConfig"]["thinkingBudget"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn a_gemini_thought_part_is_not_part_of_the_answer() {
+        let candidate: GeminiCandidate = serde_json::from_str(
+            r#"{"content":{"parts":[{"text":"weighing it","thought":true},{"text":"Yes."}]}}"#,
+        )
+        .unwrap();
+        let mut relay = Relay::quiet(true);
+        for part in candidate.content.parts {
+            let text = part.text.unwrap_or_default();
+            if part.thought == Some(true) {
+                relay.thinking(&text);
+            } else {
+                relay.say(&text);
+            }
+        }
+        assert_eq!(
+            relay.finish(),
+            ("Yes.".to_string(), "weighing it".to_string())
+        );
+    }
+
+    #[test]
+    fn an_anthropic_thinking_delta_is_not_part_of_the_answer() {
+        let event: AnthropicStreamEvent = serde_json::from_str(
+            r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"let me see"}}"#,
+        )
+        .unwrap();
+        let delta = event.delta.unwrap();
+        assert_eq!(delta.thinking.as_deref(), Some("let me see"));
+        assert!(delta.text.is_none(), "the two never share a field");
+    }
+
+    /// The gate on sending `think`, read off `/api/show`.
+    #[test]
+    fn the_thinking_capability_is_read_from_what_the_server_lists() {
+        let decode = |body: &str| -> Option<bool> {
+            capability_of(&serde_json::from_str(body).unwrap(), "thinking")
+        };
+        assert_eq!(
+            decode(r#"{"capabilities":["completion","tools","thinking"]}"#),
+            Some(true)
+        );
+        assert_eq!(
+            decode(r#"{"capabilities":["completion","tools"]}"#),
+            Some(false),
+            "a server that listed its capabilities and did not list thinking has said no"
+        );
+        assert_eq!(
+            decode("{}"),
+            None,
+            "an older Ollama says nothing, which is not the same as no"
+        );
+    }
+
+    /// Both local providers carry tools now. LM Studio was excluded on the guess that it
+    /// would be an old build and reject the field; the cost of that guess was that no
+    /// model behind it could call a tool however capable it was, and nothing said so. It
+    /// is asked, and `refused_tools` remembers a no -- the same bargain the effort field
+    /// is on. Offline stays off because there is no server to ask.
+    #[test]
+    fn every_provider_with_a_server_to_ask_is_asked_about_tools() {
+        assert!(Provider::Ollama.supports_native_tools());
+        assert!(Provider::LmStudio.supports_native_tools());
         assert!(!Provider::Offline.supports_native_tools());
         for provider in [
             Provider::OpenAi,
@@ -2525,5 +4733,515 @@ mod failure_tests {
         ] {
             assert!(provider.supports_native_tools(), "{provider}");
         }
+    }
+
+    /// A model that says nothing about its context gets the floor rather than Ollama's
+    /// 4096 default, a model that reports less than the floor gets what it has, and a
+    /// 128K model is capped -- a window that size is gigabytes of KV cache.
+    #[test]
+    fn the_local_context_window_is_clamped_at_both_ends() {
+        // With nothing known about the machine, the clamp is what it always was.
+        assert_eq!(local_context_window(None, None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(0), None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(2048), None), 2048);
+        assert_eq!(local_context_window(Some(4096), None), 4096);
+        assert_eq!(local_context_window(Some(8192), None), LOCAL_CTX_FLOOR);
+        assert_eq!(local_context_window(Some(32_768), None), LOCAL_CTX_CEILING);
+        assert_eq!(local_context_window(Some(131_072), None), LOCAL_CTX_CEILING);
+    }
+
+    /// The two numbers a window is chosen from, read off one `/api/show` body and the tag
+    /// it was asked about.
+    #[test]
+    fn a_models_size_comes_off_the_body_and_its_routing_off_the_tag() {
+        let body = serde_json::json!({
+            "details": {"parameter_size": "8.0B", "quantization_level": "Q4_K_M"}
+        });
+        let dense = model_size_of(&body, "qwen3:8b").expect("both halves are there");
+        assert!((dense.weights_gb - 8.0 * 0.62).abs() < 1e-9);
+        assert!((dense.active_params_b - 8.0).abs() < 1e-9);
+
+        let moe_body = serde_json::json!({
+            "details": {"parameter_size": "30.5B", "quantization_level": "Q4_K_M"}
+        });
+        let moe = model_size_of(&moe_body, "qwen3:30b-a3b").expect("both halves are there");
+        assert!(
+            (moe.active_params_b - 3.0).abs() < 1e-9,
+            "the tag said a3b and the body could not have: {moe:?}"
+        );
+        assert!(
+            moe.weights_gb > dense.weights_gb,
+            "it still weighs what it weighs"
+        );
+    }
+
+    #[test]
+    fn half_a_fit_is_no_fit() {
+        // No quantisation reported: nothing to turn a parameter count into gigabytes with.
+        let no_quant = serde_json::json!({"details": {"parameter_size": "8.0B"}});
+        assert_eq!(model_size_of(&no_quant, "qwen3:8b"), None);
+        // No parameter count: nothing to size a cache with.
+        let no_size = serde_json::json!({"details": {"quantization_level": "Q4_K_M"}});
+        assert_eq!(model_size_of(&no_size, "qwen3:8b"), None);
+        // An older server that reports no details at all -- the case the clamp alone
+        // already handled, and still does.
+        assert_eq!(model_size_of(&serde_json::json!({}), "qwen3:8b"), None);
+    }
+
+    /// With no size known, the room is unknown rather than zero -- which is what leaves the
+    /// window exactly where it was before this existed.
+    #[test]
+    fn a_server_that_reports_no_size_leaves_the_window_to_the_old_clamp() {
+        let facts = LocalFacts {
+            tools: Some(true),
+            context_tokens: Some(131_072),
+            thinking: None,
+            model: None,
+        };
+        assert_eq!(local_context_room(facts), None);
+        assert_eq!(
+            local_context_window(facts.context_tokens, local_context_room(facts)),
+            LOCAL_CTX_CEILING
+        );
+    }
+
+    /// The third clamp, and the one #249 did not have.
+    #[test]
+    fn a_window_the_card_has_no_room_for_is_not_asked_for() {
+        // A model built for 128K, on a machine with room for the floor and no more.
+        assert_eq!(
+            local_context_window(Some(131_072), Some(crate::fit::CTX_FLOOR)),
+            LOCAL_CTX_FLOOR,
+            "what the card has room for wins over what the model was built with"
+        );
+        // And it only ever takes away. A machine with room to spare does not get to hand a
+        // 2048-token model a bigger window than it has.
+        assert_eq!(
+            local_context_window(Some(2048), Some(LOCAL_CTX_CEILING as u32)),
+            2048,
+            "room is a ceiling, never a floor"
+        );
+    }
+
+    /// The two modules must agree about the bounds, because they are the same bounds: `fit`
+    /// chooses a window out of them and this function clamps to them, and a disagreement
+    /// would be two numbers deciding one thing again.
+    #[test]
+    fn the_fit_ladder_and_this_clamp_share_their_bounds() {
+        assert_eq!(u64::from(crate::fit::CTX_FLOOR), LOCAL_CTX_FLOOR);
+        assert_eq!(u64::from(crate::fit::CTX_CEILING), LOCAL_CTX_CEILING);
+    }
+
+    /// `capabilities` present and without "tools" is a real "it cannot"; the field missing
+    /// altogether is no answer at all, and must not become a false.
+    #[test]
+    fn tool_capability_distinguishes_no_from_unknown() {
+        let says_yes = json!({"capabilities": ["completion", "tools", "vision"]});
+        let says_no = json!({"capabilities": ["completion"]});
+        let silent = json!({"details": {"parameter_size": "7B"}});
+        assert_eq!(capability_of(&says_yes, "tools"), Some(true));
+        assert_eq!(capability_of(&says_no, "tools"), Some(false));
+        assert_eq!(capability_of(&silent, "tools"), None);
+    }
+
+    /// The chat payload sends real turns with real roles. The old `/api/generate` payload
+    /// flattened them into one "USER: ...\nA1: ..." string handed over as a single user
+    /// message, which is why a model answered by continuing the script instead of replying.
+    #[test]
+    fn the_chat_payload_sends_turns_not_a_transcript() {
+        let history = vec![
+            Message {
+                sender: "user".to_string(),
+                text: "first question".to_string(),
+                timestamp: String::new(),
+            },
+            Message {
+                sender: "a1".to_string(),
+                text: "first answer".to_string(),
+                timestamp: String::new(),
+            },
+        ];
+        let ctx = ChatContext {
+            system_prompt: "you are A1",
+            history: &history,
+            prompt: "second question",
+            images: &[],
+            agent_name: "A1",
+            tools: &[],
+            exchanges: &[],
+            reasoning: Reasoning::Off,
+        };
+        let payload = ollama_payload("llama3.1", &ctx, true, LocalFacts::default());
+        let roles: Vec<&str> = payload.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "user"]);
+        assert_eq!(payload.messages[3].content, "second question");
+        assert!(payload.tools.is_none(), "no tools offered, so none sent");
+    }
+
+    /// A tool round goes back in Ollama's shape: the assistant message carries
+    /// `tool_calls`, and each result is its own `tool` message naming the tool it answers.
+    #[test]
+    fn a_tool_round_is_replayed_in_ollamas_shape() {
+        let exchanges = vec![
+            Exchange::Called {
+                text: String::new(),
+                calls: vec![NativeCall {
+                    id: "call_0".to_string(),
+                    tool: "search_web".to_string(),
+                    arguments: json!({"query": "latest f1 result"}),
+                }],
+            },
+            Exchange::Returned(vec![CallResult {
+                id: "call_0".to_string(),
+                tool: "search_web".to_string(),
+                output: "eight results".to_string(),
+            }]),
+        ];
+        let schema = crate::tools::ToolSchema {
+            name: "search_web",
+            description: "search the web",
+            input_schema: json!({"type": "object"}),
+            mutating: false,
+            always_allowable: true,
+        };
+        let schemas = [schema];
+        let ctx = ChatContext {
+            system_prompt: "you are A1",
+            history: &[],
+            prompt: "who won",
+            images: &[],
+            agent_name: "A1",
+            tools: &schemas,
+            exchanges: &exchanges,
+            reasoning: Reasoning::Off,
+        };
+        let payload = ollama_payload("llama3.1", &ctx, true, LocalFacts::default());
+        let roles: Vec<&str> = payload.messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "tool"]);
+        assert!(payload.messages[2].tool_calls.is_some());
+        assert_eq!(
+            payload.messages[3].tool_name.as_deref(),
+            Some("search_web"),
+            "Ollama has no call ids, so the tool name is what pairs a result to its call"
+        );
+        let tools = payload.tools.expect("the schema was offered");
+        assert_eq!(tools.len(), 1);
+    }
+
+    /// A streamed call arrives whole, on one object, with no id -- unlike OpenAI, where it
+    /// is reassembled from fragments keyed by index.
+    #[test]
+    fn a_streamed_ollama_call_is_read_off_one_object() {
+        let chunk: OllamaResponse = serde_json::from_str(
+            r#"{"message":{"content":"","tool_calls":[{"function":{"name":"search_web","arguments":{"query":"f1"}}}]},"done":false}"#,
+        )
+        .expect("a chat chunk parses");
+        let calls = chunk.calls(0);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].tool, "search_web");
+        assert_eq!(calls[0].arguments, json!({"query": "f1"}));
+        assert_eq!(
+            calls[0].id, "call_0",
+            "positional, because Ollama issues none"
+        );
+    }
+
+    /// The judgment payload for a model that is already in memory names no context size.
+    ///
+    /// Ollama keys a loaded instance partly on its context size, so a judgment that names
+    /// its own `num_ctx` for a resident model makes the server load a second copy of that
+    /// model -- which is both the slow path this is meant to avoid and, on a card with one
+    /// large model on it, an eviction of the model the reply is about to use.
+    #[test]
+    fn a_warm_judgment_does_not_name_a_context_size_and_a_loading_one_does() {
+        let schema = json!({"type": "object"});
+        let payload = |pace| {
+            serde_json::to_value(OllamaJudgeRequest {
+                model: "qwen3:14b",
+                messages: vec![],
+                stream: false,
+                format: &schema,
+                think: None,
+                logprobs: true,
+                top_logprobs: JUDGE_ALTERNATIVES,
+                options: OllamaJudgeOptions {
+                    temperature: 0.0,
+                    num_ctx: (pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
+                    num_predict: VERDICT_TOKENS,
+                },
+            })
+            .expect("a request serialises")
+        };
+        assert!(
+            payload(Pace::Warm).pointer("/options/num_ctx").is_none(),
+            "the loaded instance is the one that should answer"
+        );
+        assert_eq!(
+            payload(Pace::Loading).pointer("/options/num_ctx"),
+            Some(&json!(LOCAL_CTX_FLOOR)),
+            "a model being loaded for this call is loaded at the floor, not the chat's size"
+        );
+    }
+
+    /// Both judge dialects ask for the alternatives, because a verdict with no confidence
+    /// attached is the thing this was added to stop.
+    #[test]
+    fn a_judgment_asks_for_the_alternatives_at_each_position() {
+        let schema = json!({"type": "object"});
+        let ollama = serde_json::to_value(OllamaJudgeRequest {
+            model: "qwen3:8b",
+            messages: vec![],
+            stream: false,
+            format: &schema,
+            think: None,
+            logprobs: true,
+            top_logprobs: JUDGE_ALTERNATIVES,
+            options: OllamaJudgeOptions {
+                temperature: 0.0,
+                num_ctx: None,
+                num_predict: VERDICT_TOKENS,
+            },
+        })
+        .expect("a request serialises");
+        assert_eq!(ollama.pointer("/logprobs"), Some(&json!(true)));
+        assert_eq!(
+            ollama.pointer("/top_logprobs"),
+            Some(&json!(JUDGE_ALTERNATIVES))
+        );
+
+        let openai = serde_json::to_value(OpenAiJudgeRequest {
+            model: "qwen3:8b",
+            messages: vec![],
+            stream: false,
+            temperature: 0.0,
+            max_tokens: VERDICT_TOKENS,
+            response_format: json!({}),
+            logprobs: true,
+            top_logprobs: JUDGE_ALTERNATIVES,
+        })
+        .expect("a request serialises");
+        assert_eq!(openai.pointer("/logprobs"), Some(&json!(true)));
+        assert_eq!(
+            openai.pointer("/top_logprobs"),
+            Some(&json!(JUDGE_ALTERNATIVES))
+        );
+    }
+
+    /// One token, with its alternatives, read as a share of the mass.
+    fn token(text: &str, logprob: f64, alternatives: &[(&str, f64)]) -> TokenLogprob {
+        TokenLogprob {
+            token: text.to_string(),
+            logprob,
+            top_logprobs: alternatives
+                .iter()
+                .map(|(t, lp)| TokenLogprob {
+                    token: (*t).to_string(),
+                    logprob: *lp,
+                    top_logprobs: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The tokens of a verdict, split the way a server splits them, with the field each
+    /// value belongs to confident or not as asked.
+    fn verdict_tokens(difficulty_confident: bool) -> (String, Vec<TokenLogprob>) {
+        // ln(0.95) and ln(0.5): a value the model held firmly, and one it nearly tossed a
+        // coin over against a single named alternative.
+        let firm = -0.051_293;
+        let split = -std::f64::consts::LN_2;
+        let pieces: Vec<TokenLogprob> = vec![
+            token("{\"", 0.0, &[]),
+            token("difficulty", 0.0, &[]),
+            token("\":\"", 0.0, &[]),
+            if difficulty_confident {
+                token("simple", firm, &[("hard", -2.995_732)])
+            } else {
+                token("simple", split, &[("hard", split)])
+            },
+            token("\",\"", 0.0, &[]),
+            token("needs_fresh_facts", 0.0, &[]),
+            token("\":", 0.0, &[]),
+            token("false", firm, &[("true", -2.995_732)]),
+            token(",\"", 0.0, &[]),
+            token("is_code", 0.0, &[]),
+            token("\":", 0.0, &[]),
+            token("false", firm, &[("true", -2.995_732)]),
+            token("}", 0.0, &[]),
+        ];
+        let text: String = pieces.iter().map(|t| t.token.as_str()).collect();
+        (text, pieces)
+    }
+
+    /// The reading this whole mechanism rests on: the token that decided a field is the
+    /// one covering the byte its value starts at, and its share of the mass is that
+    /// field's number.
+    #[test]
+    fn each_field_takes_the_certainty_of_the_token_that_decided_it() {
+        let (text, tokens) = verdict_tokens(false);
+        let answer: Value = serde_json::from_str(&text).expect("the pieces make a verdict");
+        let confidence = confidence_from(&text, &tokens, &answer);
+
+        let difficulty = confidence
+            .of("difficulty")
+            .expect("a number for difficulty");
+        assert!(
+            (difficulty - 0.5).abs() < 0.01,
+            "two equally likely values is a half, not a verdict: got {difficulty}"
+        );
+        let fresh = confidence
+            .of("needs_fresh_facts")
+            .expect("a number for needs_fresh_facts");
+        assert!(
+            fresh > 0.9,
+            "a value held against a much less likely alternative is near certain: got {fresh}"
+        );
+        // Nothing is attributed to a field the model did not answer.
+        assert_eq!(confidence.of("nonsense"), None);
+    }
+
+    /// The fail-safe, four ways. Every one of these is a real server or a real model, and
+    /// every one of them has to come back with nothing rather than with a guess -- because
+    /// `Sureness::read` reads a missing field as one to act on, and a *wrong* number here
+    /// would abstain on a judgment that was fine.
+    #[test]
+    fn nothing_is_claimed_about_certainty_where_nothing_can_be_known() {
+        let (text, tokens) = verdict_tokens(true);
+        let answer: Value = serde_json::from_str(&text).expect("the pieces make a verdict");
+
+        // A server that ignored the request's `logprobs` -- an older Ollama, or anything
+        // OpenAI-compatible that does not implement them.
+        assert_eq!(confidence_from(&text, &[], &answer), Confidence::default());
+
+        // A token stream that does not reconstruct the answer, which is what a tokeniser
+        // this cannot follow looks like from here. A wrong offset would attach one field's
+        // certainty to another field's value, so nothing is reported at all.
+        let elsewhere = vec![token("nothing", -0.1, &[("like it", -2.0)])];
+        assert_eq!(
+            confidence_from(&text, &elsewhere, &answer),
+            Confidence::default()
+        );
+
+        // An answer that is not an object cannot have fields to be sure of.
+        assert_eq!(
+            confidence_from(&text, &tokens, &json!("hard")),
+            Confidence::default()
+        );
+
+        // A field present in the object but absent from the text: no offset, no number,
+        // and in particular not a zero, which would read as "very unsure".
+        let extra = json!({"difficulty": "simple", "unspoken": true});
+        assert_eq!(confidence_from(&text, &tokens, &extra).of("unspoken"), None);
+    }
+
+    /// A position the server named no alternatives for is reported as the chosen token's
+    /// own probability, rather than as a certainty it did not claim.
+    #[test]
+    fn a_position_with_no_alternatives_reports_what_the_server_did_say() {
+        let alone = token("simple", -std::f64::consts::LN_2, &[]);
+        assert!((share_of_mass(&alone) - 0.5).abs() < 0.01);
+        let certain = token("simple", 0.0, &[]);
+        assert!((share_of_mass(&certain) - 1.0).abs() < 0.001);
+    }
+
+    /// The chosen token appearing among its own alternatives is the ordinary case on both
+    /// servers, and must not be counted twice -- which would halve every number.
+    #[test]
+    fn the_chosen_token_is_not_counted_twice_when_the_server_lists_it() {
+        let listed = token(
+            "simple",
+            -0.051_293,
+            &[("simple", -0.051_293), ("hard", -2.995_732)],
+        );
+        let share = share_of_mass(&listed);
+        assert!(
+            share > 0.9,
+            "the server listing its own choice must not dilute it: got {share}"
+        );
+    }
+
+    /// The two readings a field test has to be able to tell apart, said in words.
+    ///
+    /// A server reporting nothing must not read as a confident judge, because the two route
+    /// identically and only this line distinguishes them.
+    #[test]
+    fn a_silent_server_and_a_sure_judge_do_not_read_the_same() {
+        let silent = Confidence::default().describe();
+        assert!(
+            silent.contains("no confidence reported"),
+            "a server that said nothing has to say so: {silent}"
+        );
+
+        let sure = Confidence::from_pairs(&[("difficulty", 0.95), ("is_code", 0.99)]).describe();
+        assert!(sure.contains("difficulty 95%"), "got {sure}");
+        assert!(sure.contains("is_code 99%"), "got {sure}");
+        assert!(!sure.contains("no confidence"));
+    }
+
+    /// A thinking model is told not to, and a model that cannot think is told nothing.
+    ///
+    /// The second desktop log of the router: `qwen3:8b` thinks by default, the verdict
+    /// budget is 120 tokens, and the whole of it went on the thinking -- so the answer came
+    /// back empty. The other half matters just as much: Ollama refuses `think` outright for
+    /// a model without the capability, so sending it blind would turn every judgment on
+    /// those models into an error.
+    #[test]
+    fn a_judgment_asks_a_thinking_model_not_to_think_and_says_nothing_to_one_that_cannot() {
+        let schema = json!({"type": "object"});
+        let payload = |capability: Option<bool>| {
+            serde_json::to_value(OllamaJudgeRequest {
+                model: "qwen3:8b",
+                messages: vec![],
+                stream: false,
+                format: &schema,
+                think: capability.unwrap_or(false).then_some(false),
+                logprobs: true,
+                top_logprobs: JUDGE_ALTERNATIVES,
+                options: OllamaJudgeOptions {
+                    temperature: 0.0,
+                    num_ctx: None,
+                    num_predict: VERDICT_TOKENS,
+                },
+            })
+            .expect("a request serialises")
+        };
+        assert_eq!(
+            payload(Some(true)).pointer("/think"),
+            Some(&json!(false)),
+            "a model that thinks by default has to be told not to"
+        );
+        for unasked in [Some(false), None] {
+            assert!(
+                payload(unasked).pointer("/think").is_none(),
+                "the field is never sent on a model the server has not said can think"
+            );
+        }
+    }
+
+    /// An empty answer says so, rather than reading as a parser that lost the text.
+    #[test]
+    fn a_judgment_with_nothing_in_it_says_so() {
+        for nothing in ["", "   ", "\n\n"] {
+            let why = parse_judgment(nothing).expect_err("nothing is not a verdict");
+            assert!(
+                why.contains("answered with nothing"),
+                "the operator is told the model sent none, not that a parser failed: {why}"
+            );
+        }
+    }
+
+    /// The object is still cut out of an answer that has furniture around it.
+    #[test]
+    fn a_judgment_in_a_fence_is_still_read() {
+        let parsed = parse_judgment("Here you go:\n```json\n{\"difficulty\": \"hard\"}\n```")
+            .expect("the object is found in it");
+        assert_eq!(parsed.pointer("/difficulty"), Some(&json!("hard")));
+    }
+
+    /// A pace is a claim about who is waiting, so the bounds have to be ordered that way.
+    #[test]
+    fn a_judgment_waiting_on_a_model_load_is_allowed_longer_than_one_that_is_not() {
+        assert!(Pace::Warm.timeout() < Pace::Loading.timeout());
+        assert!(Pace::Loading.timeout() < Pace::Unhurried.timeout());
     }
 }

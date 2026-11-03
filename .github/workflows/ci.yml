@@ -43,12 +43,17 @@ jobs:
   rust:
     name: Rust -- build, test, clippy, format
     runs-on: ubuntu-latest
-    # A normal run of this job is about five and a half minutes. Twice it has hung for
-    # hours instead -- not compiling, just stopped, waiting on a GitHub service that never
-    # answered. Without a limit the default is six hours, so a hung run holds a pull request
-    # open for most of a day and looks exactly like a slow one. This turns that into a
-    # failure you can see and re-run inside half an hour.
-    timeout-minutes: 30
+    # Without a limit the default is six hours, so a hung run holds a pull request open for
+    # most of a day and looks exactly like a slow one. The limit turns that into a failure
+    # you can see and re-run.
+    #
+    # It was 30 minutes, set when a normal run was about five and a half. That stopped being
+    # true: on 2026-10-26 the apt step below took 24m31s on the run that passed, leaving the
+    # whole job twenty seconds inside the limit -- and the next two runs spent the entire
+    # thirty minutes in that same step and were cancelled with nothing compiled and no test
+    # run. The step has retries and timeouts of its own now, which is the actual fix; this
+    # is the headroom so that a slow mirror costs minutes rather than the job.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -141,6 +146,10 @@ jobs:
 
       - name: Install the Linux build dependencies
         if: steps.filter.outputs.rust == 'true'
+        # The step's own ceiling, so a stalled mirror can cost at most this instead of the
+        # job. It has to sit *above* the retry budget below, or it cuts off the retry that
+        # was meant to rescue the run: three attempts of 120s + 240s is 18 minutes, so 20.
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99keep-debs
@@ -148,11 +157,40 @@ jobs:
           # Anything kept from a previous run goes back where apt looks first, so these are
           # installed from disk rather than downloaded again.
           sudo cp -n ~/.cache/aether1-apt/*.deb /var/cache/apt/archives/ 2>/dev/null || true
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config curl wget file libssl-dev \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
-            librsvg2-dev libxdo-dev libnotify-bin bubblewrap
+          # A stalled mirror connection is what costs the time here, and apt's default is
+          # to wait on it: no retries, and a timeout long enough that a handful of dead
+          # sockets add up to the whole job.
+          APT_WAITS=(-o Acquire::Retries=3
+                     -o Acquire::http::Timeout=15
+                     -o Acquire::https::Timeout=15)
+          # Those options alone are not enough, which one 34-minute run proved. They cover a
+          # mirror that stops answering; they do nothing about one that keeps answering
+          # slowly, because bytes still arriving reset no timeout and retry no download.
+          # `timeout` is what covers that case: it gives up on a trickling transfer outright,
+          # and the retry starts a fresh connection that usually lands on another mirror.
+          #
+          # The figures are tight on purpose. A healthy run is about a minute on a warm
+          # cache; anything past a couple of minutes is a mirror not worth waiting for, and
+          # giving up on it early is the whole mechanism. Nothing is lost by cutting a
+          # download short either: the part-finished .debs stay in /var/cache/apt/archives
+          # and the next attempt carries on from them rather than starting again.
+          for attempt in 1 2 3; do
+            if sudo timeout 120 apt-get "${APT_WAITS[@]}" update \
+              && sudo timeout 240 apt-get "${APT_WAITS[@]}" install -y --no-install-recommends \
+                build-essential pkg-config curl wget file libssl-dev \
+                libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+                librsvg2-dev libxdo-dev libnotify-bin bubblewrap; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then
+              echo "apt did not finish in three attempts; failing rather than hanging." >&2
+              exit 1
+            fi
+            echo "apt attempt $attempt stalled or failed -- retrying on a fresh connection." >&2
+            # Each attempt leaves a lock and a part-written list behind.
+            sudo rm -f /var/lib/apt/lists/lock /var/cache/apt/archives/lock
+            sudo dpkg --configure -a || true
+          done
           # Keep them for next time. cp of a root-owned file lands root-owned, and the cache
           # action runs as the runner user, so it has to be able to read them back.
           sudo cp /var/cache/apt/archives/*.deb ~/.cache/aether1-apt/ 2>/dev/null || true
@@ -194,6 +232,86 @@ jobs:
         if: steps.filter.outputs.rust == 'true'
         working-directory: src-tauri
         run: cargo test
+
+  # Windows was built nowhere until a tag was pushed.
+  #
+  # `code_proxy.rs` named `tokio::net::UnixListener` unconditionally from the day it was
+  # written, and `code_model.rs` used `SocketAddr` behind a `#[cfg(unix)]` import. Both were
+  # correct on the two platforms anybody here develops on, both made `cargo build` fail on
+  # Windows with five errors, and nothing in this file could notice: the Rust job above runs
+  # on ubuntu-latest, and release.yml's windows-installer job -- the only thing that ever
+  # compiled for Windows -- runs on a version tag, which is weeks after the commit and far
+  # too late to be a check. The first person to find out was an operator running setup.bat.
+  #
+  # So this job exists to say the one thing the Linux job cannot: it still compiles over
+  # there. It is a check rather than a build or a test run -- `cargo check --all-targets`,
+  # which covers the test code too, since a `#[cfg(unix)]` missing from a test breaks
+  # `cargo test` on Windows exactly as surely. Linking the Tauri bundle and running the
+  # suite stay with release.yml and with the machine that has a display; what matters here
+  # is that no new unix-only call reaches main unnoticed again.
+  #
+  # Warnings are not fatal here, unlike clippy on Linux. Half of the sandbox is deliberately
+  # compiled and unreachable on Windows -- the sandbox is a refusal on this platform, by
+  # design (docs/SECURITY_MODEL.md, section 1) -- and a `-D warnings` run would turn that
+  # into a failing check on every commit.
+  windows:
+    name: Windows -- compiles
+    runs-on: windows-latest
+    # A cold run is a few minutes; this is the "stuck, not slow" line, matched to the Rust
+    # job's own headroom minus the apt step it does not have.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Same reason as the Rust job: the filter below diffs against the base, and
+          # build.rs reads `git log`.
+          fetch-depth: 0
+
+      # The same early exit as the Rust job, for the same reason: around a third of what
+      # lands here touches nothing under src-tauri/, and a Windows runner is the most
+      # expensive minute in this file.
+      - name: Work out whether anything Rust changed
+        id: filter
+        shell: bash
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE:-}" ] \
+             || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "No usable base commit to compare against -- checking Windows."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "${BASE}...HEAD")
+          if [ -z "$changed" ]; then
+            echo "Nothing changed against ${BASE} -- checking Windows."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if grep -qE '^(src-tauri/|\.github/workflows/ci\.yml$)' <<<"$changed"; then
+            echo "Rust-relevant files changed -- checking Windows."
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Nothing under src-tauri/ changed -- skipping the Windows check."
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.rust == 'true'
+
+      # A cache of its own: the key the action builds includes the runner's OS, so this
+      # never collides with the Linux job's.
+      - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.rust == 'true'
+        with:
+          workspaces: src-tauri
+
+      - name: Check it compiles on Windows
+        if: steps.filter.outputs.rust == 'true'
+        working-directory: src-tauri
+        run: cargo check --all-targets
 
   # Deliberately unfiltered, unlike the Rust job above. Several of these checks read
   # src-tauri/ as well as frontend/ -- check_panel_fields.sh compares the panel's fields
@@ -287,6 +405,15 @@ jobs:
       - name: Check every outbound request goes through the egress gate
         run: ./scripts/check_egress_gate.sh
 
+      # The Settings pane declares its own default for every switch and writes every field
+      # back on Save, so a default that disagrees with the one the engine reads is not
+      # cosmetic: the pane shows the operator the opposite of what is happening, and their
+      # first Save of anything at all makes the wrong value real. That is what tools_enabled
+      # did twice (#245, then #261 from the other end), and it was found by driving the
+      # binary rather than by reading, because both halves look correct on their own.
+      - name: Check the Settings pane and the engine share their defaults
+        run: ./scripts/check_setting_defaults.sh
+
       # An argument named snake_case in JavaScript never reaches its Tauri command, and
       # nothing else notices: both halves are individually correct, so the build, clippy
       # and the tests all pass and the panel fails in front of the operator. Two calls in
@@ -307,3 +434,9 @@ jobs:
       # correctly and answered every question with "plugin:event:listen not allowed by ACL".
       - name: Check every undockable panel window has a capability
         run: ./scripts/check_panel_capability.sh
+
+      # Every job here is Linux, so a process spawned without CREATE_NO_WINDOW is invisible
+      # to all of CI and shows up as a black console window over the HUD on Windows -- which
+      # is how rev0.261101.276 shipped with fifty spawn sites and twelve of them quiet.
+      - name: Check no process is spawned with a console window
+        run: ./scripts/check_console_windows.sh

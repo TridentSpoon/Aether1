@@ -24,6 +24,25 @@ mkdir -p "$BIN_DIR" "$SHARE_DIR/applications" "$SHARE_DIR/icons/hicolor/256x256/
 echo "📦 Installing the app..."
 install -m 755 bin/aether1 "$BIN_DIR/aether1"
 
+# **The second command name.** `aurora1` is the companion's command and `aether1` is the one
+# behind the curtain; every subcommand works under both, and the help text names whichever one
+# you typed (see cli::invoked_as). A hard link rather than a copy: it is the same binary, so a
+# copy would double the disk for nothing and could drift from the real one after an update.
+#
+# Linked through a temporary name and renamed into place, for the same reason the binary above
+# is: an `aurora1` that is currently running cannot be replaced where it stands ("Text file
+# busy"), while a rename swaps the directory entry and leaves the running process holding the
+# old file until it exits. `ln -f` is tried first and a copy is the fallback, so a filesystem
+# that refuses hard links still ends up with both names.
+TMP_ALT="$BIN_DIR/aurora1.new.$$"
+if ln -f "$BIN_DIR/aether1" "$TMP_ALT" 2>/dev/null || cp "$BIN_DIR/aether1" "$TMP_ALT"; then
+    chmod 755 "$TMP_ALT"
+    mv -f "$TMP_ALT" "$BIN_DIR/aurora1"
+else
+    rm -f "$TMP_ALT"
+    echo "Note: could not create the 'aurora1' command; 'aether1' works the same way."
+fi
+
 # If this machine previously had the *slim* bundle installed, its pip-installed piper-tts
 # and faster-whisper packages are dead weight here -- the offline bundle brings its own
 # Piper runtime and whisper.cpp below and never touches Python. Uninstalling is optional
@@ -64,9 +83,9 @@ echo ""
 echo "======================================================================"
 echo "✨ INSTALL COMPLETE"
 echo "   Use the Aether1 Platform entry in your app launcher, or run:"
-echo "     $BIN_DIR/aether1"
+echo "     $BIN_DIR/aurora1   (and $BIN_DIR/aether1, the same binary under its other name)"
 echo "======================================================================"
 case ":$PATH:" in
     *":$BIN_DIR:"*) ;;
-    *) echo "Note: $BIN_DIR is not on your PATH yet -- add it to run 'aether1' by name." ;;
+    *) echo "Note: $BIN_DIR is not on your PATH yet -- add it to run 'aurora1' by name." ;;
 esac

@@ -21,8 +21,6 @@
 //! server can still run every test in this file, which is the only way this code was
 //! testable at all.
 
-use std::process::Command;
-
 use serde::Serialize;
 
 /// A ceiling on what any of these commands may hand back. `system_profiler` in particular
@@ -86,7 +84,10 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     if which::which(program).is_err() {
         return None;
     }
-    let out = Command::new(program).args(args).output().ok()?;
+    let out = crate::paths::quiet_command(program)
+        .args(args)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }

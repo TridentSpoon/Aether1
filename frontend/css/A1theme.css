@@ -806,6 +806,53 @@ select,
   background: var(--neon-cyan); box-shadow: 0 0 8px var(--neon-cyan);
 }
 
+/* The model's own reasoning, above the reply it belongs to -- see reasoningPanel in app.js.
+
+   Quieter than the reply on the same principle as .msg-system: it is the model working, not
+   the model answering, and the answer is what the operator came for. Collapsed by default
+   and capped in height when open, because a high-effort thought on a reasoning model runs
+   to thousands of words and an uncapped panel would push every reply off the screen.
+
+   Theme variables throughout rather than literal colours: every colourway is generated
+   from these, and a hard-coded cyan here is a panel that stays cyan on Solar. */
+.reasoning-box {
+  margin: 0 0 0.5rem 0;
+  border: 1px dashed var(--border-neon);
+  border-radius: 3px;
+  background: var(--tint-main);
+}
+
+.reasoning-summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  user-select: none;
+}
+
+.reasoning-summary::-webkit-details-marker { display: none; }
+
+.reasoning-summary:hover { color: var(--neon-cyan); }
+
+.reasoning-body {
+  margin: 0;
+  padding: 4px 8px 6px;
+  max-height: 16rem;
+  overflow-y: auto;
+  border-top: 1px dashed var(--border-neon);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  /* The thought arrives as plain text with its own line breaks and is rendered as plain
+     text on purpose (see reasoningPanel), so wrapping is this panel's job. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* A notice from the program rather than from the persona -- see appendSystemNotice in
    app.js. Quieter than either message bubble on purpose: it is machinery reporting itself,
    and it should not compete with the conversation it sits inside. */
@@ -2109,6 +2156,54 @@ select,
     transition: all 0.15s ease;
 }
 
+/* The brain picker, beside STATE. Styled as part of the bar rather than as a form
+   control: it is a readout you can also change, and a full-height select with a browser
+   chrome arrow in a 22px strip reads as something that fell in from a settings page. */
+.chin-brain-select {
+    max-width: 16rem;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid rgba(0, 240, 255, 0.28);
+    border-radius: 3px;
+    background: rgba(0, 240, 255, 0.05);
+    color: var(--text-accent);
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-size: 10px;
+    line-height: 1.5;
+    cursor: pointer;
+    text-overflow: ellipsis;
+}
+
+.chin-brain-select:hover {
+    background: rgba(0, 240, 255, 0.16);
+    border-color: var(--neon-cyan);
+    color: var(--text-main);
+}
+
+#chin-brain-row:not(.hidden) {
+    display: inline-flex;
+}
+
+/* The same control in the chat input row, sized for the row it is in: a touch larger
+   than the chin bar's, and narrow enough that it never takes width from the box you
+   type in -- a long cloud model id is cut with an ellipsis and read from the title. */
+#chat-brain-row:not(.hidden) {
+    display: inline-flex;
+}
+
+.chat-brain-select {
+    max-width: 9rem;
+    padding: 0.3rem 0.4rem;
+    font-size: 11px;
+}
+
+@media (max-width: 720px) {
+    /* The box and Send come first when there is no room for all of it; the chin bar's
+       copy is still there. */
+    #chat-brain-row:not(.hidden) {
+        display: none;
+    }
+}
+
 .chin-cmd:hover {
     background: rgba(0, 240, 255, 0.16);
     border-color: var(--neon-cyan);
@@ -2783,6 +2878,62 @@ select,
 }
 
 .hub-row.is-unfit .hub-row-name { color: var(--text-dim); }
+
+/* ------------------------- THE SAVED-PROVIDER ROSTER -------------------------
+   The list above the AI Model Connection form: every provider, what is kept for it,
+   and which one is answering. Styled from the theme variables rather than from
+   Tailwind's own palette for the reason check_theme_remap.sh exists -- bg-slate-900
+   is a fixed dark grey whatever theme is on, and this list is drawn from JavaScript,
+   where that guard cannot see it. Same surface and same selected state as .hub-row,
+   because it is the same kind of list; it is not .hub-row itself only because a row
+   here carries a second control (Forget) beside the part that is clickable. */
+.provider-account {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: var(--bg-panel);
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.provider-account:hover { background: var(--bg-panel-hover); }
+
+.provider-account.is-selected {
+    border-color: var(--border-neon);
+    background: var(--tint-main);
+}
+
+.provider-account-pick {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.provider-account-name,
+.provider-account-meta {
+    font-family: 'JetBrains Mono', monospace;
+    display: block;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.provider-account-name { font-size: 0.72rem; color: var(--text-main); }
+.provider-account-meta { font-size: 0.6rem; color: var(--text-dim); }
+.provider-account-answering { color: var(--text-accent); }
+
+.provider-account-note {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+}
 
 .hub-empty {
     padding: 0.75rem 0.5rem;

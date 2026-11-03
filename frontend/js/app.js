@@ -324,6 +324,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const headerUpdateProgress = document.getElementById('header-update-progress');
     const headerUpdateProgressBar = document.getElementById('header-update-progress-bar');
     const headerUpdateProgressText = document.getElementById('header-update-progress-text');
+    const headerUpdateProgressDetail = document.getElementById('header-update-progress-detail');
     const updateSection = document.getElementById('update-section');
     const settingsVersionLabel = document.getElementById('settings-version-label');
     const updateStatusBox = document.getElementById('update-status-box');
@@ -427,34 +428,36 @@ document.addEventListener('DOMContentLoaded', () => {
         try { localStorage.setItem(SESSION_KEY, id); } catch (e) { /* private mode: this run only */ }
     }
 
-    /* The wordmark. Once the companion has a name of its own, that is what the top-left of
-       the window should say -- it is the thing you are talking to. Turning over to
-       AETHER1 PLATFORM every so often is how the product it runs on stays visible without
-       taking a permanent second line to say so. A name that already is Aether1 has nothing
-       to alternate with, so it just sits there. */
-    const PLATFORM_WORDMARK = 'AETHER1 PLATFORM';
-    const WORDMARK_TURNOVER_MS = 14000;
+    /* The wordmark says the companion's name, and only that. It used to turn over to
+       AETHER1 PLATFORM every fourteen seconds, so the product underneath stayed visible
+       without a permanent second line -- defensible while the companion and the platform
+       shared a name, because then the alternation was invisible.
+
+       The rename made it visible, and wrong. AURORA1 is what the operator talks to; the
+       Aether1 Platform is the name behind the curtain, for whoever builds on it. The
+       studio's sidebar says AURORA1 permanently, so a header saying AETHER1 PLATFORM half
+       the time put the two names side by side on one screen and read as a rename left
+       half-done -- which is how it was reported. The platform keeps the two places
+       addressed to somebody who wants to know it: this wordmark's tooltip, and the About
+       box. A fourteen-second rotation was never a way to tell anybody anything.
+
+       An empty name falls back to AURORA1 rather than to the platform. The only moment it
+       is empty is before settings load, and that fallback is what flashed the old name on
+       every start. */
+    const DEFAULT_WORDMARK = 'AURORA1';
     const elWordmark = document.getElementById('hud-wordmark');
-    let wordmarkShowingPlatform = false;
 
     function wordmarkName() {
-        const name = (currentAgentName || '').trim().toUpperCase();
-        return name && name !== 'AETHER1' ? name : PLATFORM_WORDMARK;
+        return (currentAgentName || '').trim().toUpperCase() || DEFAULT_WORDMARK;
     }
 
     function refreshWordmark() {
         if (!elWordmark) return;
         const name = wordmarkName();
-        const next = wordmarkShowingPlatform && name !== PLATFORM_WORDMARK ? PLATFORM_WORDMARK : name;
-        if (elWordmark.textContent === next) return;
-        elWordmark.textContent = next;
-        elWordmark.title = name === PLATFORM_WORDMARK ? 'Aether1' : `${name} — running on Aether1`;
+        if (elWordmark.textContent === name) return;
+        elWordmark.textContent = name;
+        elWordmark.title = `${name} — running on the Aether1 Platform`;
     }
-
-    setInterval(() => {
-        wordmarkShowingPlatform = !wordmarkShowingPlatform;
-        refreshWordmark();
-    }, WORDMARK_TURNOVER_MS);
 
     /* The bar's two slide-outs. Only one is ever open, and anything that is not a deliberate
        interaction with the open one closes it -- a click elsewhere, Escape, or opening the
@@ -584,6 +587,8 @@ document.addEventListener('DOMContentLoaded', () => {
         localStorage.setItem('aether_avatar', avatarName);
         setHologramAvatar(avatarName);
         updateAvatarBadge(avatarName);
+        // The empty screen draws this one as a mark in a box; it is the same pick.
+        paintStudioCage();
 
         // The Customise button belongs to the custom avatar and nothing else -- it would
         // be a lie next to hAlcy, whose shape is fixed in code.
@@ -621,8 +626,8 @@ document.addEventListener('DOMContentLoaded', () => {
        saying so. It keeps whatever you had. */
     const AVATAR_PRESETS = {
         a1: {
-            name: 'AETHER1', persona: 'default', voice: 'en-GB-SoniaNeural',
-            greeting: '🅰️ **Aether1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
+            name: 'AURORA1', persona: 'default', voice: 'en-GB-SoniaNeural',
+            greeting: '🅰️ **Aurora1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
         },
         halcy: {
             name: 'HALCY', persona: 'halcy', voice: 'en-US-JennyNeural',
@@ -1701,7 +1706,7 @@ document.addEventListener('DOMContentLoaded', () => {
                        is distinguishable at all is the whole reason wearingDesktopAccent exists
                        separately from desktopAccent. */
                     lines.push(`Your desktop is set to ${setTo}, so this is ${shell}.`);
-                    lines.push(info.note || 'No accent colour came back from your desktop, so AETHER1 is keeping the accent it was designed with.');
+                    lines.push(info.note || 'No accent colour came back from your desktop, so AURORA1 is keeping the accent it was designed with.');
                 }
                 desktopNote.textContent = lines.join(' ');
             }
@@ -2380,7 +2385,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (row) row.classList.remove('hidden');
         if (!tokens.cost) {
             value.textContent = 'unpriced';
-            note.textContent = `Nobody has told Aether1 what ${tokens.model || 'this model'} charges. Add it to model_prices.json next to the database and the cost appears here.`;
+            note.textContent = `Nobody has told Aurora1 what ${tokens.model || 'this model'} charges. Add it to model_prices.json next to the database and the cost appears here.`;
             return;
         }
 
@@ -2469,7 +2474,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return escaped;
     }
 
-    /* A line from AETHER1 the program, not from the persona.
+    /* A line from AURORA1 the program, not from the persona.
        Deliberately not appendMessage: that one puts the agent's own name and avatar on
        what it renders, and attributing "your model was uninstalled" to the character is
        how an operator learns to distrust what the character says. This is plainly the
@@ -2480,7 +2485,7 @@ document.addEventListener('DOMContentLoaded', () => {
         row.className = 'my-2 px-3 py-2 text-xs font-mono leading-relaxed msg-system self-stretch';
         const label = document.createElement('span');
         label.className = 'opacity-70';
-        label.textContent = 'AETHER1 — ';
+        label.textContent = 'AURORA1 — ';
         row.appendChild(label);
         row.appendChild(document.createTextNode(text));
         chatContainer.appendChild(row);
@@ -2614,6 +2619,56 @@ document.addEventListener('DOMContentLoaded', () => {
         read: { mark: '\u25c6', hint: 'Fetched deliberately while answering this.' },
         found: { mark: '\u25cb', hint: 'Offered by search as a candidate. It may not have used it.' }
     };
+
+    /* The model's reasoning, kept beside the answer rather than in it.
+
+       Collapsed by default and created only when a thought actually arrives, which is the
+       difference between a feature and a row of empty boxes down the transcript: most
+       models never send one. It goes above the body because that is the order it happened
+       in -- the thinking came first -- and because a panel underneath would push the answer
+       up the screen every time a new line of thought landed.
+
+       Everything here is plain text, never formatMarkdown. A thought is full of half-written
+       fences, stray backticks and tag-like fragments; it is the model talking to itself, and
+       rendering it as markup would mangle it and occasionally swallow it. */
+    function reasoningPanel(msgDiv) {
+        if (msgDiv.reasoningBox) return msgDiv.reasoningBox;
+
+        const box = document.createElement('details');
+        box.className = 'reasoning-box';
+
+        const summary = document.createElement('summary');
+        summary.className = 'reasoning-summary';
+        summary.textContent = '\u{1F4AD} thinking\u2026';
+        box.appendChild(summary);
+
+        const body = document.createElement('pre');
+        body.className = 'reasoning-body';
+        box.appendChild(body);
+
+        msgDiv.insertBefore(box, msgDiv.bodyDiv);
+        msgDiv.reasoningBox = box;
+        msgDiv.reasoningBody = body;
+        return box;
+    }
+
+    /** Appends a reasoning delta, opening the panel the first time one arrives. */
+    function appendReasoning(msgDiv, delta) {
+        if (!delta) return;
+        reasoningPanel(msgDiv);
+        msgDiv.reasoningBody.textContent += delta;
+        /* Only auto-scroll the chat if the operator has opened the panel. Closed, it does
+           not grow, so there is nothing to follow. */
+        if (msgDiv.reasoningBox.open) chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+
+    /* Relabels the panel once the answer starts, so a reply that has been sitting there for
+       a minute does not go on claiming to be thinking. */
+    function sealReasoning(msgDiv) {
+        if (!msgDiv.reasoningBox) return;
+        const summary = msgDiv.reasoningBox.querySelector('summary');
+        if (summary) summary.textContent = '\u{1F4AD} thought for a moment';
+    }
 
     function attachConsultedNotes(msgDiv, notes) {
         if (!Array.isArray(notes) || notes.length === 0) return;
@@ -2904,6 +2959,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? await tauriInvoke('approve_action_rust', { id: action.id })
                     : await toolsApi(`/api/actions/${action.id}/approve`, { method: 'POST' });
                 settle(`✔ Done — ${data && data.result ? data.result : 'no output'}`, 'text-emerald-300');
+                /* The half that was missing. Printing the output into this card and
+                   stopping is what made approving pointless: the model's own tool result
+                   had been "PROPOSED ... do not assume it happened", so it answered from
+                   memory while the real answer sat here, in the one place nothing reads
+                   back. Now the result goes to the model and it answers again knowing it.
+
+                   Only when the proposal came from a conversation -- one raised from the
+                   CLI has no session to resume, and Rust says so by sending no session_id
+                   rather than by guessing at the one currently open. */
+                if (data && data.session_id) await resumeAfterAction(action.id);
             } catch (e) {
                 settle(`✖ Failed: ${e.message || e}`, 'text-rose-300');
             }
@@ -3167,11 +3232,19 @@ document.addEventListener('DOMContentLoaded', () => {
     /// Sends a prompt and calls onDelta with each piece of the reply as it arrives.
     /// Resolves with the authoritative final reply -- the deltas are for display, the
     /// return value is what gets rendered as final text.
-    async function streamChat(text, sessionId, onDelta, onHandover, media = []) {
+    async function streamChat(text, sessionId, onDelta, onHandover, media = [], onReasoning = () => {}) {
         if (IS_TAURI) {
             const streamId = `s${Date.now()}${Math.random().toString(16).slice(2)}`;
             const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
                 if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+            });
+            /* The model's own reasoning, on its own event for the same reason the hand-off
+               has one: it is not part of the answer, and it must not be rendered into the
+               reply, spoken, or handed to the tool-trace logic below. Rust has already
+               taken it out of the text -- see providers::Relay -- so this is a second
+               channel, not a filter. */
+            const unlistenReasoning = await window.__TAURI__.event.listen('chat-reasoning', (event) => {
+                if (event.payload && event.payload.stream_id === streamId) onReasoning(event.payload.delta);
             });
             /* Flow mode. Its own event rather than a first delta, because it is a different
                speaker -- the node leaving says it, and every delta after belongs to the one
@@ -3187,6 +3260,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally {
                 unlisten();
                 unlistenHandover();
+                unlistenReasoning();
             }
         }
 
@@ -3203,6 +3277,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let data;
                 try { data = JSON.parse(event.data); } catch (e) { return; }
                 if (data.type === 'delta') onDelta(data.delta);
+                else if (data.type === 'reasoning') onReasoning(data.delta);
                 else if (data.type === 'handover') onHandover(data);
                 else if (data.type === 'error') { socket.close(); reject(new Error(data.error)); }
                 else if (data.type === 'done') { socket.close(); resolve(data); }
@@ -3210,6 +3285,69 @@ document.addEventListener('DOMContentLoaded', () => {
             socket.onerror = () => reject(new Error('chat socket failed'));
             socket.onclose = () => reject(new Error('chat socket closed before the reply finished'));
         });
+    }
+
+    /// Streams the answer the model gives once an approved action's output reaches it.
+    ///
+    /// Deliberately thinner than the send path: there is no new operator turn, no flow
+    /// hand-off (the same node is still answering) and no thinking animation, because the
+    /// operator has just watched the tool run and knows what is happening. It speaks the
+    /// finished reply rather than chunking it as it arrives -- a resumed answer is short,
+    /// and the chunked speech chain is the send path's complication, not this one's.
+    async function resumeAfterAction(actionId) {
+        const replyDiv = appendMessage(currentAgentName, '');
+        let rendered = '';
+        const onDelta = (delta) => {
+            if (!delta) return;
+            rendered += delta;
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        };
+
+        let data;
+        try {
+            if (IS_TAURI) {
+                const streamId = `r${Date.now()}${Math.random().toString(16).slice(2)}`;
+                const unlisten = await window.__TAURI__.event.listen('chat-delta', (event) => {
+                    if (event.payload && event.payload.stream_id === streamId) onDelta(event.payload.delta);
+                });
+                const unlistenReasoning = await window.__TAURI__.event.listen('chat-reasoning', (event) => {
+                    if (event.payload && event.payload.stream_id === streamId) {
+                        appendReasoning(replyDiv, event.payload.delta);
+                    }
+                });
+                try {
+                    data = await tauriInvoke('resume_after_action_rust', { id: actionId, streamId });
+                } finally {
+                    unlisten();
+                    unlistenReasoning();
+                }
+            } else {
+                data = await toolsApi(`/api/actions/${actionId}/resume`, { method: 'POST' });
+            }
+        } catch (e) {
+            // The tool ran and its output is on the card above; only the second answer
+            // failed. Say that, rather than letting an empty bubble stand.
+            replyDiv.bodyDiv.innerHTML = formatMarkdown(
+                `_The result is above, but I could not answer from it: ${e.message || e}_`
+            );
+            return;
+        }
+
+        const reply = (data && data.reply) || rendered;
+        replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+        if (data && data.reasoning) {
+            appendReasoning(replyDiv, data.reasoning);
+            replyDiv.reasoningBody.textContent = data.reasoning;
+        }
+        sealReasoning(replyDiv);
+        if (data && data.agent_name) updateAgentNameDisplay(data.agent_name);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+        if (autoSpeak && reply.trim()) {
+            const url = await synthesizeSpeechUrl(reply, null);
+            if (url) await voiceEngine.playTTSAudio(url);
+        }
     }
 
     /* Whether the last probe said something is still missing. Held here so the send path
@@ -3300,7 +3438,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderChatImagePreviews() {
         if (!chatMediaPreviews) return;
         chatMediaPreviews.replaceChildren();
-        chatMediaPreviews.classList.toggle('hidden', pendingChatImages.length === 0);
+        // Both, because `hidden` alone does not beat a `flex` sitting in the class list.
+        const empty = pendingChatImages.length === 0;
+        chatMediaPreviews.classList.toggle('hidden', empty);
+        chatMediaPreviews.classList.toggle('flex', !empty);
         pendingChatImages.forEach((image, index) => {
             const wrap = document.createElement('div');
             wrap.className = 'relative border border-cyan-500/40 rounded overflow-hidden';
@@ -3450,6 +3591,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // here the arriving text is the feedback.
                 firstDelta = false;
                 stopWaiting();
+                sealReasoning(replyDiv);
                 replyDiv.classList.add('typing-cursor');
                 setAvatarState('IDLE');
             }
@@ -3484,8 +3626,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (senderSpan) senderSpan.innerHTML = `🌐 <strong>${handover.to.toUpperCase()}</strong>`;
         };
 
+        /* Reasoning is feedback too, and better feedback than a spinner: the operator can
+           watch the model work. It deliberately does not retire the waiting state the way
+           an answer delta does -- the answer is still entirely ahead of them -- but it does
+           stop the hologram claiming to think about a question it is visibly thinking
+           about, so the wait counter is left running and the panel does the talking. */
+        const onReasoning = (delta) => appendReasoning(replyDiv, delta);
+
         try {
-            const data = await streamChat(text, currentSessionId, onDelta, onHandover, media);
+            const data = await streamChat(
+                text, currentSessionId, onDelta, onHandover, media, onReasoning
+            );
             // Something came back, so whatever loading was going to happen has happened:
             // no later question in this session gets the first-run explanation.
             hasAnsweredThisSession = true;
@@ -3497,6 +3648,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // deltas, which also repairs the display if any delta was dropped.
             replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
             replyDiv.classList.remove('typing-cursor');
+            sealReasoning(replyDiv);
+            /* Authoritative, exactly as the reply is: a dropped reasoning delta is repaired
+               from the return value. Only replaced when there is something to replace it
+               with -- an older build, or the browser transport on a provider that reports
+               nothing, sends no field at all, and blanking the panel over that would throw
+               away what did arrive. */
+            if (data.reasoning) {
+                // appendReasoning builds the panel if no delta ever arrived to build it;
+                // the assignment then puts the authoritative text in it either way.
+                appendReasoning(replyDiv, data.reasoning);
+                replyDiv.reasoningBody.textContent = data.reasoning;
+                sealReasoning(replyDiv);
+            }
             attachConsultedNotes(replyDiv, data.notes);
             voiceEngine.playSFX('incoming');
 
@@ -4313,8 +4477,8 @@ document.addEventListener('DOMContentLoaded', () => {
             codeOwnModel.classList.toggle('hidden', !current);
             if (current) {
                 codeOwnModel.textContent = advice.aether1_model_too_small
-                    ? `Aether1 itself is running on ${current}, which is too small to troubleshoot or to drive an agent offline.`
-                    : `Aether1 itself is running on ${current}.`;
+                    ? `Aurora1 itself is running on ${current}, which is too small to troubleshoot or to drive an agent offline.`
+                    : `Aurora1 itself is running on ${current}.`;
                 codeOwnModel.classList.toggle('text-amber-300', !!advice.aether1_model_too_small);
                 codeOwnModel.classList.toggle('text-slate-400', !advice.aether1_model_too_small);
             }
@@ -4409,6 +4573,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let onTerminalTabShown = null;
 
     function switchChatTab(which) {
+        /* A view the operator has switched off is not somewhere anything may send
+           them -- not the sidebar, not the menu, not sendToTerminal, not a remembered
+           tab from before it was switched off. Asking for one lands on the first that
+           is on, which is always at least one (js/modules.js will not switch off the
+           last). */
+        if (window.A1Modules && !window.A1Modules.isOn(which)) {
+            const first = window.A1Modules.on()[0];
+            if (!first || first === which) return;
+            which = first;
+        }
         document.querySelectorAll('[data-chat-view]').forEach(view => {
             const mine = view.getAttribute('data-chat-view') === which;
             view.classList.toggle('hidden', !mine);
@@ -4452,6 +4626,64 @@ document.addEventListener('DOMContentLoaded', () => {
             switchChatTab(tab.getAttribute('data-chat-tab'));
         });
     });
+
+    /* ---- the chat panel's tabs as modules --------------------------------------
+     *
+     * Trident, 2026-11-03: the app should be modular, down to "sub tabs in chat
+     * are modules to enable I.E chat only or code only or term if a user wanted to
+     * use the terminal only". The panels have had switches since layout.js; these
+     * are the eight tabs inside the chat panel.
+     *
+     * One checkbox per tab, drawn from the tab strip by js/modules.js, in the same
+     * shape as the panel checkboxes directly above them in Settings -> Display --
+     * they are two halves of one question and should not look like two features.
+     */
+    function openChatTab() {
+        const open = document.querySelector('[data-chat-view]:not(.hidden)');
+        return open ? open.getAttribute('data-chat-view') : null;
+    }
+
+    function renderViewToggles() {
+        const host = document.getElementById('view-toggles');
+        if (!host || !window.A1Modules) return;
+        const ids = window.A1Modules.ids();
+        const lastOne = window.A1Modules.on().length <= 1;
+        host.replaceChildren(...ids.map((id) => {
+            const on = window.A1Modules.isOn(id);
+            const row = document.createElement('label');
+            row.className = 'flex items-center gap-2 cursor-pointer';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = on;
+            // The last one on cannot be switched off, so it is drawn as the thing it
+            // is rather than as a checkbox that silently refuses.
+            box.disabled = on && lastOne;
+            box.className = 'rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
+            box.addEventListener('change', () => window.A1Modules.set(id, box.checked));
+            const text = document.createElement('span');
+            text.className = 'text-[11px] font-mono text-slate-300';
+            text.textContent = window.A1Modules.label(id);
+            row.append(box, text);
+            return row;
+        }));
+    }
+
+    function initChatModules() {
+        if (!window.A1Modules) return;
+        // After the browser build has removed the terminal, so the list is the tabs
+        // that are really there.
+        window.A1Modules.refresh();
+        window.addEventListener('a1-modules-change', () => {
+            renderViewToggles();
+            // Switching off the tab you are looking at has to move you somewhere, or
+            // the panel is left showing a view with no tab to leave it by.
+            const open = openChatTab();
+            if (open && !window.A1Modules.isOn(open)) switchChatTab(window.A1Modules.on()[0]);
+        });
+        const open = openChatTab();
+        if (open && !window.A1Modules.isOn(open)) switchChatTab(window.A1Modules.on()[0]);
+        renderViewToggles();
+    }
 
     /* Which model is answering, said above the conversation rather than discovered by
        asking it. Reuses the coding panel's own advice so the tab and the setup panel can
@@ -4638,8 +4870,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const approve = document.createElement('button');
         approve.type = 'button';
         approve.className = 'cyber-btn cyber-btn-active text-[10px] py-1 px-2 whitespace-nowrap shrink-0';
-        approve.textContent = externalWrite ? 'Review remote action' : (githubCommand ? 'Review GitHub command' : 'Run with Aether1');
-        approve.title = 'Review the exact command before Aether1 runs it.';
+        approve.textContent = externalWrite ? 'Review remote action' : (githubCommand ? 'Review GitHub command' : 'Run with Aurora1');
+        approve.title = 'Review the exact command before Aurora1 runs it.';
         row.appendChild(approve);
 
         const approval = document.createElement('div');
@@ -4693,7 +4925,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (IS_TAURI) {
                 result = await tauriInvoke('code_run_approved_rust', { command, rememberSimilar });
             } else {
-                throw new Error('Run approvals are available only in the Aether1 desktop window.');
+                throw new Error('Run approvals are available only in the Aurora1 desktop window.');
             }
             output.textContent = result;
         } catch (err) {
@@ -5468,7 +5700,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (repair.kind === 'hand-over') {
             const why = document.createElement('p');
             why.className = 'text-[10px] font-mono text-amber-400 leading-snug';
-            why.textContent = 'AETHER1 will not run this one: it needs root, and AETHER1 never asks for your password. Run it yourself, then restart AETHER1.';
+            why.textContent = 'AURORA1 will not run this one: it needs root, and AURORA1 never asks for your password. Run it yourself, then restart AURORA1.';
             wrap.appendChild(why);
             if (repair.command) wrap.appendChild(doctorCommand(repair.command));
             return wrap;
@@ -5515,7 +5747,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ask.disabled = true;
             const left = (attended.remaining || []).map(r => `${r.title}: ${r.detail}`).join('\n');
             handleSendMessage(
-                'AETHER1 just repaired what it could of itself and these are still wrong. '
+                'AURORA1 just repaired what it could of itself and these are still wrong. '
                 + 'Look into them and tell me what to do:\n\n' + left,
             );
         };
@@ -5525,7 +5757,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function refreshDoctor({ quiet = false } = {}) {
         if (!doctorChecks) return;
-        if (!quiet) setDoctorStatus('Checking every part of AETHER1...', 'busy');
+        if (!quiet) setDoctorStatus('Checking every part of AURORA1...', 'busy');
         if (btnDoctorRun) btnDoctorRun.disabled = true;
         try {
             const report = await fetchDoctorReport();
@@ -5632,7 +5864,7 @@ document.addEventListener('DOMContentLoaded', () => {
            to the operator or to the companion, and neither of them said this. */
         const waiting = document.createElement('p');
         waiting.className = 'text-[11px] font-mono text-cyan-300 my-2 self-start animate-pulse';
-        waiting.textContent = 'Verifying AETHER1...';
+        waiting.textContent = 'Verifying AURORA1...';
         chatContainer.appendChild(waiting);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         try {
@@ -6038,7 +6270,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const stats = report.stats || {};
         const operator = report.operator || {};
-        document.getElementById('profile-agent-name').textContent = operator.agent_name || 'AETHER1';
+        document.getElementById('profile-agent-name').textContent = operator.agent_name || 'AURORA1';
         // The short form up here — the nickname when there is one, the hostname otherwise.
         // The full phrase, with both, is under the machine card where it is being edited.
         document.getElementById('profile-machine').textContent =
@@ -6159,7 +6391,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // refuses it, and the button says so rather than offering a press that fails.
             btnLanToggle.disabled = starting || (running && !ours);
             btnLanToggle.title = running && !ours
-                ? 'Started outside AETHER1, so AETHER1 will not stop it.'
+                ? 'Started outside AURORA1, so AURORA1 will not stop it.'
                 : '';
         }
 
@@ -6169,7 +6401,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 + 'without one there is nothing for another device to type. Pair a device '
                 + 'makes one and starts the server for you.';
         } else if (running && !ours) {
-            notice = `Something is already answering on port ${report.port}. AETHER1 did not `
+            notice = `Something is already answering on port ${report.port}. AURORA1 did not `
                 + 'start it, so it will not stop it either.';
         }
         // "Nothing has paired yet" is deliberately NOT here: the device list says it, a few
@@ -6648,14 +6880,14 @@ document.addEventListener('DOMContentLoaded', () => {
         title.className = 'net-row-title';
         title.textContent = peer.is_this_machine
             ? `${peer.name} (this machine)`
-            : String(peer.name || 'an AETHER1');
+            : String(peer.name || 'an AURORA1');
         const hint = document.createElement('p');
         hint.className = 'net-row-hint';
         const addresses = Array.isArray(peer.addresses) ? peer.addresses : [];
         const where = addresses.length
             ? addresses.map(address => `${address}:${peer.port}`).join('  ')
             : `port ${peer.port}`;
-        hint.textContent = peer.version ? `${where} — AETHER1 ${peer.version}` : where;
+        hint.textContent = peer.version ? `${where} — AURORA1 ${peer.version}` : where;
         text.append(title, hint);
         row.append(text);
 
@@ -7134,7 +7366,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // works. It supersedes any reply still being spoken rather than queueing
                 // behind it, which is what you want from a button marked "test".
                 await voiceEngine.playTTSAudio(url);
-                setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aether1 -- check the volume and which output device is selected.`, 'good');
+                setVoiceStatus(`It spoke, using ${report.engine}. If you heard nothing, the problem is this computer's sound rather than Aurora1 -- check the volume and which output device is selected.`, 'good');
             } else {
                 setVoiceStatus(`Nothing could speak. ${report.why || 'No engine reported a reason.'}`, 'bad');
             }
@@ -7257,7 +7489,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (voicePickerNote) {
             voicePickerNote.textContent = downloadable
                 ? VOICE_PICKER_NOTE
-                : 'Local-only mode is on, so Aether1 will not fetch anything. Switch it off in ' +
+                : 'Local-only mode is on, so Aurora1 will not fetch anything. Switch it off in ' +
                   'Settings, or copy a voice into the folder named above by hand.';
         }
 
@@ -8302,6 +8534,19 @@ document.addEventListener('DOMContentLoaded', () => {
         loading: false,
         loaded: false,
         pollTimer: null,
+        /* The Hugging Face tab. Its rows come from the hub rather than from a catalogue
+           compiled into the binary, so they arrive on a request and the tab has states the
+           other two do not: searching, failed, and "nothing matched". `hfQuery` is the
+           query the rows on screen belong to, which is what stops a slow reply for an
+           earlier query from overwriting a later one's results. */
+        hf: [],
+        hfQuery: null,
+        hfLoading: false,
+        hfError: '',
+        hfOnlyTools: true,
+        hfQuants: {},
+        hfChosenQuant: {},
+        hfSearchTimer: null,
     };
 
     // The last telemetry reading, kept so the hub's chips can say what the machine has
@@ -8323,9 +8568,35 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* A byte count as somebody reads it. Decimal gigabytes, matching what Hugging Face
+       and every download manager show, rather than binary ones -- a figure that disagrees
+       with the page the file came from is worse than either convention. */
+    function hubBytes(bytes) {
+        if (!bytes) return '';
+        if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+        return `${Math.round(bytes / 1_000_000)} MB`;
+    }
+
     function hubGb(value) {
         if (typeof value !== 'number' || value <= 0) return null;
         return Number.isInteger(value) ? `${value} GB` : `${value.toFixed(1)} GB`;
+    }
+
+    /* A context length reads as 16K rather than as 16384 everywhere people talk about
+       them, and the exact figure is not what somebody is deciding on. */
+    function hubTokens(value) {
+        if (typeof value !== 'number' || value <= 0) return '';
+        return value % 1024 === 0 ? `${value / 1024}K` : String(value);
+    }
+
+    /* What loading this would do to what the card is already holding. The 'evicts' case is
+       the one worth a warning: it fits, and the model Aurora1 is mid-conversation with
+       does not survive it. */
+    function hubResidency(verdict) {
+        if (verdict === 'alongside') return '✔ Fits alongside';
+        if (verdict === 'evicts') return '⚠ Turns out what is loaded';
+        if (verdict === 'too_big') return 'Will not fit the card';
+        return 'Nothing else on the card';
     }
 
     /* The two catalogues as one list. A model that appears in both -- a coding model big
@@ -8342,6 +8613,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 existing.purposes = Array.from(new Set(existing.purposes.concat(entry.purposes)));
                 existing.recommended = existing.recommended || entry.recommended;
                 existing.runs_aether1 = existing.runs_aether1 || entry.runs_aether1;
+                existing.tools = existing.tools || entry.tools;
                 return;
             }
             byName.set(entry.name, entry);
@@ -8365,6 +8637,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // run on; the flag only means something on the coding list, where a model
                 // can be too small to hold the written tool protocol.
                 runs_aether1: true,
+                // Whether it can call a tool at all, which is what decides whether the
+                // companion running it can search the web. See setup::Entry::tools.
+                tools: !!model.tools,
             });
         }
 
@@ -8400,7 +8675,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return hub.installed.map(name => known.get(name) || {
             name,
             label: name,
-            blurb: 'Downloaded on this computer, and not one of the models Aether1 suggests '
+            blurb: 'Downloaded on this computer, and not one of the models Aurora1 suggests '
                 + '-- so there is nothing here about what it needs or what it is good at.',
             download: '',
             needs_gb: 0,
@@ -8414,7 +8689,105 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    /* A Hugging Face repository in the same shape as a catalogue row, so one list
+       renderer and one detail panel serve all three tabs. The fields a catalogue entry has
+       and a repository cannot -- a memory estimate, a download size -- are left absent
+       rather than guessed: the hub does not know how big an arbitrary GGUF is until a
+       quantisation is chosen, and inventing a figure there is how somebody ends up
+       downloading nineteen gigabytes onto a laptop. */
+    function hubHfRows() {
+        const installed = hub.installed || [];
+        return hub.hf
+            .filter(repo => !hub.hfOnlyTools || repo.tools !== 'none')
+            .map(repo => {
+                const chosen = hub.hfChosenQuant[repo.id];
+                const pull = chosen ? `hf.co/${repo.id}:${chosen}` : null;
+                return {
+                    name: repo.id,
+                    label: repo.id.split('/').pop(),
+                    blurb: hubHfBlurb(repo),
+                    download: '',
+                    needs_gb: 0,
+                    needs_vram_gb: 0,
+                    fits_on_gpu: false,
+                    recommended: false,
+                    installed: !!pull && installed.some(have => have.toLowerCase() === pull.toLowerCase()),
+                    purposes: ['chat'],
+                    // Only known once a quantisation is chosen; until then the row makes no
+                    // claim about fit rather than claiming it fits.
+                    fits: hubHfFits(repo),
+                    runs_aether1: repo.tools !== 'none',
+                    /* Three states, not two. `repo.tools` is 'known', 'none' or 'unknown'
+                       and the detail panel has always said all three -- but the row
+                       collapsed anything short of 'known' to false, so a repository
+                       Hugging Face says nothing about was listed as "no tools" while the
+                       panel beside it said "Tool support unknown". The list and the detail
+                       disagreed about the same repository, and the list was the one that
+                       was wrong. `null` is the third state; the row prints it as its own
+                       thing. */
+                    tools: repo.tools === 'known' ? true : repo.tools === 'none' ? false : null,
+                    hf: repo,
+                };
+            });
+    }
+
+    /* True until a quantisation is chosen: a row cannot be greyed out for not fitting
+       before anything is known about its size, and the fit filter never applies on this
+       tab anyway. */
+    function hubHfFits(repo) {
+        const quants = hub.hfQuants[repo.id];
+        const chosen = quants && quants.find(q => q.label === hub.hfChosenQuant[repo.id]);
+        return chosen && chosen.fits === false ? false : true;
+    }
+
+    function hubHfBlurb(repo) {
+        const downloads = repo.downloads >= 1000
+            ? `${Math.round(repo.downloads / 1000)}k downloads in the last month`
+            : `${repo.downloads} downloads in the last month`;
+        const tools = repo.tools === 'known'
+            ? 'This family can call tools, so a companion running it can search the web and look at this machine.'
+            : repo.tools === 'none'
+                ? 'This family cannot call tools, so it cannot search the web or look at anything — it can only talk.'
+                : 'Whether this one can call tools is not something Hugging Face reports. Aurora1 asks the server once it is downloaded, and the model page under RUNS AURORA1 ITSELF will say.';
+        const gated = repo.gated
+            ? ' This repository is gated: it will refuse a download until you have accepted its terms on Hugging Face and signed in.'
+            : '';
+        return `Published by ${repo.owner}. ${downloads}, ${repo.likes} likes. ${tools}${gated}`;
+    }
+
+    /* The size filter, for a Hugging Face repository.
+
+       The generic branch below reads a parameter count out of the model's *name* and
+       demands that the name also look quantised -- which is right for the Ollama
+       catalogue, where `qwen3:14b` and `llama3.1:8b-q4_K_M` say both things in the name.
+       It is wrong here twice over: a repository is called `Qwythos-9B-v2-GGUF`, which no
+       quantisation pattern matches, and the parameter count has already been parsed
+       server-side into `repo.params`. So the whole filter was skipped on this tab -- which
+       is why "30B+ quantised" sat there listing 9B models and hiding nothing at all.
+
+       Every repository the search returns is a GGUF, because the search asks for
+       `filter=gguf`, so "quantised" is true of all of them by construction and the only
+       question left is the size. */
+    function hubHfWithinScale(row) {
+        if (hub.scale === 'all') return true;
+        const billions = hubHfBillions(row.hf.params);
+        // No parameter count in the name is not evidence of a size, so a filter that asks
+        // for one hides it rather than guessing it in.
+        if (!billions) return false;
+        return hub.scale === 'multi-quant' ? billions >= 7 : billions >= 30;
+    }
+
+    /* `hf::parameter_size` keeps a mixture-of-experts multiplier in the figure, so this
+       sees "8X7B" as well as "9B". Reading that as 8 would put Mixtral in with the small
+       models; it is the product that is the size. */
+    function hubHfBillions(params) {
+        const parts = String(params || '').match(/^(\d+(?:\.\d+)?)(?:[xX](\d+(?:\.\d+)?))?B$/);
+        if (!parts) return 0;
+        return Number(parts[1]) * (parts[2] ? Number(parts[2]) : 1);
+    }
+
     function hubVisibleRows() {
+        if (hub.tab === 'hf') return hubHfRows().filter(hubHfWithinScale);
         let rows = hub.tab === 'device' ? hubDeviceRows() : hub.models.slice();
 
         const term = hub.search.trim().toLowerCase();
@@ -8538,6 +8911,18 @@ document.addEventListener('DOMContentLoaded', () => {
             pick.textContent = 'best for code';
             meta.appendChild(pick);
         }
+        if (!model.unknown && model.tools === false) {
+            const mute = document.createElement('span');
+            mute.style.color = 'var(--text-dim, #94a3b8)';
+            mute.textContent = 'no tools';
+            meta.appendChild(mute);
+        } else if (model.tools === null) {
+            // Hugging Face does not report this, and saying nothing reads as "fine".
+            const mute = document.createElement('span');
+            mute.style.color = 'var(--text-dim, #94a3b8)';
+            mute.textContent = 'tools unknown';
+            meta.appendChild(mute);
+        }
         body.appendChild(meta);
         row.appendChild(body);
 
@@ -8558,7 +8943,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (title) {
             title.textContent = hub.tab === 'device'
                 ? `${rows.length} downloaded on this computer`
-                : `${rows.length} models for this computer`;
+                : hub.tab === 'hf'
+                    ? (hub.hfLoading ? 'Searching Hugging Face...' : `${rows.length} from Hugging Face`)
+                    : `${rows.length} models for this computer`;
         }
 
         list.innerHTML = '';
@@ -8568,7 +8955,10 @@ document.addEventListener('DOMContentLoaded', () => {
             empty.textContent = hub.tab === 'device'
                 ? 'Nothing is downloaded yet, or no model server answered on this computer. '
                   + 'Pick one under Discover and press Download.'
-                : 'Nothing matches that search.';
+                : hub.tab === 'hf'
+                    ? (hub.hfError
+                        || (hub.hfLoading ? 'Searching Hugging Face...' : hubHfEmptyText()))
+                    : 'Nothing matches that search.';
             list.appendChild(empty);
             return;
         }
@@ -8625,6 +9015,11 @@ document.addEventListener('DOMContentLoaded', () => {
         sub.textContent = model.name;
         panel.appendChild(sub);
 
+        if (model.hf) {
+            renderHubHfDetail(panel, model);
+            return;
+        }
+
         const localInfo = hub.localModels.find(choice => choice.name === model.name);
         if (localInfo && (localInfo.parameter_size || localInfo.quantization)) {
             const specs = document.createElement('div');
@@ -8641,6 +9036,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (model.recommended) tags.appendChild(hubTag('Best fit for this computer', 'pick'));
         if (model.best_for_code) tags.appendChild(hubTag('Best coding model here', 'pick'));
         if (model.installed) tags.appendChild(hubTag('✔ Downloaded', 'on'));
+        // Said as loudly as the fit, because it is the same class of fact: a model that
+        // cannot call a tool is a companion that cannot search the web or look at this
+        // machine, however well it writes, and the name does not tell anybody that.
+        if (!model.unknown && !model.tools) tags.appendChild(hubTag('Cannot use tools', 'off'));
         if (!model.fits && !model.unknown) tags.appendChild(hubTag('More memory than this computer has', 'off'));
         if (tags.childElementCount) panel.appendChild(tags);
 
@@ -8727,7 +9126,10 @@ document.addEventListener('DOMContentLoaded', () => {
             ? '⚡ Whole model fits'
             : 'Partly on the processor'));
         if (!model.unknown) {
-            facts.appendChild(hubFact('RUNS AETHER1 ITSELF', model.runs_aether1 ? 'Yes' : 'Too small'));
+            facts.appendChild(hubFact('RUNS AURORA1 ITSELF', model.runs_aether1 ? 'Yes' : 'Too small'));
+            facts.appendChild(hubFact('TOOLS', model.tools
+                ? 'Can search the web'
+                : 'Talk only'));
         }
         if (facts.childElementCount) panel.appendChild(facts);
 
@@ -8739,6 +9141,219 @@ document.addEventListener('DOMContentLoaded', () => {
             note.className = 'text-[10px] font-mono text-slate-500 leading-snug';
             note.textContent = hub.sizedAgainst;
             panel.appendChild(note);
+        }
+    }
+
+    function hubHfEmptyText() {
+        if (hub.hfOnlyTools) {
+            return 'Nothing on Hugging Face matched that from a family known to support tools. '
+                + 'Clear "only models that can use tools" to see everything that matched.';
+        }
+        return 'Hugging Face returned nothing for that. Try a family name — qwen3, llama, mistral.';
+    }
+
+    /* The detail panel for a Hugging Face repository.
+       Different from a catalogue model in one way that matters: there is nothing to
+       download until a quantisation is chosen, because a repository holds a dozen of them
+       at sizes an order of magnitude apart. So the panel asks for the file list the first
+       time somebody looks at a repository, and the Download button stays disabled until
+       there is a name to pull. */
+    function renderHubHfDetail(panel, model) {
+        const repo = model.hf;
+
+        const tags = document.createElement('div');
+        tags.className = 'hub-tags';
+        if (repo.params) tags.appendChild(hubTag(`${repo.params} parameters`));
+        if (repo.tools === 'known') tags.appendChild(hubTag('Can use tools', 'on'));
+        if (repo.tools === 'none') tags.appendChild(hubTag('Cannot use tools', 'off'));
+        if (repo.tools === 'unknown') tags.appendChild(hubTag('Tool support unknown'));
+        if (repo.gated) tags.appendChild(hubTag('Gated repository', 'off'));
+        if (model.installed) tags.appendChild(hubTag('✔ Downloaded', 'on'));
+        if (tags.childElementCount) panel.appendChild(tags);
+
+        const quants = hub.hfQuants[repo.id];
+        const chosen = quants && quants.find(q => q.label === hub.hfChosenQuant[repo.id]);
+        const action = document.createElement('div');
+        action.className = 'hub-action';
+
+        const size = document.createElement('span');
+        size.className = 'hub-action-size';
+        if (quants === undefined) {
+            size.textContent = 'Looking at the files in this repository...';
+        } else if (!quants.length) {
+            size.textContent = 'No GGUF file here that Ollama can pull.';
+        } else if (chosen && chosen.bytes) {
+            // The figure that decides it, in the row that spends the bandwidth, same as
+            // the Discover tab: a repository offers a dozen of these between half a
+            // gigabyte and thirty, and the name alone says nothing about which.
+            size.textContent = `Download is ${hubBytes(chosen.bytes)}`;
+        } else {
+            size.textContent = 'Quality and size:';
+        }
+        action.appendChild(size);
+
+        const buttons = document.createElement('div');
+        buttons.className = 'flex gap-2 flex-wrap items-center';
+
+        if (quants && quants.length) {
+            const picker = document.createElement('select');
+            picker.className = 'hub-select';
+            picker.setAttribute('aria-label', 'Which quantisation to download');
+            for (const quant of quants) {
+                const option = document.createElement('option');
+                option.value = quant.label;
+                // Size in the option itself, because the choice between Q4_K_M and Q8_0 is
+                // a choice about gigabytes and the labels do not say so.
+                const parts = [quant.label];
+                if (quant.bytes) parts.push(hubBytes(quant.bytes));
+                if (quant.preferred) parts.push('recommended');
+                if (quant.fits === false) parts.push('more memory than this computer has');
+                option.textContent = parts.join(' · ');
+                picker.appendChild(option);
+            }
+            picker.value = hub.hfChosenQuant[repo.id] || (quants.find(q => q.preferred) || quants[0]).label;
+            hub.hfChosenQuant[repo.id] = picker.value;
+            picker.addEventListener('change', () => {
+                hub.hfChosenQuant[repo.id] = picker.value;
+                renderHubList();
+                renderHubDetail();
+            });
+            buttons.appendChild(picker);
+
+            const pull = `hf.co/${repo.id}:${hub.hfChosenQuant[repo.id]}`;
+            if (model.installed) {
+                const use = document.createElement('button');
+                use.type = 'button';
+                use.className = 'cyber-btn cyber-btn-active text-xs py-1.5 px-3 whitespace-nowrap';
+                use.textContent = '✔ Use this one';
+                use.addEventListener('click', () => hubUseModel({ name: pull }));
+                buttons.appendChild(use);
+            } else {
+                const download = document.createElement('button');
+                download.type = 'button';
+                download.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+                download.textContent = '⬇ Download';
+                download.disabled = !hub.canInstall;
+                download.title = hub.canInstall
+                    ? `Pulls ${pull}`
+                    : 'Downloading from here needs Ollama on this computer.';
+                download.addEventListener('click', () => hubDownload({ name: pull }, download));
+                buttons.appendChild(download);
+            }
+        }
+
+        const open = document.createElement('a');
+        open.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+        open.href = `https://huggingface.co/${repo.id}`;
+        open.target = '_blank';
+        open.rel = 'noopener noreferrer';
+        open.textContent = 'Open on Hugging Face';
+        buttons.appendChild(open);
+
+        action.appendChild(buttons);
+        panel.appendChild(action);
+
+        const blurb = document.createElement('div');
+        blurb.className = 'hub-blurb';
+        blurb.textContent = model.blurb;
+        panel.appendChild(blurb);
+
+        const facts = document.createElement('div');
+        facts.className = 'hub-facts';
+        /* System requirements first, because they are what somebody is deciding on. Every
+           one of them comes from the size of the chosen file, so they appear and disappear
+           with the quantisation picker above rather than being stated for the repository
+           as a whole -- a repository does not have a memory requirement, a file does. */
+        if (chosen && chosen.needs_gb) {
+            facts.appendChild(hubFact('MEMORY IT WANTS', hubGb(Math.round(chosen.needs_gb * 10) / 10)));
+            facts.appendChild(hubFact('THIS COMPUTER', chosen.fits
+                ? '✔ Has the memory'
+                : '⚠ Not enough memory'));
+            facts.appendChild(hubFact('GRAPHICS CARD', chosen.fits_on_gpu === null || chosen.fits_on_gpu === undefined
+                ? 'No dedicated card found'
+                : chosen.fits_on_gpu
+                    ? '⚡ Whole model fits'
+                    : 'Partly on the processor'));
+            /* The other half of the question, and the one this panel used to leave out: a
+               file that fits is not a file worth running until you know what window it
+               leaves. Absent rather than zero where the repository never said how big the
+               model is -- see hf::parse_quants. */
+            if (chosen.context) {
+                facts.appendChild(hubFact('ROOM TO READ', `${hubTokens(chosen.context)} tokens`));
+            } else if (chosen.context === null && chosen.kv_gb !== null && chosen.kv_gb !== undefined) {
+                facts.appendChild(hubFact('ROOM TO READ', '⚠ Not enough for a useful window'));
+            }
+            if (chosen.residency) {
+                facts.appendChild(hubFact('ALREADY LOADED', hubResidency(chosen.residency)));
+            }
+            if (chosen.tokens_per_second) {
+                facts.appendChild(hubFact('ROUGH SPEED', `~${Math.round(chosen.tokens_per_second)} tokens/sec`));
+            }
+        }
+        facts.appendChild(hubFact('DOWNLOADS', String(repo.downloads)));
+        facts.appendChild(hubFact('LIKES', String(repo.likes)));
+        if (repo.updated) facts.appendChild(hubFact('LAST UPDATED', repo.updated.slice(0, 10)));
+        panel.appendChild(facts);
+
+        // Said on every repository, because it is the one thing this tab cannot know and
+        // the one thing that decides whether the companion works afterwards.
+        const note = document.createElement('div');
+        note.className = 'text-[10px] font-mono text-slate-500 leading-snug';
+        note.textContent = 'Aurora1 asks the model server what a downloaded model can '
+            + 'actually do, so whether it can call tools is settled after the download, not '
+            + 'by this list.';
+        panel.appendChild(note);
+
+        if (quants === undefined) hubLoadQuants(repo.id);
+    }
+
+    /* One listing per repository, kept once fetched. A repository's file list does not
+       change while somebody is browsing, and re-asking on every re-render would make
+       clicking down the list a request per keystroke. */
+    async function hubLoadQuants(repoId) {
+        if (hub.hfQuants[repoId] !== undefined) return;
+        hub.hfQuants[repoId] = undefined;
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('hf_quants_rust', { repo: repoId })
+                : await (await apiFetch(`/api/models/huggingface/quants?repo=${encodeURIComponent(repoId)}`)).json();
+            hub.hfQuants[repoId] = data.quants || [];
+            if (data.error) setHubStatus(`⚠ ${data.error}`, 'bad');
+        } catch (error) {
+            hub.hfQuants[repoId] = [];
+            setHubStatus(`⚠ ${error.message || error}`, 'bad');
+        }
+        if (hub.selected === repoId) renderHubDetail();
+    }
+
+    /* One search of Hugging Face. An empty box is the hub's own front page -- the most
+       downloaded GGUF repositories there are -- rather than an empty list, because
+       somebody who does not know what to type is exactly who this tab is for. */
+    async function hubSearchHf() {
+        const query = hub.search.trim();
+        if (hub.hfQuery === query && !hub.hfError) return;
+        hub.hfLoading = true;
+        hub.hfError = '';
+        renderHubList();
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('hf_search_rust', { query })
+                : await (await apiFetch(`/api/models/huggingface?q=${encodeURIComponent(query)}`)).json();
+            // A reply for a query nobody is looking at any more is dropped rather than
+            // drawn: two searches in flight otherwise finish in whichever order the network
+            // decides, and the box stops agreeing with the list under it.
+            if (hub.search.trim() !== query) return;
+            hub.hf = data.models || [];
+            hub.hfError = data.error || '';
+            hub.hfQuery = query;
+        } catch (error) {
+            hub.hf = [];
+            hub.hfError = `Hugging Face could not be reached: ${error.message || error}`;
+        } finally {
+            hub.hfLoading = false;
+            hub.selected = null;
+            renderHubList();
+            renderHubDetail();
         }
     }
 
@@ -8768,6 +9383,9 @@ document.addEventListener('DOMContentLoaded', () => {
             picker.value = model.name;
         }
         document.getElementById('settings-group-connection')?.setAttribute('open', 'open');
+        // The provider box was just set from under the roster, which tracks it.
+        providerShowing = providerBox?.value || providerShowing;
+        renderProviderAccounts();
         setHubStatus(`${model.name} is filled in below. Press Save Changes to start thinking with it.`, 'good');
     }
 
@@ -8779,7 +9397,18 @@ document.addEventListener('DOMContentLoaded', () => {
         box.innerHTML = '';
         for (const download of list) box.appendChild(renderDownloadRow(download, null));
 
+        /* A failure has to replace the reassurance, not sit under it. The download row
+           went red with "Could not reach Ollama ... Connection refused" while the status
+           line below it still read "the bar below is live, and the download carries on
+           either way" -- so the panel was telling somebody their download was fine at the
+           same moment it told them it had failed. The status line is set once when the
+           pull starts and nothing ever took it back. */
+        const failed = list.filter(d => d.phase === 'failed');
         const running = list.filter(d => d.phase !== 'done' && d.phase !== 'failed');
+        if (failed.length && !running.length) {
+            const first = failed[0];
+            setHubStatus(`⚠ ${first.model} did not download. ${first.error || ''}`.trim(), 'bad');
+        }
         if (!running.length && hub.pollTimer) {
             clearInterval(hub.pollTimer);
             hub.pollTimer = null;
@@ -8850,6 +9479,1142 @@ document.addEventListener('DOMContentLoaded', () => {
         hubRefreshDownloads();
     }
 
+    /* ---------------------------------------------------------------- the brain picker
+
+       One control in the chin bar for the question somebody asks several times an evening:
+       answer this one locally, or answer it with Claude. Where the AI runs is a setting
+       three levels down in The Brain -- the right home for an address and a key, and the
+       wrong one for a choice made mid-conversation. The only thing in the chat itself was a
+       dropdown of local models for the active persona, in the desktop app alone.
+
+       Two groups in one list, because they are two different decisions: what is on this
+       computer, and which company to send the question to. An online provider appears only
+       when a key for it exists -- an entry that switches and then fails with a 401 is worse
+       than no entry, which is what `llm_api_key_<provider>` is for. */
+    const brainState = { current: null, loading: false, autoValue: null, autoSetting: null };
+
+    /* Chosen instead of a model: open Settings at The Brain. The picker is also the
+       answer to "where do I set this up?", so the way out of an empty list is in the
+       list. \u0000 cannot occur in a provider key, so it cannot collide with a real one. */
+    const BRAIN_SETUP = '\u0000setup';
+
+    /* Auto is not a model and not a provider: it is the router deciding, per message,
+       between what is on this computer and what is online. It sits at the top of the list
+       because it is the answer to the question the list asks, and it is written as one
+       entry rather than a switch somewhere else so that turning it off is the same gesture
+       as turning it on -- picking a model. The value is the one the backend minted
+       (`llm::auto::PICKER_VALUE`), so the two cannot drift apart. */
+    const BRAIN_AUTO = '\u0000auto';
+
+    /* Two controls, one list. The chin bar one says what is answering at a glance, beside
+       STATE; this one is in the row where the question is typed, which is where somebody
+       about to ask it is looking. Both are filled from the same reply and both write
+       through the same save, so they cannot disagree. */
+    function brainControls() {
+        return ['chin-brain', 'chat-brain']
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .map(select => ({ select, row: select.parentElement }));
+    }
+
+    const brainValue = (provider, model) => `${provider}\u001f${model || ''}`;
+
+    /* Draws one of the two selects. Never leaves it empty and never takes it away: a
+       control that vanishes when the model server is down is indistinguishable from one
+       that was removed, which is exactly the report this started from. With nothing to
+       list it still says what is configured, and still offers the way to Settings. */
+    function fillBrainSelect(select, data) {
+        select.innerHTML = '';
+        const local = (data && data.local && data.local.models) || [];
+        const online = ((data && data.online) || []).filter(entry => entry.ready);
+        const auto = (data && data.auto) || null;
+
+        if (auto) {
+            const option = document.createElement('option');
+            option.value = auto.value || BRAIN_AUTO;
+            // The judge runs on a model on this machine, so with nothing installed there
+            // is nothing to judge with. Shown and refused rather than hidden, for the same
+            // reason the online group is under local-only mode: an entry that is missing
+            // reads as a feature that does not exist.
+            option.textContent = auto.ready
+                ? 'Auto — decide per message'
+                : 'Auto — needs a model on this computer';
+            option.disabled = !auto.ready;
+            option.title = 'A small model on this computer reads each message and decides '
+                + 'whether to answer it here or send it online, and whether anything needs '
+                + 'looking up. Every answer says which it picked.';
+            select.appendChild(option);
+        }
+
+        if (local.length) {
+            const group = document.createElement('optgroup');
+            group.label = 'On this computer';
+            for (const entry of local) {
+                const option = document.createElement('option');
+                option.value = brainValue(data.local.provider, entry.model);
+                // The one fact about a local model that decides whether the companion can
+                // look anything up, and the one the name never tells you. Absent when the
+                // server did not say, rather than guessed at.
+                option.textContent = entry.tools === false
+                    ? `${entry.model} — no tools`
+                    : entry.model;
+                group.appendChild(option);
+            }
+            select.appendChild(group);
+        }
+
+        if (online.length) {
+            const group = document.createElement('optgroup');
+            group.label = data.local_only ? 'Online (blocked by local-only mode)' : 'Online';
+            for (const entry of online) {
+                const option = document.createElement('option');
+                option.value = brainValue(entry.provider, entry.model);
+                option.textContent = entry.model ? `${entry.label} — ${entry.model}` : entry.label;
+                // Local-only mode refuses these before the request is built, so they are
+                // shown and not selectable rather than hidden: somebody who has configured
+                // Claude and cannot pick it should be able to see why.
+                option.disabled = !!data.local_only;
+                group.appendChild(option);
+            }
+            select.appendChild(group);
+        }
+
+        if (auto && auto.on) {
+            select.value = auto.value || BRAIN_AUTO;
+            select.title = 'Auto is deciding where each message goes. Pick a model to '
+                + 'decide yourself.';
+            const setup = document.createElement('option');
+            setup.value = BRAIN_SETUP;
+            setup.textContent = 'Set up another…';
+            select.appendChild(setup);
+            return;
+        }
+
+        const current = data ? brainValue(data.current.provider, data.current.model) : '';
+        if (current) {
+            select.value = current;
+            if (select.value !== current) {
+                // What is configured is not on the list -- a cloud provider with its key in
+                // the environment, a model that is no longer installed, or no model chosen
+                // at all. Said, rather than silently showing the first option as though it
+                // were the choice.
+                const option = document.createElement('option');
+                option.value = current;
+                option.textContent = `${data.current.provider} — ${data.current.model || 'no model set'}`;
+                select.appendChild(option);
+                select.value = current;
+            }
+        } else {
+            // The reply itself did not arrive. Which model is answering is then genuinely
+            // unknown, and saying so is better than showing a stale name.
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Model — could not ask';
+            select.appendChild(option);
+            select.value = '';
+        }
+
+        const setup = document.createElement('option');
+        setup.value = BRAIN_SETUP;
+        setup.textContent = local.length || online.length
+            ? 'Set up another…'
+            : 'Set up a model…';
+        select.appendChild(setup);
+
+        select.title = 'Where this question gets answered. Changing it takes effect on the '
+            + 'next message.';
+    }
+
+    async function refreshBrainPicker() {
+        const controls = brainControls();
+        // Not `!controls.length` any more: the popover is a third control over the same
+        // reply, and in the studio it is the only one on screen.
+        if (brainState.loading) return;
+        brainState.loading = true;
+        let data = null;
+        try {
+            data = IS_TAURI
+                ? await tauriInvoke('brains_rust')
+                : await (await apiFetch('/api/models/brains')).json();
+        } catch (error) {
+            data = null;
+        }
+        brainState.loading = false;
+
+        brainState.autoValue = (data && data.auto && data.auto.value) || BRAIN_AUTO;
+        brainState.autoSetting = (data && data.auto && data.auto.setting) || 'auto_router';
+        brainState.current = data && data.auto && data.auto.on
+            ? brainState.autoValue
+            : (data ? brainValue(data.current.provider, data.current.model) : '');
+        // Kept, so the popover can redraw on a tab or a search keystroke without asking
+        // the model server the same question again.
+        brainState.data = data;
+        for (const { select, row } of controls) {
+            fillBrainSelect(select, data);
+            row?.classList.remove('hidden');
+        }
+        renderBrainPopover();
+    }
+
+    /* Opens Settings at The Brain. Shared by the selects and by the popover, because
+       "where do I set this up?" is the same question wherever the empty list was seen. */
+    async function openBrainSetup() {
+        voiceEngine.playSFX('click');
+        await loadSettings();
+        settingsModal?.classList.remove('hidden');
+        showSettingsSection('brain');
+    }
+
+    /* The one place a model is chosen, whichever control did the choosing: either of the
+       two selects, or a row in the studio's popover. It takes the picker's own encoded
+       value rather than a provider and a model, because one of the things it can be told
+       is not a provider and a model -- it is Auto.
+
+       Through the same save path as Settings, so the one place that knows how to store a
+       provider and its key stays the only place that does it. The engine reads the
+       provider out of settings for every request (llm::load_config), so this is in force
+       from the next message -- there is nothing further to press. Returns true when the
+       switch took, so a control can put itself back when it did not. */
+    async function switchBrainTo(value) {
+        const chose_auto = value === (brainState.autoValue || BRAIN_AUTO);
+        const [provider, model] = value.split('\u001f');
+        try {
+            /* Every pick writes the switch, including the ones that turn it off. Writing
+               it only when Auto is chosen would leave an install where Auto is on and a
+               model is also selected, and nothing on screen to say which of the two is in
+               force. The provider and model are left exactly as they were when Auto is
+               chosen: they are what it falls back to, and what it uses when it decides to
+               go online. */
+            const payload = chose_auto
+                ? { [brainState.autoSetting || 'auto_router']: true }
+                : {
+                    llm_provider: provider,
+                    llm_model: model,
+                    [brainState.autoSetting || 'auto_router']: false,
+                };
+            if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+            else {
+                const response = await apiFetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!response.ok) throw new Error((await response.text()) || 'Could not switch.');
+            }
+            appendSystemNotice(chose_auto
+                ? 'Auto is deciding where each message goes from now on. Every answer says '
+                  + 'which model it picked.'
+                : `Answering with ${model || provider} from now on.`);
+        } catch (error) {
+            appendSystemNotice(`Could not switch: ${error.message || error}`);
+            return false;
+        }
+        // Every control, so none of them is left naming the model that was answering a
+        // moment ago.
+        refreshBrainPicker();
+        return true;
+    }
+
+    function initBrainPicker() {
+        const controls = brainControls();
+        for (const { select } of controls) {
+            select.addEventListener('change', async () => {
+                if (select.value === BRAIN_SETUP) {
+                    // Not a model: put the control back to what is answering and take them
+                    // to the place that configures one.
+                    select.value = brainState.current;
+                    await openBrainSetup();
+                    return;
+                }
+                if (!await switchBrainTo(select.value)) select.value = brainState.current;
+            });
+        }
+        initBrainPopover();
+        refreshBrainPicker();
+    }
+
+    /* ------------------------------------------------- the model picker, as a popover
+
+       The third control over the same `brains` reply, and in the studio the only one on
+       screen. The other two are `<select>`s -- fine for the dozen entries they were
+       written for, and useless at the sixty a machine with Ollama, LM Studio and three
+       keys actually has. This one has a search box and four tabs, after the picker in
+       Trident's Unsloth screenshot.
+
+       It writes through switchBrain, the same one the selects write through, and it is
+       filled from brainState.data, the same reply they are filled from. There is one
+       question here -- which model answers -- and one answer to it in the window. */
+
+    const brainPop = {
+        open: false,
+        tab: 'recommended',
+        search: '',
+        trigger: null,
+        panel: null,
+        list: null,
+        auto: null,
+    };
+
+    /* AUTO is not a model, so it is not in the list the tabs sort: it is the judgement
+       about which model, made per message by the local router #256 built. The judge runs
+       on a model on this machine, so with nothing installed there is nothing to judge
+       with -- which is what `ready` says. Shown and refused rather than hidden in that
+       case, for the same reason the online group is under local-only mode: an entry that
+       is missing reads as a feature that does not exist. */
+    function brainAutoReady() {
+        return !!(brainState.data && brainState.data.auto && brainState.data.auto.ready);
+    }
+
+    /* Whether Auto is the thing currently answering, as opposed to merely available. The
+       selects read this off `select.value`; the popover has no value to read, so it asks
+       the state the same refresh filled in. */
+    function brainAutoOn() {
+        return !!(brainState.data && brainState.data.auto && brainState.data.auto.on);
+    }
+
+    /* Which models each tab shows.
+
+       - On device: what is installed on this machine, from the local server.
+       - Connected: the online providers a key exists for. An entry that switches and then
+         fails with a 401 is worse than no entry.
+       - Recommended: the ones that will actually do what the chips under the box offer --
+         every ready online provider, and the local models the server did not say cannot
+         call tools. A model that cannot call a tool cannot look anything up, which is the
+         single most common way "it won't search" starts, so it is not recommended here.
+       - All: both, unfiltered. */
+    function brainPopGroups() {
+        const data = brainState.data;
+        if (!data) return [];
+        const local = (data.local && data.local.models) || [];
+        const online = (data.online || []).filter(entry => entry.ready);
+        const tab = brainPop.tab;
+
+        const localRows = local.map(entry => ({
+            provider: data.local.provider,
+            model: entry.model,
+            name: entry.model,
+            note: entry.tools === false ? 'NO TOOLS' : '',
+            disabled: false,
+            toolless: entry.tools === false,
+        }));
+        const onlineRows = online.map(entry => ({
+            provider: entry.provider,
+            model: entry.model,
+            name: entry.model ? `${entry.label} — ${entry.model}` : entry.label,
+            note: data.local_only ? 'LOCAL-ONLY' : '',
+            // Local-only mode refuses these before the request is built, so they are shown
+            // and not selectable rather than hidden: somebody who has configured Claude and
+            // cannot pick it should be able to see why.
+            disabled: !!data.local_only,
+            toolless: false,
+        }));
+
+        const groups = [];
+        const deviceLabel = `On this computer${data.local && data.local.provider ? ` — ${data.local.provider}` : ''}`;
+        const onlineLabel = data.local_only ? 'Online — blocked by local-only mode' : 'Online';
+        if (tab === 'device') {
+            groups.push({ label: deviceLabel, rows: localRows });
+        } else if (tab === 'connected') {
+            groups.push({ label: onlineLabel, rows: onlineRows });
+        } else if (tab === 'recommended') {
+            groups.push({ label: deviceLabel, rows: localRows.filter(row => !row.toolless) });
+            groups.push({ label: onlineLabel, rows: onlineRows });
+        } else {
+            groups.push({ label: deviceLabel, rows: localRows });
+            groups.push({ label: onlineLabel, rows: onlineRows });
+        }
+
+        const needle = brainPop.search.trim().toLowerCase();
+        return groups
+            .map(group => ({
+                ...group,
+                rows: needle
+                    ? group.rows.filter(row => row.name.toLowerCase().includes(needle))
+                    : group.rows,
+            }))
+            .filter(group => group.rows.length);
+    }
+
+    /* What the trigger says when it is shut: the model that is answering, not the tab it
+       came from. "Select model" only when there is genuinely nothing configured -- a
+       trigger that says "Select model" over a working Ollama is the same bug as a picker
+       that hides itself. */
+    function brainTriggerLabel() {
+        const name = document.getElementById('studio-model-name');
+        if (!name) return;
+        const data = brainState.data;
+        if (!data) {
+            name.textContent = 'Model — could not ask';
+            return;
+        }
+        if (brainAutoOn()) {
+            // What is answering is a decision, not a model, and saying the model it last
+            // fell back to would be the trigger quietly disagreeing with the row that is
+            // lit inside the popover.
+            name.textContent = 'Auto';
+            return;
+        }
+        const current = data.current || {};
+        name.textContent = current.model || current.provider || 'Select model';
+    }
+
+    function renderBrainPopover() {
+        brainTriggerLabel();
+        if (!brainPop.list || !brainPop.auto) return;
+
+        // ---- AUTO
+        const autoRow = document.createElement('button');
+        autoRow.type = 'button';
+        autoRow.className = 'brain-auto-row';
+        const ready = brainAutoReady();
+        const on = brainAutoOn();
+        autoRow.disabled = !ready;
+        autoRow.setAttribute('aria-selected', on ? 'true' : 'false');
+        autoRow.innerHTML = '<span class="brain-auto-mark" aria-hidden="true">&#9670;</span>';
+        const text = document.createElement('span');
+        text.className = 'brain-auto-text';
+        const autoName = document.createElement('span');
+        autoName.className = 'brain-auto-name';
+        autoName.textContent = 'AUTO';
+        const autoSub = document.createElement('span');
+        autoSub.className = 'brain-auto-sub';
+        // The same three states the selects say in one line of option text, with the room
+        // here to say why rather than only what.
+        autoSub.textContent = !ready
+            ? 'Needs a model on this computer — the judge runs locally, so there is nothing to judge with.'
+            : on
+                ? 'Reading each message and deciding where it goes. Every answer says which it picked.'
+                : 'A small local model reads each message and decides where it is answered, and whether anything needs looking up.';
+        text.appendChild(autoName);
+        text.appendChild(autoSub);
+        autoRow.appendChild(text);
+        const badge = document.createElement('span');
+        badge.className = 'brain-auto-badge';
+        badge.textContent = !ready ? 'NEEDS A MODEL' : on ? 'ON' : 'OFF';
+        autoRow.appendChild(badge);
+        if (ready) {
+            autoRow.addEventListener('click', async () => {
+                await switchBrainTo(brainState.autoValue || BRAIN_AUTO);
+                closeBrainPopover();
+            });
+        }
+        brainPop.auto.replaceChildren(autoRow);
+
+        // ---- the list
+        const groups = brainPopGroups();
+        if (!groups.length) {
+            const empty = document.createElement('div');
+            empty.className = 'brain-pop-empty';
+            empty.textContent = brainState.data
+                ? (brainPop.search ? `Nothing here matches “${brainPop.search}”.` : 'Nothing on this tab yet.')
+                : 'Could not ask the model server what it has.';
+            brainPop.list.replaceChildren(empty);
+            return;
+        }
+
+        const rows = [];
+        for (const group of groups) {
+            const head = document.createElement('div');
+            head.className = 'brain-pop-group';
+            const label = document.createElement('span');
+            label.textContent = group.label.toUpperCase();
+            head.appendChild(label);
+            const rule = document.createElement('span');
+            rule.className = 'brain-pop-group-rule';
+            head.appendChild(rule);
+            rows.push(head);
+
+            for (const row of group.rows) {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'brain-pop-item';
+                item.setAttribute('role', 'option');
+                const value = brainValue(row.provider, row.model);
+                item.setAttribute('aria-selected', value === brainState.current ? 'true' : 'false');
+                item.disabled = row.disabled;
+                const name = document.createElement('span');
+                name.className = 'brain-pop-item-name';
+                name.textContent = row.name;
+                item.appendChild(name);
+                if (row.note) {
+                    const note = document.createElement('span');
+                    note.className = 'brain-pop-note';
+                    note.textContent = row.note;
+                    item.appendChild(note);
+                }
+                if (!row.disabled) {
+                    item.addEventListener('click', async () => {
+                        await switchBrainTo(brainValue(row.provider, row.model));
+                        closeBrainPopover();
+                    });
+                }
+                rows.push(item);
+            }
+        }
+        brainPop.list.replaceChildren(...rows);
+    }
+
+    function closeBrainPopover() {
+        if (!brainPop.panel) return;
+        brainPop.open = false;
+        brainPop.panel.classList.add('hidden');
+        brainPop.trigger?.setAttribute('aria-expanded', 'false');
+    }
+
+    function openBrainPopover() {
+        if (!brainPop.panel) return;
+        brainPop.open = true;
+        brainPop.panel.classList.remove('hidden');
+        brainPop.trigger?.setAttribute('aria-expanded', 'true');
+        // Asked again on every open rather than once at startup: a model pulled or a key
+        // added while the window was open is exactly the change somebody opens this to use.
+        refreshBrainPicker();
+        document.getElementById('brain-pop-search')?.focus();
+    }
+
+    function initBrainPopover() {
+        brainPop.trigger = document.getElementById('studio-model-trigger');
+        brainPop.panel = document.getElementById('brain-popover');
+        brainPop.list = document.getElementById('brain-pop-list');
+        brainPop.auto = document.getElementById('brain-pop-auto');
+        if (!brainPop.trigger || !brainPop.panel) return;
+
+        brainPop.trigger.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            if (brainPop.open) closeBrainPopover(); else openBrainPopover();
+        });
+
+        brainPop.panel.querySelectorAll('[data-brain-tab]').forEach((tab) => {
+            tab.addEventListener('click', () => {
+                brainPop.tab = tab.getAttribute('data-brain-tab');
+                brainPop.panel.querySelectorAll('[data-brain-tab]').forEach((other) => {
+                    other.setAttribute('aria-selected', other === tab ? 'true' : 'false');
+                });
+                renderBrainPopover();
+            });
+        });
+
+        // The list is already in memory, so it filters on every keystroke. Nothing here
+        // asks anything of the network.
+        document.getElementById('brain-pop-search')?.addEventListener('input', (event) => {
+            brainPop.search = event.target.value || '';
+            renderBrainPopover();
+        });
+
+        document.getElementById('brain-pop-setup')?.addEventListener('click', async () => {
+            closeBrainPopover();
+            await openBrainSetup();
+        });
+
+        // Shut on a click past it and on Escape, like every other slide-out in the HUD.
+        document.addEventListener('click', (event) => {
+            if (!brainPop.open) return;
+            if (brainPop.panel.contains(event.target) || brainPop.trigger.contains(event.target)) return;
+            closeBrainPopover();
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && brainPop.open) {
+                closeBrainPopover();
+                brainPop.trigger.focus();
+            }
+        });
+    }
+
+    /* ==================================================================== the studio
+
+       The chat-first shell: the sidebar on the left, the conversation alone in the
+       middle, the avatar behind it. css/studio.css does the drawing; this does the
+       wiring, and the wiring is deliberately thin. Every sidebar entry calls the
+       function the equivalent control in the HUD already calls -- switchChatTab for the
+       eight views, showSettingsSection for Settings, mintSession for a new conversation.
+       A sidebar entry with its own copy of what a tab does is a second Notes, a second
+       History and a second thing to fix.
+
+       Which shell is on screen lives in js/shell.js, stamped onto <html> before first
+       paint so the window never draws the panel grid and then jumps to the studio. */
+
+    const studio = { settings: null };
+
+    function shellState() {
+        return (window.A1Shell && window.A1Shell.get()) || { shell: 'studio', avatar: 'off', sidebar: 'open' };
+    }
+
+    function setShell(patch) {
+        window.A1Shell?.set(patch);
+    }
+
+    /* Settings, read once and kept, for the three chips under the box. They are each the
+       state of a real setting the engine reads rather than a per-message flag, so they
+       have to start from what is stored rather than from a default in this file. */
+    async function fetchStoredSettings() {
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('get_settings_rust')
+                : await (await apiFetch('/api/settings')).json();
+            studio.settings = data.settings || {};
+        } catch (error) {
+            studio.settings = null;
+        }
+        return studio.settings;
+    }
+
+    async function writeStoredSetting(key, value) {
+        const payload = { [key]: value };
+        if (IS_TAURI) await tauriInvoke('save_settings_rust', { settings: payload });
+        else {
+            const response = await apiFetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) throw new Error((await response.text()) || 'Could not save that.');
+        }
+        if (studio.settings) studio.settings[key] = value;
+    }
+
+    /* ---- the chips under the box ---------------------------------------------- */
+
+    function paintChatChips() {
+        const stored = studio.settings || {};
+        const tools = stored.tools_enabled === true;
+        // Defaults on, matching the default in commands.rs: an install that has never
+        // touched it may search.
+        const web = stored.web_search_enabled !== false;
+        const toolsBtn = document.getElementById('btn-chat-tools');
+        const searchBtn = document.getElementById('btn-chat-search');
+        if (toolsBtn) {
+            toolsBtn.setAttribute('aria-pressed', tools ? 'true' : 'false');
+            toolsBtn.title = tools
+                ? 'It may use its tools. Turn this off and it answers from the conversation alone.'
+                : 'Its tools are off, so it cannot read a file, look anything up or check the machine.';
+        }
+        if (searchBtn) {
+            // Search cannot do anything with tools off, and a chip that reads as on while
+            // nothing can happen is the exact confusion #245 was about.
+            const live = tools && web;
+            searchBtn.setAttribute('aria-pressed', live ? 'true' : 'false');
+            searchBtn.title = !tools
+                ? 'Turn Tools on first — searching is one of them.'
+                : web
+                    ? 'It may search the web and read a page to answer.'
+                    : 'Web lookups are off. It will say it cannot look something up rather than answer from memory.';
+        }
+        const approvalText = document.querySelector('#btn-chat-approval .chat-chip-text');
+        if (approvalText) {
+            const allowed = Array.isArray(stored.tool_always_allow) ? stored.tool_always_allow : [];
+            approvalText.textContent = allowed.length
+                ? `${allowed.length} pre-approved`
+                : 'Ask for approval';
+        }
+    }
+
+    function initChatChips() {
+        const toolsBtn = document.getElementById('btn-chat-tools');
+        const searchBtn = document.getElementById('btn-chat-search');
+        const approvalBtn = document.getElementById('btn-chat-approval');
+        const approvalMenu = document.getElementById('chat-approval-menu');
+        const attachBtn = document.getElementById('btn-chat-attach');
+
+        // The + is the attach button that is already in the row above, reached from where
+        // the Unsloth layout puts it. One file input, one handler, one place it can break.
+        attachBtn?.addEventListener('click', () => document.getElementById('btn-chat-media')?.click());
+
+        toolsBtn?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            const next = !(studio.settings && studio.settings.tools_enabled === true);
+            try {
+                await writeStoredSetting('tools_enabled', next);
+                appendSystemNotice(next
+                    ? 'Tools are on. It can read files, check the machine and look things up.'
+                    : 'Tools are off. It will answer from the conversation alone.');
+            } catch (error) {
+                appendSystemNotice(`Could not change that: ${error.message || error}`);
+            }
+            const checkbox = document.getElementById('setting-tools');
+            if (checkbox) checkbox.checked = next;
+            paintChatChips();
+        });
+
+        searchBtn?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            const stored = studio.settings || {};
+            if (stored.tools_enabled !== true) {
+                appendSystemNotice('Searching is one of the tools, and tools are off. Turn Tools on first.');
+                return;
+            }
+            const next = stored.web_search_enabled === false;
+            try {
+                await writeStoredSetting('web_search_enabled', next);
+                appendSystemNotice(next
+                    ? 'It may search the web again.'
+                    : 'Web lookups are off. It will say it cannot look something up rather than answer from memory.');
+            } catch (error) {
+                appendSystemNotice(`Could not change that: ${error.message || error}`);
+            }
+            paintChatChips();
+        });
+
+        /* Approval is not a switch, so it is not one. What a mutating tool does when it
+           wants to run is decided by the pre-approved list (tools/consent.rs), and that
+           list is per tool: a chip cannot hold it. So the menu says what the state is and
+           the way to change it is the panel that owns it. */
+        approvalBtn?.addEventListener('click', () => {
+            if (!approvalMenu) return;
+            voiceEngine.playSFX('click');
+            const open = approvalMenu.classList.contains('hidden');
+            if (open) {
+                const stored = studio.settings || {};
+                const allowed = Array.isArray(stored.tool_always_allow) ? stored.tool_always_allow : [];
+                const rows = [];
+
+                const state = document.createElement('div');
+                state.className = 'chat-chip-menu-item';
+                state.setAttribute('aria-checked', 'true');
+                state.setAttribute('role', 'menuitem');
+                state.textContent = allowed.length
+                    ? `${allowed.length} tool${allowed.length === 1 ? '' : 's'} run without asking`
+                    : 'Every change is proposed and waits for you';
+                const sub = document.createElement('span');
+                sub.className = 'chat-chip-menu-sub';
+                sub.textContent = allowed.length
+                    ? allowed.join(', ')
+                    : 'Nothing that changes this machine runs as a side effect of a conversation.';
+                state.appendChild(sub);
+                rows.push(state);
+
+                const open_ = document.createElement('button');
+                open_.type = 'button';
+                open_.className = 'chat-chip-menu-item';
+                open_.setAttribute('role', 'menuitem');
+                open_.textContent = 'Change what runs without asking…';
+                open_.addEventListener('click', async () => {
+                    approvalMenu.classList.add('hidden');
+                    approvalBtn.setAttribute('aria-expanded', 'false');
+                    voiceEngine.playSFX('click');
+                    await loadSettings();
+                    settingsModal?.classList.remove('hidden');
+                    showSettingsSection('privacy');
+                });
+                rows.push(open_);
+
+                approvalMenu.replaceChildren(...rows);
+            }
+            approvalMenu.classList.toggle('hidden', !open);
+            approvalBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!approvalMenu || approvalMenu.classList.contains('hidden')) return;
+            if (approvalMenu.contains(event.target) || approvalBtn?.contains(event.target)) return;
+            approvalMenu.classList.add('hidden');
+            approvalBtn?.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+    /* ---- the greeting --------------------------------------------------------- */
+
+    /* .has-messages, watched rather than set at each append. There are six places a line
+       reaches #chat-messages -- the two message renderers, the system notice, the hand-off
+       line, the history load and Clear -- and a flag set at five of them is a greeting
+       that comes back over a conversation. */
+    function initStudioGreeting() {
+        const messages = document.getElementById('chat-messages');
+        const view = document.getElementById('chat-view-conversation');
+        if (!messages || !view) return;
+
+        /* A conversation, not simply something in the box. Two things land in
+           #chat-messages before anyone has said a word -- the system notices, and the
+           "no AI is connected" card on a machine with no model yet -- and counting
+           those as a conversation took the greeting, and with it the avatar's box, off
+           the one screen they exist for. The first thing a fresh install shows should
+           not be a warning on a blank ground. */
+        const talking = () => [...messages.children]
+            .some((el) => el.id !== 'no-brain-card' && !el.classList.contains('msg-system'));
+        const paint = () => view.classList.toggle('has-messages', talking());
+        new MutationObserver(paint).observe(messages, { childList: true });
+        paint();
+
+        const line = document.getElementById('studio-greeting-line');
+        const sub = document.getElementById('studio-greeting-sub');
+        if (sub) sub.textContent = 'Ask it something, or hold Space to talk.';
+        if (line) {
+            const hour = new Date().getHours();
+            const part = hour < 5 ? 'Still up' : hour < 12 ? 'Morning' : hour < 18 ? 'Afternoon' : 'Evening';
+            line.textContent = `${part}. What are we building?`;
+        }
+    }
+
+    /* ---- the sidebar ---------------------------------------------------------- */
+
+    function paintStudioNav(which) {
+        document.querySelectorAll('[data-studio-nav]').forEach((btn) => {
+            btn.setAttribute('aria-current', btn.getAttribute('data-studio-nav') === which ? 'true' : 'false');
+        });
+    }
+
+    async function paintStudioRecents() {
+        const list = document.getElementById('studio-recents-list');
+        if (!list) return;
+        let rows = [];
+        try {
+            rows = await fetchSessions();
+        } catch (error) {
+            rows = null;
+        }
+        if (!rows) {
+            const failed = document.createElement('div');
+            failed.className = 'studio-recents-empty';
+            failed.textContent = 'Could not read the conversations.';
+            list.replaceChildren(failed);
+            return;
+        }
+        if (!rows.length) {
+            const empty = document.createElement('div');
+            empty.className = 'studio-recents-empty';
+            empty.textContent = 'No conversations yet';
+            list.replaceChildren(empty);
+            return;
+        }
+        // Six, because this is a glance. The whole list, with renaming and deleting, is
+        // the HISTORY view -- the same rows from the same fetchSessions.
+        const items = rows.slice(0, 6).map((row) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'studio-recent';
+            btn.textContent = row.title || 'Untitled';
+            btn.title = `${row.title || 'Untitled'} — ${whenText(row.updated_at || row.created_at)}`;
+            if (row.id === currentSessionId) btn.setAttribute('aria-current', 'true');
+            btn.addEventListener('click', async () => {
+                voiceEngine.playSFX('click');
+                setCurrentSession(row.id);
+                switchChatTab('conversation');
+                paintStudioNav('conversation');
+                await loadChatHistory();
+                paintStudioRecents();
+            });
+            return btn;
+        });
+        list.replaceChildren(...items);
+    }
+
+    function initStudioSidebar() {
+        document.querySelectorAll('[data-studio-nav]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const which = btn.getAttribute('data-studio-nav');
+                voiceEngine.playSFX('click');
+                switchChatTab(which);
+                paintStudioNav(which);
+            });
+        });
+
+        // The terminal tab is removed in a browser (there is no route behind a shell), so
+        // its sidebar entry goes with it rather than becoming a button that does nothing.
+        if (!document.getElementById('tab-chat-terminal')) {
+            document.getElementById('studio-nav-terminal')?.remove();
+        }
+
+        document.querySelectorAll('[data-studio-open]').forEach((btn) => {
+            btn.addEventListener('click', async () => {
+                voiceEngine.playSFX('click');
+                const what = btn.getAttribute('data-studio-open');
+                if (what === 'agents') {
+                    document.getElementById('btn-agent-browser')?.click();
+                    return;
+                }
+                await loadSettings();
+                settingsModal?.classList.remove('hidden');
+                showSettingsSection(what === 'avatars' ? 'avatars' : 'brain');
+            });
+        });
+
+        document.getElementById('btn-studio-new')?.addEventListener('click', () => {
+            document.getElementById('btn-session-new')?.click();
+            paintStudioNav('conversation');
+            setTimeout(paintStudioRecents, 250);
+        });
+
+        document.getElementById('btn-studio-settings')?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            await loadSettings();
+            settingsModal?.classList.remove('hidden');
+        });
+        document.getElementById('btn-studio-operator')?.addEventListener('click', async () => {
+            voiceEngine.playSFX('click');
+            await loadSettings();
+            settingsModal?.classList.remove('hidden');
+        });
+
+        document.getElementById('btn-studio-sidebar')?.addEventListener('click', () => {
+            const next = shellState().sidebar === 'closed' ? 'open' : 'closed';
+            setShell({ sidebar: next });
+            const btn = document.getElementById('btn-studio-sidebar');
+            btn?.setAttribute('aria-expanded', next === 'open' ? 'true' : 'false');
+            btn?.setAttribute('title', next === 'open' ? 'Collapse the sidebar' : 'Expand the sidebar');
+        });
+
+        document.getElementById('btn-studio-shell')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            setShell({ shell: 'hud' });
+        });
+    }
+
+    function paintStudioOperator() {
+        const stored = studio.settings || {};
+        const name = (stored.operator_name || '').trim();
+        const agent = (stored.agent_name || currentAgentName || 'AURORA1').trim();
+        const nameEl = document.getElementById('studio-operator-name');
+        const subEl = document.getElementById('studio-operator-sub');
+        const markEl = document.getElementById('studio-operator-mark');
+        if (nameEl) nameEl.textContent = name || 'Operator';
+        if (subEl) subEl.textContent = agent;
+        if (markEl) markEl.textContent = (name || agent || 'A').trim().charAt(0).toUpperCase();
+    }
+
+    /* ---- where the avatar goes ------------------------------------------------- */
+
+    /* Three places and no fourth: behind the conversation, small in the corner, or not on
+       screen. It is the same hologram in all three -- the same element, the same renderer,
+       the same state the voice drives -- resized by css/studio.css. A second avatar for
+       the studio would be a second thing to keep in step with the persona. */
+    function paintAvatarPlace() {
+        const place = shellState().avatar;
+        document.querySelectorAll('[data-avatar-place]').forEach((btn) => {
+            btn.setAttribute('aria-checked', btn.getAttribute('data-avatar-place') === place ? 'true' : 'false');
+        });
+        paintAvatarOpacity();
+        // The hologram sizes its canvas to its viewport, and in the studio that viewport
+        // goes from the whole stage to 220px and back. Nothing else tells it so.
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    }
+
+    /* How strongly the avatar is drawn behind the conversation. Trident: "I like the
+       idea of the avatar in the background with an opacity slider to make text easier
+       to see (if needed)".
+
+       It is the background mode's own control, so the row is out only in that mode --
+       the mini-tar is drawn at full strength in a box of its own with nothing reading
+       through it, and OFF draws nothing at all. shell.js owns the number and writes it
+       to --studio-avatar-opacity; this only moves it and says what it is. */
+    /* Two inputs, one setting: the row in Settings -> Display and the one on the stage
+       bar, which is the one you reach for while looking at the avatar it dims. Each is
+       painted from the state and each writes through setShell, so neither is a record
+       of anything and they cannot drift apart. */
+    const OPACITY_INPUTS = ['setting-avatar-opacity', 'stage-avatar-opacity-range'];
+    const OPACITY_LABELS = ['avatar-opacity-value', 'stage-avatar-opacity-value'];
+
+    function paintAvatarOpacity() {
+        const state = shellState();
+        const background = state.avatar === 'background';
+        document.getElementById('avatar-opacity-row')?.classList.toggle('hidden', !background);
+        document.getElementById('stage-avatar-opacity')?.classList.toggle('hidden', !background);
+        OPACITY_INPUTS.forEach((id) => {
+            const input = document.getElementById(id);
+            // Only when it differs: writing an identical value to the input you are
+            // dragging interrupts the drag in some engines.
+            if (input && Number(input.value) !== state.avatarOpacity) input.value = String(state.avatarOpacity);
+        });
+        OPACITY_LABELS.forEach((id) => {
+            const label = document.getElementById(id);
+            if (label) label.textContent = `${state.avatarOpacity}%`;
+        });
+    }
+
+    function initAvatarOpacity() {
+        const limits = (window.A1Shell && window.A1Shell.OPACITY) || { min: 5, max: 100, step: 5 };
+        OPACITY_INPUTS.forEach((id) => {
+            const slider = document.getElementById(id);
+            if (!slider) return;
+            slider.min = String(limits.min);
+            slider.max = String(limits.max);
+            slider.step = String(limits.step);
+            // input, not change: the avatar is behind the text you are trying to read,
+            // so the point of the slider is watching the text come clear as you drag it.
+            slider.addEventListener('input', () => {
+                setShell({ avatarOpacity: Number(slider.value) });
+                paintAvatarOpacity();
+            });
+        });
+        paintAvatarOpacity();
+    }
+
+    function initAvatarPlace() {
+        document.querySelectorAll('[data-avatar-place]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                setShell({ avatar: btn.getAttribute('data-avatar-place') });
+                paintAvatarPlace();
+                paintStudioCage();
+            });
+        });
+        paintAvatarPlace();
+    }
+
+    /* ---- the avatar's box on the empty screen ---------------------------------
+     *
+     * Trident, on a Proton Lumo screen with its cat in a tile and "click to let me
+     * out" written beside it: the same, and clicking it picks "the mini-tar,
+     * background avatar or Holo-tar Desktop Companion".
+     *
+     * So this is not a fifth setting. It is the three that were already in Settings
+     * -> Display plus the desktop sprite, which is the same question -- where does
+     * the avatar live -- asked where you are actually looking at the avatar rather
+     * than four screens into a modal. Each option writes the setting the existing
+     * control writes, and the existing controls repaint this.
+     *
+     * The sprite is not a shell preference: it is a native always-on-top window and
+     * it is stored in the database by the Rust side, so the four places are two
+     * different stores and the painter reads the sprite first. Nothing here is the
+     * source of truth for anything.
+     */
+    /* What pressing it does, not where the avatar is: the tile already shows that.
+       Set like every other label in the app rather than as an aside in handwriting --
+       Trident, on the screen the idea came from: "I don't want it as a carbon copy I
+       just like that they are clean interfaces". */
+    const CAGE_NOTES = {
+        off: 'LET IT OUT',
+        background: 'MOVE IT',
+        minitar: 'MOVE IT',
+        holotar: 'BRING IT BACK',
+    };
+
+    function avatarHome() {
+        return desktopSpriteEnabled ? 'holotar' : shellState().avatar;
+    }
+
+    function paintStudioCage() {
+        const home = avatarHome();
+        /* The box is the avatar's stand-in, so it is only on screen while the avatar
+           is not. Drawn over an avatar that is already behind the conversation it is
+           both unreadable -- a line of handwriting over a rotating lattice -- and a
+           lie: there it is, out, and here is a box saying it wants out. Off and out
+           on the desktop are the two states where this window has no avatar in it,
+           and they are exactly the two the note was written for. */
+        const away = home === 'off' || home === 'holotar';
+        document.getElementById('studio-cage')?.classList.toggle('studio-cage-away', !away);
+        if (!away) closeStudioCageMenu();
+        document.querySelectorAll('[data-avatar-home]').forEach((btn) => {
+            btn.setAttribute('aria-checked', btn.getAttribute('data-avatar-home') === home ? 'true' : 'false');
+        });
+        const mark = document.getElementById('studio-cage-mark');
+        const meta = window.Aether1Avatars ? window.Aether1Avatars.get(currentAvatar) : null;
+        if (mark && meta && meta.emoji) mark.textContent = meta.emoji;
+        const note = document.getElementById('studio-cage-note');
+        if (note) note.textContent = CAGE_NOTES[home] || CAGE_NOTES.background;
+        const btn = document.getElementById('btn-studio-cage');
+        if (btn) btn.title = `${(meta && meta.label) || 'The avatar'} -- where it goes`;
+    }
+
+    function closeStudioCageMenu() {
+        document.getElementById('studio-cage-menu')?.classList.add('hidden');
+        document.getElementById('btn-studio-cage')?.setAttribute('aria-expanded', 'false');
+    }
+
+    async function setAvatarHome(home) {
+        // Out on the desktop and in the window are the same avatar in two places, so
+        // picking one of the three in here has to bring it back first -- otherwise the
+        // mini-tar is chosen and the sprite is still the thing on screen.
+        if (home === 'holotar') {
+            await setDesktopSpriteMode(true);
+            return;
+        }
+        if (desktopSpriteEnabled) await setDesktopSpriteMode(false);
+        setShell({ avatar: home });
+        paintAvatarPlace();
+        paintStudioCage();
+    }
+
+    function initStudioCage() {
+        const btn = document.getElementById('btn-studio-cage');
+        const menu = document.getElementById('studio-cage-menu');
+        if (!btn || !menu) return;
+
+        // The holo-tar is a native transparent window; the browser flow has no such
+        // thing, so the row stays out rather than failing when pressed (mirrors
+        // initSpriteMode, which reveals the same switch in Settings).
+        if (IS_TAURI) document.getElementById('studio-cage-opt-holotar')?.classList.remove('hidden');
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            voiceEngine.playSFX('click');
+            const open = menu.classList.toggle('hidden') === false;
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) paintStudioCage();
+        });
+
+        menu.querySelectorAll('[data-avatar-home]').forEach((opt) => {
+            opt.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                voiceEngine.playSFX('click');
+                closeStudioCageMenu();
+                await setAvatarHome(opt.getAttribute('data-avatar-home'));
+            });
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!menu.classList.contains('hidden') && !e.target.closest('#studio-cage')) closeStudioCageMenu();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeStudioCageMenu();
+        });
+
+        paintStudioCage();
+    }
+
+    /* ---- the shell switch ------------------------------------------------------ */
+
+    function paintShell() {
+        const state = shellState();
+        document.querySelectorAll('[data-shell-choice]').forEach((btn) => {
+            btn.setAttribute('aria-checked', btn.getAttribute('data-shell-choice') === state.shell ? 'true' : 'false');
+        });
+        const sidebarBtn = document.getElementById('btn-studio-sidebar');
+        sidebarBtn?.setAttribute('aria-expanded', state.sidebar === 'open' ? 'true' : 'false');
+        // One entry in the header menu, both directions. It names where it goes, not
+        // where you are, because a menu item that names the current state reads as a
+        // label rather than a thing to press.
+        const shellBtn = document.getElementById('btn-shell-toggle');
+        if (shellBtn) {
+            const toHud = state.shell === 'studio';
+            shellBtn.textContent = toHud ? '\u25a6 HUD panel grid' : '\u25a6 Chat studio';
+            shellBtn.title = toHud
+                ? 'Everything on screen at once, draggable and resizable'
+                : 'Chat first: a sidebar, one centred column, the avatar behind it';
+        }
+        // Both shells put the chat panel in a differently shaped box, and three.js and
+        // xterm both size themselves off theirs.
+        requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+        paintStudioCage();
+    }
+
+    async function initStudio() {
+        document.querySelectorAll('[data-shell-choice]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                setShell({ shell: btn.getAttribute('data-shell-choice') });
+            });
+        });
+        window.addEventListener('a1-shell-change', paintShell);
+
+        document.getElementById('btn-shell-toggle')?.addEventListener('click', () => {
+            voiceEngine.playSFX('click');
+            setShell({ shell: shellState().shell === 'studio' ? 'hud' : 'studio' });
+        });
+
+        initStudioSidebar();
+        initStudioGreeting();
+        initChatChips();
+        initAvatarPlace();
+        initAvatarOpacity();
+        initStudioCage();
+        paintStudioNav('conversation');
+        paintShell();
+
+        await fetchStoredSettings();
+        paintChatChips();
+        paintStudioOperator();
+        paintStudioRecents();
+    }
+
     function initModelHub() {
         const search = document.getElementById('hub-search');
         if (!search) return;
@@ -8857,6 +10622,14 @@ document.addEventListener('DOMContentLoaded', () => {
             hub.search = search.value;
             renderHubList();
             renderHubDetail();
+            // The two local tabs filter a list already in memory, so they redraw on every
+            // keystroke. Hugging Face is a request, so it waits for the typing to stop --
+            // a search per keystroke is a dozen requests for one query and a rate limit
+            // for the next person on the address.
+            if (hub.tab === 'hf') {
+                clearTimeout(hub.hfSearchTimer);
+                hub.hfSearchTimer = setTimeout(() => hubSearchHf(), 400);
+            }
         });
         for (const tab of document.querySelectorAll('[data-hub-tab]')) {
             tab.addEventListener('click', () => {
@@ -8865,10 +10638,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     other.classList.toggle('is-active', other === tab);
                 });
                 hub.selected = null;
+                document.getElementById('hub-hf-tools-only')
+                    ?.closest('label')
+                    ?.classList.toggle('hidden', hub.tab !== 'hf');
                 renderHubList();
                 renderHubDetail();
+                // The first visit to the tab is the one that needs a request; after that
+                // the rows are already there and the box drives it.
+                if (hub.tab === 'hf' && hub.hfQuery === null) hubSearchHf();
             });
         }
+        const toolsOnly = document.getElementById('hub-hf-tools-only');
+        toolsOnly?.addEventListener('change', () => {
+            hub.hfOnlyTools = toolsOnly.checked;
+            hub.selected = null;
+            renderHubList();
+            renderHubDetail();
+        });
+        toolsOnly?.closest('label')?.classList.add('hidden');
         const bind = (id, key) => {
             const el = document.getElementById(id);
             el?.addEventListener('change', () => {
@@ -9018,6 +10805,206 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* ------------------------------ SAVED ACCOUNTS ------------------------------
+
+       One address box, one key box and one model box were shared by eight providers.
+       The engine had already stopped sharing them -- `llm_api_key_<provider>` has been
+       real since #245 -- but the form never had, so picking a second provider showed the
+       first one's details, Save overwrote them, and switching back meant typing
+       everything in again. Nothing on the page said a key had ever been kept.
+
+       Two halves fix that, and they are separate on purpose:
+
+         * `providerScratch` is this visit's unsaved typing, kept per provider so that
+           clicking through the dropdown to look at something does not lose what was
+           half entered.
+         * `providerAccounts` is what the companion has actually stored, from
+           commands::provider_accounts. It is what the roster is drawn from and what the
+           form falls back to for a provider this visit has not touched.
+
+       No key is ever in either. A key lives in the system credential store and the page
+       is told only that there is one -- the box shows SAVED_KEY, and a Save that sends
+       it back unchanged leaves the stored key alone. See secrets.rs. */
+
+    /// What `get_settings` puts in a key box in place of a key the page may not see.
+    /// Must match secrets::SAVED exactly: the backend recognises this string coming home
+    /// and leaves the stored key where it is.
+    const SAVED_KEY = '\u2022\u2022\u2022 saved \u2022\u2022\u2022';
+
+    let providerAccounts = { current: 'offline', accounts: [], keychain: false };
+    const providerScratch = new Map();
+    let providerShowing = null;
+
+    function accountFor(providerKey) {
+        return providerAccounts.accounts.find(a => a.provider === providerKey) || null;
+    }
+
+    /// Remembers what is in the form for the provider currently shown, so switching away
+    /// and back inside one visit to Settings does not lose it.
+    function stashProviderDetails() {
+        if (!providerShowing || providerShowing === 'offline') return;
+        providerScratch.set(providerShowing, {
+            endpoint: document.getElementById('setting-endpoint')?.value ?? '',
+            model: document.getElementById('setting-model')?.value ?? '',
+            apikey: document.getElementById('setting-apikey')?.value ?? '',
+            gatewayUrl: document.getElementById('setting-gateway-url')?.value ?? '',
+            gatewayKey: document.getElementById('setting-gateway-key')?.value ?? '',
+        });
+    }
+
+    /// Puts a provider's own details into the form: this visit's typing if there is any,
+    /// otherwise what is stored for it.
+    function restoreProviderDetails(providerKey) {
+        providerShowing = providerKey;
+        if (providerKey === 'offline') return;
+        const held = providerScratch.get(providerKey);
+        const saved = accountFor(providerKey);
+        const endpoint = document.getElementById('setting-endpoint');
+        const model = document.getElementById('setting-model');
+        const apikey = document.getElementById('setting-apikey');
+        const gatewayUrl = document.getElementById('setting-gateway-url');
+        const gatewayKey = document.getElementById('setting-gateway-key');
+        if (held) {
+            if (endpoint) endpoint.value = held.endpoint;
+            if (model) model.value = held.model;
+            if (apikey) apikey.value = held.apikey;
+            if (gatewayUrl) gatewayUrl.value = held.gatewayUrl;
+            if (gatewayKey) gatewayKey.value = held.gatewayKey;
+            return;
+        }
+        if (!saved) return;
+        if (providerKey === 'gateway') {
+            if (gatewayUrl) gatewayUrl.value = saved.endpoint || '';
+            // Dots rather than nothing, for the same reason the page is sent dots at
+            // all: a box that reads empty for a gateway that has a key says the key is
+            // gone, and the next Save would make that true.
+            if (gatewayKey) gatewayKey.value = saved.has_key ? SAVED_KEY : '';
+        } else {
+            if (endpoint) endpoint.value = saved.endpoint || '';
+            if (apikey) apikey.value = saved.has_key ? SAVED_KEY : '';
+        }
+        if (model) model.value = saved.model || '';
+    }
+
+    const KEY_STORAGE_WORDING = {
+        keychain: 'key in this computer\u2019s keychain',
+        settings: 'key saved (no keychain on this machine)',
+    };
+
+    /// The roster above the form: every provider, what is kept for it, and which one is
+    /// answering. Clicking a row loads that provider into the form.
+    function renderProviderAccounts() {
+        const box = document.getElementById('provider-accounts');
+        if (!box) return;
+        box.innerHTML = '';
+        const selected = document.getElementById('setting-provider')?.value || providerAccounts.current;
+        for (const account of providerAccounts.accounts) {
+            const row = document.createElement('div');
+            row.className = 'provider-account'
+                + (account.provider === selected ? ' is-selected' : '');
+
+            const left = document.createElement('button');
+            left.type = 'button';
+            left.className = 'provider-account-pick';
+            const name = document.createElement('span');
+            name.className = 'provider-account-name';
+            name.textContent = account.label;
+            if (account.active) {
+                const answering = document.createElement('span');
+                answering.className = 'provider-account-answering';
+                answering.textContent = '  \u2014 answering now';
+                name.appendChild(answering);
+            }
+            const detail = document.createElement('span');
+            detail.className = 'provider-account-meta';
+            const parts = [];
+            if (account.model) parts.push(account.model);
+            if (account.needs_key) {
+                parts.push(account.has_key
+                    ? (KEY_STORAGE_WORDING[account.key_storage] || 'key saved')
+                    : 'no key yet');
+            } else if (account.endpoint) {
+                parts.push(account.endpoint);
+            }
+            detail.textContent = parts.join('  \u00b7  ') || 'nothing saved yet';
+            left.appendChild(name);
+            left.appendChild(detail);
+            left.addEventListener('click', () => {
+                voiceEngine.playSFX('click');
+                const select = document.getElementById('setting-provider');
+                if (!select) return;
+                stashProviderDetails();
+                select.value = account.provider;
+                restoreProviderDetails(account.provider);
+                applyDefaultModelForProvider(account.provider);
+                toggleGatewayFields();
+                renderProviderAccounts();
+            });
+            row.appendChild(left);
+
+            if (account.configured) {
+                const forget = document.createElement('button');
+                forget.type = 'button';
+                forget.className = 'cyber-btn text-[10px] py-0.5 px-2 text-slate-300';
+                forget.textContent = 'Forget';
+                forget.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    forgetProviderAccount(account);
+                });
+                row.appendChild(forget);
+            }
+            box.appendChild(row);
+        }
+
+        const note = document.getElementById('provider-accounts-note');
+        if (note) {
+            note.textContent = providerAccounts.keychain
+                ? 'Keys are kept in this computer\u2019s keychain, not in AURORA1\u2019s database. Each provider keeps its own key, address and model, so switching between them loses nothing.'
+                : 'This machine has no keychain service running, so keys are kept in AURORA1\u2019s own database instead. Each provider still keeps its own key, address and model.';
+        }
+    }
+
+    /// Takes one provider's key, address and model off this machine. Asked first, because
+    /// a key is not something the page can put back.
+    async function forgetProviderAccount(account) {
+        voiceEngine.playSFX('click');
+        const warning = account.needs_key
+            ? `Forget ${account.label}? Its key is deleted from this computer and would have to be entered again.`
+            : `Forget the address and model saved for ${account.label}?`;
+        if (!window.confirm(warning)) return;
+        try {
+            const data = IS_TAURI
+                ? await tauriInvoke('forget_provider_account_rust', { provider: account.provider })
+                : await (await apiFetch('/api/models/accounts/forget', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ provider: account.provider }),
+                })).json();
+            providerAccounts = data;
+            providerScratch.delete(account.provider);
+            // The form is showing what was just deleted, so it has to stop showing it --
+            // otherwise the next Save puts it straight back.
+            if ((document.getElementById('setting-provider')?.value) === account.provider) {
+                restoreProviderDetails(account.provider);
+            }
+            renderProviderAccounts();
+            refreshBrainPicker();
+        } catch (error) {
+            setHubStatus(`Could not forget ${account.label}: ${error}`, 'bad');
+        }
+    }
+
+    async function refreshProviderAccounts() {
+        try {
+            providerAccounts = IS_TAURI
+                ? await tauriInvoke('provider_accounts_rust')
+                : await (await apiFetch('/api/models/accounts')).json();
+        } catch (error) {
+            return;
+        }
+        renderProviderAccounts();
+    }
+
     /// Shows the gateway's own fields only when the gateway is the chosen provider.
     ///
     /// Hidden rather than disabled: the two boxes above it mean something different for a
@@ -9149,6 +11136,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!server) return;
         document.getElementById('setting-provider').value = server.provider_key;
         document.getElementById('setting-endpoint').value = server.endpoint;
+        // Same reason as in hubUseModel: the roster tracks the provider box, and this
+        // changed it without going through the dropdown's own handler.
+        providerShowing = server.provider_key;
+        renderProviderAccounts();
         populateModelPicker(server);
         const model = document.getElementById('setting-model');
         if (server.models.length && !server.models.includes(model.value)) {
@@ -9356,7 +11347,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const verify = document.createElement('button');
         verify.className = 'mt-2 ml-2 text-xs font-mono text-amber-200 hover:text-amber-50 '
             + 'border border-amber-500/40 px-2 py-0.5 rounded bg-amber-950/40 cursor-pointer';
-        verify.textContent = 'Verify AETHER1';
+        verify.textContent = 'Verify AURORA1';
         verify.onclick = () => {
             verify.disabled = true;
             verifyInstall();
@@ -9553,16 +11544,35 @@ document.addEventListener('DOMContentLoaded', () => {
         headerUpdateButton.textContent = text;
         headerUpdateButton.dataset.action = action;
         headerUpdateButton.title = action === 'check'
-            ? 'Check for Aether1 updates'
-            : action === 'download' ? 'Download the signed Aether1 update' : 'Apply the available Aether1 update';
+            ? 'Check for Aurora1 updates'
+            : action === 'download' ? 'Download the signed Aurora1 update' : 'Apply the available Aurora1 update';
     }
 
-    function updateHeaderProgress(label, percent = null, indeterminate = false) {
+    /* The header has room for about thirty characters, which is how "Applying update ·
+       Aether1 will restart" came to be shown as "Applying update · Aether1 will r...".
+       The strip keeps its one short line, and everything that does not fit goes two
+       places that can hold it: the tooltip, in full, and Settings -> Updates, which the
+       strip is a button to. `detail` is the second line -- the step's own particulars,
+       which during a rebuild is the line cargo last printed. */
+    function updateHeaderProgress(label, percent = null, indeterminate = false, detail = '') {
         if (!headerUpdateProgress || !headerUpdateProgressText || !headerUpdateProgressBar) return;
         headerUpdateProgress.classList.remove('hidden');
         headerUpdateProgressText.textContent = label;
+        if (headerUpdateProgressDetail) {
+            headerUpdateProgressDetail.textContent = detail;
+            headerUpdateProgressDetail.classList.toggle('hidden', !detail);
+        }
+        headerUpdateProgress.title = [label, detail].filter(Boolean).join(' — ')
+            + '\n\nOpen Settings → Updates for the whole message.';
         headerUpdateProgressBar.classList.toggle('animate-pulse', indeterminate);
         headerUpdateProgressBar.style.width = indeterminate ? '35%' : `${Math.max(0, Math.min(100, percent || 0))}%`;
+    }
+
+    // mm:ss, for "how long has this been going?" -- the question a bar with no number
+    // against it cannot answer.
+    function elapsedSince(startedAt) {
+        const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     }
 
     /* Returns the status it drew, or null if the check could not be made at all -- the
@@ -9630,8 +11640,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? ` (${(status.asset_size / 1e9).toFixed(1)} GB)`
                     : '';
                 const lines = [`<div class="text-yellow-400">⬆ ${status.latest_tag} is out; you are running ${status.version}.</div>`];
+                /* What is actually in it, before the Download button rather than behind a link
+                   to a web page. An update replaces a copy that works, and "a newer version
+                   exists" is not enough to decide that on -- least of all here, where the
+                   download is signed but installing it is still the operator's own last step.
+                   The lines are the release's pull request titles (see changes_from_notes in
+                   releases.rs), escaped: they are text GitHub sent us. */
+                if (status.changes && status.changes.length) {
+                    lines.push('<div class="text-[11px] text-slate-400 mt-1">What changed:</div>');
+                    status.changes.forEach((change) => {
+                        lines.push(`<div class="text-[11px] text-slate-300">• ${escapeHtml(change)}</div>`);
+                    });
+                } else {
+                    lines.push('<div class="text-[11px] text-slate-500">That release came with no notes, so there is nothing here saying what changed.</div>');
+                }
                 if (status.release_url) {
-                    lines.push(`<div class="text-[11px]"><a href="${status.release_url}" target="_blank" rel="noreferrer" class="underline text-cyan-300">What changed</a></div>`);
+                    lines.push(`<div class="text-[11px]"><a href="${status.release_url}" target="_blank" rel="noreferrer" class="underline text-cyan-300">Read it on GitHub</a></div>`);
                 }
                 if (!status.asset_name) {
                     lines.push('<div class="text-[11px] text-slate-500">That release has no bundle for this platform attached to it.</div>');
@@ -9827,14 +11851,18 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         render('Starting the download...');
 
+        const startedAt = Date.now();
         let unlisten = null;
         try {
             if (window.__TAURI__?.event?.listen) {
                 unlisten = await window.__TAURI__.event.listen('update-download-progress', (event) => {
                     const { done = 0, total = 0 } = event.payload || {};
                     const pct = total ? Math.floor((done / total) * 100) : 0;
-                    render(`Downloading -- ${pct}% of ${(total / 1e9).toFixed(1)} GB`);
-                    updateHeaderProgress(`Downloading update · ${pct}%`, pct, false);
+                    // Megabytes and minutes as well as a percentage: on a slow line the
+                    // percentage can sit still for a while, and the other two do not.
+                    const sizes = `${(done / 1e6).toFixed(0)} MB of ${(total / 1e6).toFixed(0)} MB`;
+                    render(`Downloading -- ${pct}%, ${sizes}, ${elapsedSince(startedAt)} elapsed`);
+                    updateHeaderProgress(`Downloading update · ${pct}%`, pct, false, sizes);
                 });
             }
             updateHeaderProgress('Starting update download…', 0, true);
@@ -9844,7 +11872,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (updateStatusBox) {
                 updateStatusBox.innerHTML = `<div class="text-green-400">✔ ${escapeHtml(result.tag)} downloaded, and its signature checks out.</div>`
                     + `<div class="text-[11px] text-slate-400 select-all">${result.path}</div>`
-                    + '<div class="text-[11px] text-slate-500">Run it when you are ready -- AETHER1 does not install it for you.</div>';
+                    + '<div class="text-[11px] text-slate-500">Run it when you are ready -- AURORA1 does not install it for you.</div>';
             }
             // The folder, not the path: a location read off a panel is a location typed out by
             // hand.
@@ -9865,37 +11893,227 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function handleApplyUpdate() {
-        if (!confirm('Pull the latest changes, rebuild, and relaunch Aether1? The app will restart.')) return;
-        voiceEngine.playSFX('click');
-        updateHeaderProgress('Applying update · Aether1 will restart', 35, true);
-        if (updateStatusBox) {
-            updateStatusBox.innerHTML = '<div class="text-cyan-300 animate-pulse">Updating -- pulling latest changes and rebuilding. This can take over a minute; the app will restart automatically when it\'s done.</div>';
+    /* ------------------------------------------------------- the update screen
+
+       Over everything, for the one thing happening. The update that rebuilds the app
+       takes minutes and for most of them nothing on screen changes; what said so before
+       was a 36-character strip in the header and a box three levels down in Settings,
+       which between them answered "is it still going?" only if you knew where the second
+       one was.
+
+       One spinner, one line saying which step, one line of reassurance, and the build log
+       behind a toggle that is shut by default -- cargo's output answers "what broke?" and
+       not "how long?". Driven by the same state object as the header strip and the
+       Settings box, so the three cannot disagree about which step is running.
+
+       The log is a text node, like renderApplyProgress's: it is git's and cargo's output,
+       full of branch names, paths, remote URLs and source snippets. */
+    function showUpdateOverlay(on) {
+        const overlay = document.getElementById('update-overlay');
+        if (!overlay) return;
+        overlay.classList.toggle('hidden', !on);
+        if (on) document.getElementById('btn-update-dismiss')?.classList.add('hidden');
+    }
+
+    function renderUpdateOverlay(state, failure = null) {
+        const overlay = document.getElementById('update-overlay');
+        if (!overlay || overlay.classList.contains('hidden')) return;
+        const step = document.getElementById('update-overlay-step');
+        const sub = document.getElementById('update-overlay-sub');
+        const log = document.getElementById('update-overlay-log');
+        const spinner = overlay.querySelector('.update-overlay-spinner');
+
+        if (failure) {
+            if (step) step.textContent = `Update failed after ${elapsedSince(state.startedAt)}`;
+            if (sub) {
+                sub.textContent = `It stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. `
+                    + 'Nothing was installed; the copy you are running is untouched.';
+            }
+            if (spinner) spinner.style.display = 'none';
+            document.getElementById('btn-update-dismiss')?.classList.remove('hidden');
+            // The failure first, then the tail of the log: the line that explains it is the
+            // one somebody is looking for, and it is not the last one printed.
+            if (log) log.textContent = [failure, '', ...state.log.slice(-20)].join('\n');
+            // Opened on a failure whatever the toggle said, because at this point the
+            // details *are* the message.
+            toggleUpdateDetails(true);
+            return;
         }
+
+        if (step) {
+            step.textContent = state.step
+                ? `${state.label} — step ${state.step} of ${state.steps}`
+                : state.label;
+        }
+        if (sub) {
+            sub.textContent = `${elapsedSince(state.startedAt)} elapsed. This may take a few minutes. `
+                + 'Aurora1 will restart on the new build when it finishes.';
+        }
+        if (log) {
+            const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+            log.textContent = state.log.slice(-60).join('\n');
+            if (atBottom) log.scrollTop = log.scrollHeight;
+        }
+    }
+
+    function toggleUpdateDetails(open) {
+        const log = document.getElementById('update-overlay-log');
+        const btn = document.getElementById('btn-update-details');
+        const label = document.getElementById('update-details-label');
+        if (!log || !btn) return;
+        log.classList.toggle('hidden', !open);
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (label) label.textContent = open ? 'Hide update details' : 'Show update details';
+    }
+
+    function initUpdateOverlay() {
+        const btn = document.getElementById('btn-update-details');
+        btn?.addEventListener('click', () => {
+            toggleUpdateDetails(btn.getAttribute('aria-expanded') !== 'true');
+        });
+        // Only ever reachable once the update has failed: while it is running there is
+        // nothing safe to press, and a Close that abandons a half-applied rebuild is worse
+        // than no Close at all.
+        document.getElementById('btn-update-dismiss')?.addEventListener('click', () => {
+            showUpdateOverlay(false);
+        });
+    }
+
+    /* Draws the update panel while an update is running: which step, how long it has
+       been going, and the last few lines the tools themselves printed.
+
+       Everything here is built as text nodes rather than interpolated into innerHTML --
+       these strings are git's and cargo's output, full of branch names, paths, remote
+       URLs and source snippets, and none of that belongs in HTML. */
+    function renderApplyProgress(box, state) {
+        if (!box) return;
+        const rows = [];
+
+        const heading = document.createElement('div');
+        heading.className = 'text-cyan-300';
+        const step = state.step ? `Step ${state.step} of ${state.steps || 5} · ` : '';
+        heading.textContent = `Updating Aurora1 — ${step}${elapsedSince(state.startedAt)} elapsed`;
+        rows.push(heading);
+
+        const label = document.createElement('div');
+        label.className = 'text-cyan-200 whitespace-pre-wrap break-words';
+        label.textContent = state.label;
+        rows.push(label);
+
+        if (state.detail) {
+            const detail = document.createElement('div');
+            detail.className = 'text-[11px] text-slate-400 whitespace-pre-wrap break-words';
+            detail.textContent = state.detail;
+            rows.push(detail);
+        }
+
+        const from = document.createElement('div');
+        from.className = 'text-[11px] text-slate-500';
+        from.textContent = state.version
+            ? `Running ${state.version}; it will restart on the new build when this finishes.`
+            : 'Aurora1 will restart on the new build when this finishes.';
+        rows.push(from);
+
+        if (state.log.length) {
+            const log = document.createElement('pre');
+            log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-24 overflow-auto whitespace-pre-wrap break-words select-all';
+            log.textContent = state.log.join('\n');
+            rows.push(log);
+        }
+
+        box.replaceChildren(...rows);
+    }
+
+    async function handleApplyUpdate() {
+        if (!confirm('Pull the latest changes, rebuild, and relaunch Aurora1? The app will restart.')) return;
+        voiceEngine.playSFX('click');
+
+        // The state the two views share. Both are redrawn on every event and once a
+        // second, so the elapsed time keeps moving through the rebuild -- the stretch
+        // where nothing else changes for a minute at a time, and where a frozen panel
+        // and a hung one look exactly alike.
+        const state = {
+            startedAt: Date.now(),
+            step: 0,
+            steps: 5,
+            label: 'Starting the update…',
+            detail: '',
+            percent: 0,
+            log: [],
+            version: versionBadge ? versionBadge.textContent.trim() : '',
+        };
+
+        const draw = () => {
+            const short = state.step
+                ? `${state.label} · ${state.step}/${state.steps} · ${elapsedSince(state.startedAt)}`
+                : `${state.label} · ${elapsedSince(state.startedAt)}`;
+            updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
+            renderApplyProgress(updateStatusBox, state);
+            renderUpdateOverlay(state);
+        };
+        showUpdateOverlay(true);
+        draw();
+
         if (btnApplyUpdate) btnApplyUpdate.disabled = true;
         if (btnCheckUpdate) btnCheckUpdate.disabled = true;
 
+        const ticker = setInterval(draw, 1000);
+        let unlisten = null;
         try {
+            if (window.__TAURI__?.event?.listen) {
+                unlisten = await window.__TAURI__.event.listen('update-progress', (event) => {
+                    const payload = event.payload || {};
+                    state.step = payload.step || state.step;
+                    state.steps = payload.steps || state.steps;
+                    state.label = payload.label || state.label;
+                    state.detail = payload.detail || '';
+                    state.percent = typeof payload.percent === 'number' ? payload.percent : state.percent;
+                    // The tail, not the whole build log: enough to see it moving and to
+                    // read the lines around a failure, without the panel becoming a
+                    // terminal.
+                    if (payload.detail) {
+                        state.log.push(payload.detail);
+                        if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
+                    }
+                    draw();
+                });
+            }
+
             // On success the app exits and relaunches before this ever resolves --
             // reaching the catch block means it genuinely failed.
             await tauriInvoke('apply_update_rust');
         } catch (e) {
+            // The message is git's or cargo's own now, with the step it died on in front
+            // of it (see apply_update_rust), and this panel is the only place an operator
+            // will ever read it: a windowed build has no terminal to be pointed at, which
+            // is what the old "see the terminal" line amounted to on Windows. Shown
+            // whole, wrapped, and selectable. Built as nodes rather than interpolated:
+            // this string contains branch names, paths and remote URLs, and none of that
+            // belongs in innerHTML.
+            const detail = String(e && e.message ? e.message : e);
+            updateHeaderProgress(`Update failed after ${elapsedSince(state.startedAt)}`, 0, false, detail.split('\n')[0]);
+            renderUpdateOverlay(state, detail);
             if (updateStatusBox) {
-                // The message is git's own now (see perform_update_core), and it is the
-                // only place an operator will ever read it: a windowed build has no
-                // terminal to be pointed at, which is what the old "see the terminal"
-                // line amounted to on Windows. Shown whole, wrapped, and selectable.
-                // Built as a node rather than interpolated: this string is git's stderr,
-                // which contains branch names, paths and remote URLs, and none of that
-                // belongs in innerHTML.
-                const detail = String(e && e.message ? e.message : e);
                 const line = document.createElement('div');
                 line.className = 'text-red-400 whitespace-pre-wrap break-words select-all';
-                line.textContent = `⚠ Update failed: ${detail}`;
-                updateStatusBox.replaceChildren(line);
+                line.textContent = `⚠ ${detail}`;
+                const note = document.createElement('div');
+                note.className = 'text-[11px] text-slate-500';
+                note.textContent = `It ran for ${elapsedSince(state.startedAt)} and stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. Nothing was installed; the copy you are running is untouched.`;
+                const rows = [line, note];
+                if (state.log.length) {
+                    const log = document.createElement('pre');
+                    log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words select-all';
+                    log.textContent = state.log.slice(-20).join('\n');
+                    rows.push(log);
+                }
+                updateStatusBox.replaceChildren(...rows);
             }
             if (btnApplyUpdate) btnApplyUpdate.disabled = false;
             if (btnCheckUpdate) btnCheckUpdate.disabled = false;
+        } finally {
+            clearInterval(ticker);
+            if (unlisten) unlisten();
         }
     }
 
@@ -10038,7 +12256,7 @@ document.addEventListener('DOMContentLoaded', () => {
             off: '💤 Sleep Mode: OFF',
             on: '💤 Sleep Mode: ON',
             title: 'Sleep Mode: hand the machine back — the background services stop and the '
-                + 'window hides, and Aether1 keeps running.',
+                + 'window hides, and Aurora1 keeps running.',
         };
     }
 
@@ -10333,6 +12551,10 @@ document.addEventListener('DOMContentLoaded', () => {
         desktopSpriteEnabled = floating;
         const panel = document.querySelector('[data-panel="hologram"]');
         if (panel) panel.classList.toggle('avatar-floating', floating);
+        // Out on the desktop is one of the four places the studio's box offers, and
+        // every way of getting there -- the panel's Undock, the Settings switch, the
+        // tray, another window -- comes through here.
+        paintStudioCage();
     }
 
     // Turns Desktop Sprite Mode on or off: persists the setting, tells Rust to open/close the
@@ -10401,11 +12623,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     let avatarIntroductionBusy = false;
+    let avatarIntroducedAt = 0;
+
+    /* How long an introduction stands for. Any tap within it is somebody clicking the
+       avatar, dragging the view a couple of pixels, or a pointer that bounced -- not
+       somebody who has forgotten who they are talking to since the last sentence.
+
+       Without this, five clicks produced five identical "I am AETHER1." lines in the chat,
+       one after another, which reads as a model stuck in a loop rather than as a UI with no
+       cooldown. The guards above this only cover talking *over* something; two
+       introductions into silence were always allowed. */
+    const AVATAR_INTRODUCTION_COOLDOWN_MS = 30_000;
 
     async function introduceAvatar() {
         // Mid-answer, mid-recording or already introducing itself: a tap is not worth
         // talking over any of those.
         if (avatarIntroductionBusy || isWaitingForResponse || talkHeld || handsFreeListening) return;
+        // Said it recently. A tap still means "I want to talk to you", so it still opens
+        // the microphone -- it just does not say the same sentence again.
+        if (Date.now() - avatarIntroducedAt < AVATAR_INTRODUCTION_COOLDOWN_MS) {
+            if (await microphonePresent()) await listenHandsFree();
+            return;
+        }
         avatarIntroductionBusy = true;
         try {
             /* Still speaking is the case that list misses, and it is the common one.
@@ -10432,12 +12671,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const entry = window.Aether1Avatars?.get(currentAvatar) || null;
-            const name = (currentAgentName || '').trim() || entry?.label || 'AETHER1';
+            const name = (currentAgentName || '').trim() || entry?.label || 'AURORA1';
             const avatarLabel = entry?.label || '';
             const introduction = avatarLabel && !namesMatch(avatarLabel, name)
                 ? `I am ${name}, on the ${avatarLabel} avatar.`
                 : `I am ${name}.`;
 
+            avatarIntroducedAt = Date.now();
             const mic = await microphonePresent();
             const addressed = operatorDisplayName ? `, ${operatorDisplayName}` : '';
             const spoken = mic
@@ -10577,7 +12817,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             chatContainer.innerHTML = '';
             if (msgs.length === 0) {
-                appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
+                /* The studio draws its own line over an empty conversation (see
+                   #studio-greeting), and a greeting from the companion underneath it is
+                   the same hello twice -- and worse, it is a message, so the screen that
+                   is meant to look like an invitation looks like a transcript of one
+                   exchange instead. The HUD has no such line, so it keeps this one. */
+                if (shellState().shell !== 'studio') {
+                    appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
+                }
             } else {
                 msgs.forEach(m => appendMessage(m.sender, m.text));
             }
@@ -10743,7 +12990,17 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-apikey').value = s.llm_api_key || '';
             document.getElementById('setting-gateway-url').value = s.llm_gateway_url || '';
             document.getElementById('setting-gateway-key').value = s.llm_gateway_key || '';
+            // What is stored for every *other* provider, so the dropdown can restore one
+            // the moment it is picked rather than on the next page load. Rides along with
+            // the settings rather than being a second request; see commands::get_settings.
+            if (data.accounts) providerAccounts = data.accounts;
+            providerShowing = s.llm_provider || 'offline';
+            providerScratch.clear();
+            renderProviderAccounts();
             toggleGatewayFields();
+            // Absent means `auto`, matching llm::REASONING_SETTING's own default -- an
+            // install that has never saved this is not an install with reasoning off.
+            document.getElementById('setting-reasoning').value = s.llm_reasoning || 'auto';
             document.getElementById('setting-persona').value = s.persona_type || 'default';
             document.getElementById('setting-custom-directive').value = s.custom_directive || '';
             toggleCustomPersonaField();
@@ -10950,6 +13207,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 llm_api_key: document.getElementById('setting-apikey').value,
                 llm_gateway_url: document.getElementById('setting-gateway-url').value.trim(),
                 llm_gateway_key: document.getElementById('setting-gateway-key').value,
+                llm_reasoning: document.getElementById('setting-reasoning').value,
                 persona_type: document.getElementById('setting-persona').value,
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
@@ -11057,6 +13315,17 @@ document.addEventListener('DOMContentLoaded', () => {
             // operator sees that there is still no folder: naming one here has to make
             // that line go away without reopening the panel.
             refreshCodeWorkspaceNote();
+            // And the two brain pickers. A provider chosen here, a key pasted here or an
+            // endpoint corrected here all change what they should be offering, and the
+            // one in the chat row is in view the moment this panel closes.
+            refreshBrainPicker();
+            // And the roster of saved accounts: a key just entered has to stop reading
+            // "no key yet", and the form's own copy of the key box is now a key this
+            // page may no longer see -- so it is replaced with the sentinel the next
+            // read would have given it.
+            providerScratch.clear();
+            await refreshProviderAccounts();
+            restoreProviderDetails(document.getElementById('setting-provider')?.value || 'offline');
             if (notify) {
                 voiceEngine.playSFX('click');
                 settingsModal.classList.add('hidden');
@@ -11782,6 +14051,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (terminalView && !IS_TAURI) {
         terminalView.remove();
         document.getElementById('tab-chat-terminal')?.remove();
+        // The tab strip just changed shape; the module list is read from it.
+        window.A1Modules?.refresh();
     } else if (terminalView) {
         const terminalSurface = document.getElementById('terminal-surface');
         const terminalState = document.getElementById('terminal-state');
@@ -11862,25 +14133,134 @@ document.addEventListener('DOMContentLoaded', () => {
     /* Graft integration for code analysis                             */
     /* ================================================================ */
 
-    async function loadGraftStatus() {
-        try {
-            const statusEl = document.getElementById('graft-status');
-            if (!statusEl) return;
+    /* Asked through whichever door this copy has, rather than answering "requires Tauri" in a
+       browser: the served copy has to be able to say whether Graft is there, and now whether
+       an install worked. Same rule the model picker was fixed to in #251. */
+    async function graftVersion() {
+        if (IS_TAURI) return await tauriInvoke('graft_version_rust');
+        const response = await apiFetch('/api/graft/version');
+        if (!response.ok) throw new Error(await response.text());
+        return await response.json();
+    }
 
-            // Check Graft version
+    async function loadGraftStatus() {
+        const statusEl = document.getElementById('graft-status');
+        const installRow = document.getElementById('graft-install-row');
+        if (!statusEl) return;
+        try {
+            const version = await graftVersion();
+            if (version && version.installed) {
+                statusEl.textContent = `✓ Graft ${version.version} installed`;
+                installRow?.classList.add('hidden');
+                return;
+            }
+            throw new Error((version && version.message) || 'not installed');
+        } catch (e) {
+            // Not an error the operator has to act on any more -- there is a button under
+            // this line that does the acting, so the sentence stops naming a command.
+            statusEl.textContent = '✗ Graft is not installed.';
+            installRow?.classList.remove('hidden');
+        }
+    }
+
+    /* The install's progress, polled while it runs.
+
+       One timer at a time, cleared on every terminal state: a second press, or reopening
+       Settings mid-install, would otherwise leave two polls writing the same three elements
+       and the bar flickering between their answers. */
+    let graftInstallPoll = null;
+
+    function paintGraftInstall(install) {
+        const step = document.getElementById('graft-install-step');
+        const detail = document.getElementById('graft-install-detail');
+        const track = document.getElementById('graft-install-bar-track');
+        const bar = document.getElementById('graft-install-bar');
+        const button = document.getElementById('btn-graft-install');
+        if (!step || !detail || !track || !bar || !button) return;
+
+        if (!install) {
+            step.textContent = '';
+            detail.textContent = '';
+            track.classList.add('hidden');
+            button.disabled = false;
+            return;
+        }
+
+        const running = install.phase !== 'done' && install.phase !== 'failed';
+        button.disabled = running;
+        track.classList.toggle('hidden', !running && install.phase !== 'done');
+        // A failure drops the percentage rather than freezing the bar part-way, which reads
+        // as "still going"; the width is left where it stopped only while it is still going.
+        if (typeof install.percent === 'number') bar.style.width = `${install.percent}%`;
+
+        if (install.phase === 'failed') {
+            step.textContent = 'Install failed';
+            detail.textContent = install.error || install.detail || '';
+            track.classList.add('hidden');
+            return;
+        }
+        if (install.phase === 'done') {
+            step.textContent = install.version ? `Graft ${install.version} installed` : 'Installed';
+            detail.textContent = install.detail || '';
+            return;
+        }
+        step.textContent = `Step ${install.step} of ${install.steps}`;
+        detail.textContent = install.detail || '';
+    }
+
+    async function graftInstallStatus() {
+        if (IS_TAURI) return await tauriInvoke('graft_install_status_rust');
+        const response = await apiFetch('/api/graft/install/status');
+        if (!response.ok) throw new Error(await response.text());
+        return await response.json();
+    }
+
+    function watchGraftInstall() {
+        if (graftInstallPoll) clearInterval(graftInstallPoll);
+        graftInstallPoll = setInterval(async () => {
+            let install = null;
             try {
-                if (IS_TAURI) {
-                    const version = await tauriInvoke('graft_version_rust');
-                    statusEl.textContent = `✓ Graft ${version.version} installed`;
-                } else {
-                    statusEl.textContent = `ℹ️ Graft status requires Tauri`;
-                }
+                install = (await graftInstallStatus()).install;
             } catch (e) {
-                statusEl.textContent = '✗ Graft not found. Install it with: npm install -g @nanonets/graft';
+                // The window is still here and the install is still running in the app; a
+                // dropped poll is not a reason to tell the operator it failed.
+                return;
+            }
+            paintGraftInstall(install);
+            if (!install || install.phase === 'done' || install.phase === 'failed') {
+                clearInterval(graftInstallPoll);
+                graftInstallPoll = null;
+                // Re-asked rather than assumed: "done" means npm exited cleanly, and whether
+                // the binary is now findable is a different question with its own answer.
+                if (install && install.phase === 'done') await loadGraftStatus();
+            }
+        }, 1000);
+    }
+
+    async function startGraftInstall() {
+        const button = document.getElementById('btn-graft-install');
+        if (button) button.disabled = true;
+        voiceEngine.playSFX('click');
+        let result;
+        try {
+            if (IS_TAURI) result = await tauriInvoke('start_graft_install_rust');
+            else {
+                const response = await apiFetch('/api/graft/install', { method: 'POST' });
+                if (!response.ok) throw new Error(await response.text());
+                result = await response.json();
             }
         } catch (e) {
-            console.error('Error loading Graft status:', e);
+            paintGraftInstall({ phase: 'failed', error: `Could not start: ${e.message || e}` });
+            return;
         }
+        if (!result.ok) {
+            // The local-only refusal arrives here, and it is the operator's own setting
+            // talking, so it is shown as it was written rather than relabelled an error.
+            paintGraftInstall({ phase: 'failed', error: result.message || 'Could not start.' });
+            return;
+        }
+        paintGraftInstall(result.install);
+        watchGraftInstall();
     }
 
     // The rows are built with DOM calls rather than interpolated HTML: a project is a
@@ -12011,6 +14391,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    document.getElementById('btn-graft-install')?.addEventListener('click', startGraftInstall);
     document.getElementById('btn-graft-detect')?.addEventListener('click', loadGraftProjects);
 
     // Built one at a time on purpose: a first build parses every file in a repository, and
@@ -12224,8 +14605,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const providerSelect = document.getElementById('setting-provider');
     if (providerSelect) {
         providerSelect.addEventListener('change', (e) => {
+            // Before anything else: the boxes still hold the provider being left, and
+            // this is the only moment they can be filed under it. See stashProviderDetails.
+            stashProviderDetails();
+            restoreProviderDetails(e.target.value);
             applyDefaultModelForProvider(e.target.value);
             toggleGatewayFields();
+            renderProviderAccounts();
         });
     }
 
@@ -12257,6 +14643,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (versionBadge) {
         versionBadge.addEventListener('click', () => handleCheckForUpdate());
     }
+    // The strip truncates; this is where the untruncated version lives.
+    headerUpdateProgress?.addEventListener('click', () => {
+        settingsModal?.classList.remove('hidden');
+        showSettingsSection('app');
+        document.getElementById('update-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
     headerUpdateButton?.addEventListener('click', () => {
         if (headerUpdateButton.dataset.action === 'download') handleDownloadUpdate();
         else if (headerUpdateButton.dataset.action === 'apply') handleApplyUpdate();
@@ -12273,6 +14665,25 @@ document.addEventListener('DOMContentLoaded', () => {
         settingsModal.classList.remove('hidden');
         showSettingsSection('brain');
     });
+    /* Opens the connection form and puts it in front of the operator, wherever they
+       pressed it from. The form has always been reachable -- it was reachable by opening
+       Settings, finding Connections in the rail, and unfolding a grey summary line four
+       levels down -- which is a different thing from being findable. */
+    function openProviderSetup() {
+        voiceEngine.playSFX('click');
+        settingsModal.classList.remove('hidden');
+        showSettingsSection('connections');
+        const form = document.getElementById('settings-group-ai-connection');
+        if (form) {
+            form.open = true;
+            // After the pane is shown, or the scroll lands on a hidden element.
+            requestAnimationFrame(() => form.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+        }
+        refreshProviderAccounts();
+    }
+    document.getElementById('btn-setup-provider')?.addEventListener('click', openProviderSetup);
+    document.getElementById('brain-setup-provider')?.addEventListener('click', openProviderSetup);
+
     document.getElementById('conn-github-signout')?.addEventListener('click', () => handleSignOut());
     if (btnGithubDecline) {
         btnGithubDecline.addEventListener('click', () => handleDeclineUpdates());
@@ -12307,7 +14718,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (voicePitchLabel) voicePitchLabel.textContent = `${window.AETHER_VOICE_PITCH} st`;
     });
     document.getElementById('btn-voice-audition')?.addEventListener('click', async () => {
-        const url = await synthesizeSpeechUrl('This is how the current Aether1 voice sounds.', null);
+        const url = await synthesizeSpeechUrl('This is how the current Aurora1 voice sounds.', null);
         if (url) await voiceEngine.playTTSAudio(url, {
             playbackRate: window.AETHER_VOICE_RATE || 1,
             pitchSemitones: window.AETHER_VOICE_PITCH || 0,
@@ -12981,6 +15392,7 @@ document.addEventListener('DOMContentLoaded', () => {
     connectTelemetry();
     initWindowChrome();
     initVersionAndUpdates();
+    initUpdateOverlay();
     initModelHub();
     initSpriteMode();
     initStartupPerformance();
@@ -12991,6 +15403,11 @@ document.addEventListener('DOMContentLoaded', () => {
     initHologramFloatingNotice();
     initAvatarTapIntroduction();
     initSpecialityModel();
+    initBrainPicker();
+    // After initStudio, which is where the sidebar's eight entries get their
+    // listeners -- the module switches hide those same entries.
+    initStudio();
+    initChatModules();
     initFlowMode();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();

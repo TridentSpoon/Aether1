@@ -69,9 +69,10 @@ it, or open Settings and use **Design your own avatar**. Either opens the workbe
 its own window. (You can also open `frontend/avatar-lab.html` directly in a browser --
 it needs nothing else running.)
 
-Choose four tiers -- a core (the thing at the middle), an inner ring (wrapping close
-around it), an outer ring (further out, toward the edge) and an effect (an ambient layer
-or background) -- set the sizes and the motion, and press **Use this in Aether1**. The
+Choose seven tiers -- a core (the thing at the middle), an inner ring (wrapping close
+around it), an outer ring (further out, toward the edge), an effect (an ambient layer or
+background), and eyes, brows and a mouth, which share one face plane in front of the core
+-- set the sizes and the motion, and press **Use this in Aether1**. The
 HUD picks it up immediately: the two windows share the saved recipe, so an open HUD
 updates the moment you save, with no reload.
 
@@ -119,16 +120,35 @@ HologramAvatar.registerAvatar({
 });
 ```
 
-`api` carries `THREE`, the current `palette`, and `helpers` (the same texture makers the
-built-in avatars use). `ctx` carries `time`, `audio` (0–1 loudness), `audioData` (the 64
-bins), `click` (a brief pulse when the avatar is clicked), `state`, `palette`, `zoom` (the
-current manual zoom scale, see `setZoom`) and `viewRotationY` (the scene's current drag-yaw).
-Most avatars can ignore the last two -- their group is scaled by `setZoom` for free, and
-spinning along with a drag is the normal, wanted behaviour. They're there for the rare
-avatar that wants to opt out of one: Operator counters `viewRotationY` every frame so its
-depth tunnel stays camera-locked instead of spinning with the hologram, and the custom
-avatar reads `zoom` directly because it must scale its own tiers 1-3 but never its tier-4
-effect layer.
+`api` carries `THREE`, the current `palette`, and `helpers`: the engine's own texture and
+shape makers, which is the only way to reach them from a file that has no `this` on the
+engine. The textures are `glowTexture`, `radialGlowTexture` and `ringTexture`; the shapes
+are `hexVertices`, `hexOutline`, `hexFill`, `hexPrism` and `polygonShard` (see
+`geometry-helpers.js`, which holds the one copy of each).
+
+`ctx` carries `time`, `audio` (0–1 loudness), `audioData` (the 64 bins), `click` (a brief
+pulse when the avatar is clicked), `state`, `palette`, `zoom` (the current manual zoom
+scale, see `setZoom`) and `viewRotationY` (the scene's current drag-yaw). Most avatars can
+ignore the last two -- their group is scaled by `setZoom` for free, and spinning along with
+a drag is the normal, wanted behaviour. They're there for the rare avatar that wants to opt
+out of one: Operator counters `viewRotationY` every frame so its depth tunnel stays
+camera-locked instead of spinning with the hologram, and the custom avatar reads `zoom`
+directly because it must scale its own tiers 1-3 but never its tier-4 effect layer.
+
+Three more are for an avatar that reacts to the operator rather than to the voice.
+`clickTime` is when the last click happened and `clickAge` how long ago -- `click` alone
+cannot tell a *new* click from a pulse that is merely still loud, which is what R.E.D.
+9000's blink and A.R.X.LOGOS's aperture need (`ctx.clickTime !== model.handledClick`).
+`pointer` is `{ x, y, idleFor }`: where the pointer is over the viewport, -1..1 on each
+axis, and how long it has been still. The Nexus looks at it.
+
+Two optional fields on the def handle what an avatar cannot do from inside its own group.
+`viewportClass` is a CSS class the engine puts on the viewport while that avatar is the one
+on screen, and takes off again when it is not -- A1ter_nul's `glitch-active` and The Nexus's
+`crt-active` overlays are defined in `A1theme.css` and `sprite.css`. `fitGroup`, returned
+from `build()` alongside `group`, is what auto-fit measures instead of the whole group:
+A1ter_nul's firewall perimeter is sized to the window's own edges on purpose, and measuring
+it would pull the camera back until the avatar inside it was a postage stamp.
 
 A broken avatar is reported to the console and skipped — a mistake in one avatar file
 does not take the HUD down with it.

@@ -6,7 +6,7 @@
 // puts the memory vault in whatever the working directory happens to be, and refuses every
 // file the operator asks about because nothing is inside an allowed root any more.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The operator's home directory.
 ///
@@ -31,6 +31,57 @@ pub fn home_dir() -> Option<PathBuf> {
         }
         _ => None,
     }
+}
+
+/// This app's own directory name, in the two brandings it has: the one it uses now first,
+/// then the one the Aurora1 rename moves it to. Lowercase for the Unix `~/.local/share`
+/// convention, capitalised for `%LOCALAPPDATA%`, which is how both platforms already spell
+/// it.
+pub const APP_DIR_NAMES: [&str; 2] = ["aether1", "aurora1"];
+pub const APP_DIR_NAMES_WINDOWS: [&str; 2] = ["Aether1", "Aurora1"];
+
+/// `base` joined with whichever of `names` is already a directory there, and with the first
+/// of them when neither is.
+///
+/// **Why this exists.** The rename to Aurora1 changes the name of the directory that holds
+/// the memory vault, the conversation database, the audio cache and the managed Python
+/// environment. A machine that has been running AETHER1 has all of that under the old name,
+/// and a rename that simply writes the new name into the source does not move a byte of it:
+/// the symptom is a companion that launches with no memory and no settings, and an operator
+/// who has to be told where their own files went. Looking for what is there first means the
+/// release that flips the name finds the existing directory and keeps using it, and only a
+/// fresh machine ever gets the new spelling. Moving the data is then a thing that can be
+/// done deliberately, or never.
+pub fn branded_dir(base: &Path, names: [&str; 2]) -> PathBuf {
+    for name in names {
+        let candidate = base.join(name);
+        if candidate.is_dir() {
+            return candidate;
+        }
+    }
+    base.join(names[0])
+}
+
+/// The per-user directory this app keeps its own data in: `~/.local/share/aether1` on Unix,
+/// `%LOCALAPPDATA%\Aether1` on Windows, under whichever branding this machine already has.
+pub fn app_data_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        let base = PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+        Some(branded_dir(&base, APP_DIR_NAMES_WINDOWS))
+    } else {
+        let base = home_dir()?.join(".local").join("share");
+        Some(branded_dir(&base, APP_DIR_NAMES))
+    }
+}
+
+/// The same directory, always in the Unix `~/.local/share` shape whatever the platform.
+///
+/// Separate from `app_data_dir` because the data directory a CI-built binary falls back to
+/// has been this on every platform since it was written (see main.rs's `project_root`), and
+/// a Windows install that has files there would lose sight of them if this started answering
+/// `%LOCALAPPDATA%`. The branding is resolved the same way; the shape is not changed.
+pub fn share_dir() -> Option<PathBuf> {
+    home_dir().map(|home| branded_dir(&home.join(".local").join("share"), APP_DIR_NAMES))
 }
 
 /// Expands a leading `~` against the home directory. Left alone if there is no home to
@@ -69,16 +120,7 @@ pub fn expand_home(path: &str) -> PathBuf {
 /// still the operator who creates it -- the wizard shows the command and says what it is
 /// for. Aether1 does not install runtime dependencies behind anyone's back.
 pub fn managed_python_env() -> Option<PathBuf> {
-    if cfg!(target_os = "windows") {
-        std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Aether1").join("pyenv"))
-    } else {
-        home_dir().map(|home| {
-            home.join(".local")
-                .join("share")
-                .join("aether1")
-                .join("pyenv")
-        })
-    }
+    app_data_dir().map(|dir| dir.join("pyenv"))
 }
 
 /// Where a venv keeps its executables: `Scripts` on Windows, `bin` everywhere else.
@@ -128,7 +170,7 @@ pub fn find_installed_binary(names: &[&str]) -> Option<PathBuf> {
         ""
     };
     let installer_bin = if cfg!(target_os = "windows") {
-        std::env::var_os("LOCALAPPDATA").map(|dir| PathBuf::from(dir).join("Aether1").join("bin"))
+        app_data_dir().map(|dir| dir.join("bin"))
     } else {
         home_dir().map(|home| home.join(".local").join("bin"))
     };
@@ -183,20 +225,34 @@ pub fn suppress_console_window(cmd: &mut std::process::Command) {
 #[cfg(not(target_os = "windows"))]
 pub fn suppress_console_window(_cmd: &mut std::process::Command) {}
 
+/// A `Command` that has already been told not to flash a console window.
+///
+/// `suppress_console_window` only works if every call site remembers to call it, and on a
+/// machine with no Windows to test on, "remembers" means "nobody noticed for a release".
+/// Aurora1 rev0.261101.276 shipped with the crash watcher running PowerShell every twenty
+/// seconds and the theme probe running it on every window focus, neither suppressed, which
+/// on Windows is a black console window appearing over the HUD several times a minute.
+/// Building the command through here makes the quiet version the one that is easy to write;
+/// `scripts/check_console_windows.sh` makes it the only one.
+pub fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    let mut cmd = std::process::Command::new(program);
+    suppress_console_window(&mut cmd);
+    cmd
+}
+
 /// Opens `path` in the OS's own file manager -- Explorer, Finder, or whichever handler
 /// `xdg-open` resolves to on Linux. Fire-and-forget: this only has to confirm the file
 /// manager *launched*, the same way a desktop icon double-click does not wait around for
 /// the window it opened.
 pub fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {
     let mut cmd = if cfg!(target_os = "windows") {
-        std::process::Command::new("explorer")
+        quiet_command("explorer")
     } else if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
+        quiet_command("open")
     } else {
-        std::process::Command::new("xdg-open")
+        quiet_command("xdg-open")
     };
     cmd.arg(path);
-    suppress_console_window(&mut cmd);
     cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("could not open {}: {e}", path.display()))
@@ -314,6 +370,52 @@ mod tests {
                 assert_eq!(expand_home("/etc/hostname"), PathBuf::from("/etc/hostname"));
             },
         );
+    }
+
+    /// The app's own data directory follows whichever branding is already on the machine.
+    ///
+    /// **This is the one that would be noticed immediately.** That directory holds the memory
+    /// vault, the conversation database, the settings and the audio cache. Writing a new name
+    /// into the source does not move a byte of it, so a rename that did not look first would
+    /// launch a companion with no memory and no settings, and nothing on screen would say
+    /// where it all went.
+    #[test]
+    fn the_data_directory_follows_the_branding_already_there() {
+        let base = std::env::temp_dir().join(format!("aether1_branded_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Neither there: the name this build writes.
+        assert_eq!(
+            branded_dir(&base, APP_DIR_NAMES),
+            base.join(APP_DIR_NAMES[0])
+        );
+
+        // Only the other one there: that is the directory, whichever way round the two
+        // names happen to be in this build.
+        std::fs::create_dir_all(base.join(APP_DIR_NAMES[1])).unwrap();
+        assert_eq!(
+            branded_dir(&base, APP_DIR_NAMES),
+            base.join(APP_DIR_NAMES[1])
+        );
+
+        // Both there: this build's preference, so it cannot alternate between two stores.
+        std::fs::create_dir_all(base.join(APP_DIR_NAMES[0])).unwrap();
+        assert_eq!(
+            branded_dir(&base, APP_DIR_NAMES),
+            base.join(APP_DIR_NAMES[0])
+        );
+
+        // A file of that name is not a directory, and must not be mistaken for one.
+        let plain = base.join("sub");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join(APP_DIR_NAMES[1]), "not a directory").unwrap();
+        assert_eq!(
+            branded_dir(&plain, APP_DIR_NAMES),
+            plain.join(APP_DIR_NAMES[0])
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

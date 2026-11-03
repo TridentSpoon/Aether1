@@ -159,9 +159,8 @@ const REQUIRED_GST_ELEMENTS: &[(&str, &str)] = &[
 #[cfg(target_os = "linux")]
 pub fn media_playback_step() -> Option<Step> {
     let probe = |element: &str| -> Option<bool> {
-        let mut cmd = std::process::Command::new("gst-inspect-1.0");
+        let mut cmd = crate::paths::quiet_command("gst-inspect-1.0");
         cmd.arg(element);
-        crate::paths::suppress_console_window(&mut cmd);
         cmd.output().ok().map(|out| out.status.success())
     };
 

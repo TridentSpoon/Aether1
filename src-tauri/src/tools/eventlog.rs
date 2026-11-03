@@ -288,7 +288,7 @@ fn run_query(channel: &str, count: u64, query: Option<&str>) -> Result<Outcome, 
     let binary = wevtutil_path()?;
     let argv = ReadEventLog::argv(channel, count, query);
 
-    let mut command = Command::new(&binary);
+    let mut command = crate::paths::quiet_command(&binary);
     command
         .args(&argv)
         .stdin(Stdio::null())
@@ -296,7 +296,6 @@ fn run_query(channel: &str, count: u64, query: Option<&str>) -> Result<Outcome, 
         .stderr(Stdio::piped());
     // Without this the app -- which has no console of its own -- flashes a new console
     // window for every single query.
-    crate::paths::suppress_console_window(&mut command);
 
     let mut child = command
         .spawn()
