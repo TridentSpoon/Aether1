@@ -49,6 +49,7 @@ mod hf;
 mod hotkey;
 mod installs;
 mod lan;
+mod launchers;
 mod llm;
 mod local_only;
 mod local_server;
@@ -72,6 +73,7 @@ mod voice_download;
 mod voice_setup;
 mod watchers;
 mod websearch;
+mod webview;
 
 // installs::Machine is the trait the scan reads the machine through; brought in as `_` because
 // only its methods are called here, never its name.
@@ -3025,7 +3027,14 @@ fn announce_crash<R: tauri::Runtime>(
         .notification()
         .builder()
         .title(crash.headline())
-        .body("AETHER1 has the details. Open it to look into this together.")
+        .body(if webview::is_renderer_process(&crash.program) {
+            // AETHER1's own window process. Saying "open AETHER1 to look into it" about the
+            // thing that draws AETHER1 would be asking the operator to use what just broke.
+            "This is AETHER1's own window process. The next launch will start it with the \
+             accelerated rendering path off, which usually settles it."
+        } else {
+            "AETHER1 has the details. Open it to look into this together."
+        })
         .show();
 
     let _ = app.emit(
@@ -3264,6 +3273,12 @@ fn main() {
         other => std::process::exit(cli::run(other)),
     }
 
+    // Before the webview exists, and only on the path that builds one. On a machine where
+    // WebKitGTK's renderer has already failed, this starts it one rung down the fallback
+    // ladder instead of repeating the failure; on every other machine it sets nothing. See
+    // webview.rs for why neither variable is set pre-emptively.
+    webview::arm();
+
     let llm_engine = build_llm_engine();
 
     tauri::Builder::default()
@@ -3288,6 +3303,10 @@ fn main() {
         ))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        // A page that loaded is the only proof there is that the renderer came up on the
+        // rung this launch chose, and it is proof the Rust side cannot get any other way:
+        // the window object exists whether or not anything was ever drawn in it.
+        .on_page_load(|_window, _payload| webview::rendered())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -3903,6 +3922,12 @@ fn main() {
                             continue;
                         };
                         for crash in news {
+                            // The webview's own renderer dying is a crash AETHER1 can do
+                            // something about rather than merely report: remembered here,
+                            // the next launch starts it on a rung that works.
+                            if webview::is_renderer_process(&crash.program) {
+                                webview::note_crash();
+                            }
                             announce_crash(&app_handle, &crash, amber.clone(), plain.clone());
                         }
                     }
