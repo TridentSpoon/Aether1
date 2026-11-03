@@ -199,6 +199,15 @@ pub async fn run(engine: LlmEngine, lan: bool) {
                     "telemetry": telemetry.to_wire_json(),
                     "tokens": engine.usage_snapshot(),
                     "agent_name": engine.agent_name(),
+                    /* The same line the desktop tick carries, and it was missing here --
+                    so every notice the engine wrote was dropped on the floor for anyone
+                    driving AETHER1 over `--serve`: which model the Auto router picked and
+                    why, a model that has been uninstalled, a judge that could not be
+                    reached. Found by driving the abstention below through a browser and
+                    watching nothing arrive. `take` rather than read, for the reason the
+                    desktop one says: collecting it is what clears it, so two windows
+                    cannot both claim to have shown it. */
+                    "routing_notice": engine.take_routing_notice(),
                 });
                 let _ = tx.send(payload); // Err just means the last client left mid-tick
                 pulse.park(Duration::from_millis(1000));

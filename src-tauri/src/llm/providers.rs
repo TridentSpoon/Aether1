@@ -879,6 +879,12 @@ struct OllamaResponse {
     eval_count: Option<u64>,
     #[serde(default)]
     eval_duration: Option<u64>,
+    /// Per-token log probabilities, present only when the request asked for them -- which
+    /// only the judge does. Absent entirely on a server too old to know the field, and
+    /// that absence is the whole fail-safe: no logprobs means no confidence, and no
+    /// confidence means the router never abstains. See `Confidence`.
+    #[serde(default)]
+    logprobs: Option<Vec<TokenLogprob>>,
 }
 
 impl OllamaResponse {
@@ -3021,6 +3027,213 @@ pub struct Ask<'a> {
     pub pace: Pace,
 }
 
+/// One generated token, with what the server thought of the alternatives at that position.
+///
+/// The same shape in both dialects: Ollama puts an array of these at the top level of a
+/// non-streamed `/api/chat` reply, and an OpenAI-compatible server puts it under
+/// `choices[0].logprobs.content`. Only the judge asks for them.
+#[derive(Clone, Debug, Deserialize)]
+struct TokenLogprob {
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    logprob: f64,
+    /// The most likely tokens at this position, which on both servers normally includes the
+    /// one that was chosen. Deduplicated by text when the mass is summed, so an entry for
+    /// the chosen token is neither required nor double-counted.
+    #[serde(default)]
+    top_logprobs: Vec<TokenLogprob>,
+}
+
+/// How sure the judge was of each field it answered, as a probability between 0 and 1.
+///
+/// Why this exists at all: a verdict is three values from fixed sets, and until now a small
+/// model's coin-flip and its confident call arrived here identically and were acted on
+/// identically. On a 4 GB card, where the judge is smallest, that is where the routing is
+/// wrong and silent. A field's number is the share of the probability mass the chosen token
+/// held against the alternatives the server named at that position -- the same
+/// normalisation a judgment made of one token per field admits of, and no more.
+///
+/// **A missing field is not an unsure field.** `of` returns None, and every caller must
+/// read None as "act on it as before". A server too old to know `logprobs`, a model whose
+/// tokeniser splits a value in a way this cannot follow, a dialect that answers without the
+/// array -- all of them arrive here as an empty map, and an empty map must leave the router
+/// behaving exactly as it did before this type existed. Anything else would make a feature
+/// meant to catch an unsure judge into one that stops a working one.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Confidence(std::collections::BTreeMap<String, f64>);
+
+impl Confidence {
+    /// How sure the judge was of one field, or None where there is nothing to say.
+    pub fn of(&self, field: &str) -> Option<f64> {
+        self.0.get(field).copied()
+    }
+
+    /// What the judge was sure of, for the log a developer reads.
+    ///
+    /// This exists because of one thing the operator cannot otherwise tell apart, and it is
+    /// the thing that would make a field test inconclusive. A confident judge and a server
+    /// that never reported a probability both route in silence: the abstention only ever
+    /// prints when it fires, so "it worked and was sure" and "nothing is being read at all"
+    /// look identical from outside. Naming it here, per judged turn, is what separates them.
+    pub fn describe(&self) -> String {
+        if self.0.is_empty() {
+            return "no confidence reported -- the server returned no log probabilities, so \
+                    every field is acted on"
+                .to_string();
+        }
+        self.0
+            .iter()
+            .map(|(field, p)| format!("{field} {:.0}%", p * 100.0))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// A confidence made up by hand, for the tests of what is *done* with one -- which
+    /// live in `llm::auto`, where the fallbacks are, rather than here.
+    #[cfg(test)]
+    pub fn from_pairs(pairs: &[(&str, f64)]) -> Confidence {
+        Confidence(
+            pairs
+                .iter()
+                .map(|(field, p)| ((*field).to_string(), *p))
+                .collect(),
+        )
+    }
+}
+
+/// A judgment and how sure of it the judge was.
+pub struct Judged {
+    pub answer: Value,
+    pub confidence: Confidence,
+}
+
+/// Where each field's value begins in the answer text, by byte offset.
+///
+/// Deliberately a scan of the text rather than anything derived from `serde_json`: the
+/// offsets have to line up with the *raw* bytes the model produced, because that is what
+/// the token stream concatenates to, and a parsed value has lost them. Finds the key as a
+/// quoted string, steps over the colon and any space, and reports where the value starts --
+/// the opening quote of a string is stepped over too, so the offset lands on the first
+/// character the model had a real choice about.
+fn value_offsets(text: &str, fields: &[String]) -> Vec<(String, usize)> {
+    let bytes = text.as_bytes();
+    let mut found = Vec::new();
+    for field in fields {
+        let needle = format!("\"{field}\"");
+        let Some(key_at) = text.find(&needle) else {
+            continue;
+        };
+        let mut at = key_at + needle.len();
+        while at < bytes.len() && (bytes[at] as char).is_whitespace() {
+            at += 1;
+        }
+        if at >= bytes.len() || bytes[at] != b':' {
+            continue;
+        }
+        at += 1;
+        while at < bytes.len() && (bytes[at] as char).is_whitespace() {
+            at += 1;
+        }
+        if at < bytes.len() && bytes[at] == b'"' {
+            at += 1;
+        }
+        if at < bytes.len() {
+            found.push((field.clone(), at));
+        }
+    }
+    found
+}
+
+/// What share of the probability mass the chosen token held at its position.
+///
+/// The alternatives the server named are the only ones there is anything to say about, so
+/// the mass is summed over those, deduplicated by text, with the chosen token included
+/// whether or not the server listed it among its own alternatives. A position with no
+/// alternatives reported yields the chosen token's own probability, which is the honest
+/// answer: there is nothing to compare it against.
+fn share_of_mass(token: &TokenLogprob) -> f64 {
+    let chosen = token.logprob.exp();
+    if !chosen.is_finite() {
+        return 0.0;
+    }
+    let mut total = chosen;
+    let mut alternatives = 0;
+    for alternative in &token.top_logprobs {
+        if alternative.token != token.token {
+            total += alternative.logprob.exp();
+            alternatives += 1;
+        }
+    }
+    /* Nothing to normalise against, so the raw probability stands. Normalising a lone
+    token against itself would report every such position as a certainty -- which is the
+    exact overconfidence this type exists to catch, arrived at by arithmetic instead of by
+    a model. A test holds this: a token the server gave an even chance and named no
+    alternative for is a half, not a one. */
+    if alternatives == 0 {
+        return chosen.clamp(0.0, 1.0);
+    }
+    if total <= 0.0 || !total.is_finite() {
+        return 0.0;
+    }
+    (chosen / total).clamp(0.0, 1.0)
+}
+
+/// How sure the judge was of each field, read off the token stream.
+///
+/// The first token of a value is the one that decides it, and for the answers a judgment is
+/// made of that is the whole of it: `simple` and `hard` differ at their first token, and so
+/// do `true` and `false`. So each field's number comes from the token covering the byte
+/// where its value starts.
+///
+/// Every way this can fail returns a map without that field in it rather than a guess --
+/// see `Confidence` for why that is the only safe direction. The token stream not
+/// reconstructing the answer text is one of those ways: a tokeniser that emits bytes this
+/// cannot follow leaves the offsets wrong, and a wrong offset would attach one field's
+/// certainty to another field's value.
+fn confidence_from(text: &str, tokens: &[TokenLogprob], answer: &Value) -> Confidence {
+    let Some(fields) = answer.as_object() else {
+        return Confidence::default();
+    };
+    let names: Vec<String> = fields.keys().cloned().collect();
+    let offsets = value_offsets(text, &names);
+    if offsets.is_empty() || tokens.is_empty() {
+        return Confidence::default();
+    }
+    /* Where the generated text sits in what came back. The token stream covers what the
+    model produced, which is the whole reply -- but `text` here is the whole reply too, so
+    the stream starts at zero. Checked rather than assumed: if the concatenation does not
+    appear at the front, the offsets cannot be trusted and nothing is reported. */
+    let rebuilt: String = tokens.iter().map(|t| t.token.as_str()).collect();
+    if !rebuilt.is_empty() && !text.starts_with(&rebuilt) && !text.contains(&rebuilt) {
+        return Confidence::default();
+    }
+    let start = if text.starts_with(&rebuilt) {
+        0
+    } else {
+        text.find(&rebuilt).unwrap_or(0)
+    };
+
+    let mut spans = Vec::with_capacity(tokens.len());
+    let mut at = start;
+    for token in tokens {
+        let end = at + token.token.len();
+        spans.push((at, end, token));
+        at = end;
+    }
+
+    let mut sure = std::collections::BTreeMap::new();
+    for (field, offset) in offsets {
+        if let Some((_, _, token)) = spans
+            .iter()
+            .find(|(begin, end, _)| offset >= *begin && offset < *end)
+        {
+            sure.insert(field, share_of_mass(token));
+        }
+    }
+    Confidence(sure)
+}
+
 /// Asks a local model for one structured judgment, with the schema enforced by the server.
 ///
 /// `schema` is a JSON Schema object describing the whole answer. `budget` is how many tokens
@@ -3038,11 +3251,11 @@ pub fn judge(
     endpoint: &str,
     model: &str,
     ask: Ask<'_>,
-) -> Result<Value, String> {
+) -> Result<Judged, String> {
     if model.trim().is_empty() {
         return Err("no model to judge with".to_string());
     }
-    let text = match provider {
+    let (text, tokens) = match provider {
         Provider::Ollama => judge_ollama(endpoint, model, &ask)?,
         Provider::LmStudio => judge_openai(endpoint, model, &ask)?,
         other => return Err(format!("{other} cannot be used as a local judge")),
@@ -3052,7 +3265,9 @@ pub fn judge(
     // field entirely. Both end up here as text that is nearly JSON, so the object is cut
     // out rather than the whole string parsed -- and if there is no object in it, that is
     // an error and not a verdict.
-    parse_judgment(&text)
+    let answer = parse_judgment(&text)?;
+    let confidence = confidence_from(&text, &tokens, &answer);
+    Ok(Judged { answer, confidence })
 }
 
 /// What came back, read as a verdict -- separated from the call so that every way a model
@@ -3114,8 +3329,22 @@ struct OllamaJudgeRequest<'a> {
     /// models least able to afford one. Same rule as `OllamaRequest::think`.
     #[serde(skip_serializing_if = "Option::is_none")]
     think: Option<bool>,
+    /// Asked for on every judgment, and sent unconditionally rather than on a probed
+    /// capability. A server too old to know these two fields ignores them -- unknown
+    /// fields in a request body are dropped, not refused -- and then answers without the
+    /// array, which `confidence_from` reports as nothing known. That is the right
+    /// degradation and it is why there is no probe here: the cost of being wrong is a
+    /// router that behaves exactly as it did before, not a judgment that fails.
+    logprobs: bool,
+    /// Five is enough to tell a confident choice from a coin flip and small enough to cost
+    /// nothing. The mass is normalised over whatever arrives, so the exact number changes
+    /// how fine the reading is, not whether it is sound.
+    top_logprobs: u32,
     options: OllamaJudgeOptions,
 }
+
+/// How many alternatives per position the judge asks the server to name.
+const JUDGE_ALTERNATIVES: u32 = 5;
 
 /// Temperature zero, because a judgment that differs between two identical questions is a
 /// judgment nobody can check. `num_ctx` at the floor where it is sent at all: this request
@@ -3133,7 +3362,11 @@ struct OllamaJudgeOptions {
     num_predict: u32,
 }
 
-fn judge_ollama(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, String> {
+fn judge_ollama(
+    endpoint: &str,
+    model: &str,
+    ask: &Ask<'_>,
+) -> Result<(String, Vec<TokenLogprob>), String> {
     let request = OllamaJudgeRequest {
         model,
         messages: vec![
@@ -3146,6 +3379,8 @@ fn judge_ollama(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, St
             .thinking
             .unwrap_or(false)
             .then_some(false),
+        logprobs: true,
+        top_logprobs: JUDGE_ALTERNATIVES,
         options: OllamaJudgeOptions {
             temperature: 0.0,
             /* Named only when the model is being loaded for this call anyway. Ollama keys a
@@ -3169,7 +3404,8 @@ fn judge_ollama(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, St
     .body_mut()
     .read_json()
     .map_err(|e| e.to_string())?;
-    Ok(response.text().to_string())
+    let tokens = response.logprobs.clone().unwrap_or_default();
+    Ok((response.text().to_string(), tokens))
 }
 
 /// How many tokens a router's verdict may take. Three or four short fields.
@@ -3186,9 +3422,18 @@ struct OpenAiJudgeRequest<'a> {
     temperature: f32,
     max_tokens: u32,
     response_format: Value,
+    /// The OpenAI spelling of the same two fields `OllamaJudgeRequest` explains, with the
+    /// same reasoning: sent always, ignored by a server that does not know them, and a
+    /// reply without the array means nothing is known rather than that anything failed.
+    logprobs: bool,
+    top_logprobs: u32,
 }
 
-fn judge_openai(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, String> {
+fn judge_openai(
+    endpoint: &str,
+    model: &str,
+    ask: &Ask<'_>,
+) -> Result<(String, Vec<TokenLogprob>), String> {
     let (base, _) = openai_defaults(Provider::LmStudio, endpoint);
     let url = format!("{}/chat/completions", base.trim_end_matches('/'));
     let request = OpenAiJudgeRequest {
@@ -3204,6 +3449,8 @@ fn judge_openai(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, St
             "type": "json_schema",
             "json_schema": {"name": "verdict", "strict": true, "schema": ask.schema},
         }),
+        logprobs: true,
+        top_logprobs: JUDGE_ALTERNATIVES,
     };
     let response: Value = checked(
         crate::net::post(&url, "no judgment was asked for")?
@@ -3216,11 +3463,19 @@ fn judge_openai(endpoint: &str, model: &str, ask: &Ask<'_>) -> Result<String, St
     .body_mut()
     .read_json()
     .map_err(|e| e.to_string())?;
-    response
+    let text = response
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| "the server answered without a message".to_string())
+        .ok_or_else(|| "the server answered without a message".to_string())?;
+    // Absent on a server that ignored the request's `logprobs`, which is the ordinary case
+    // on anything but LM Studio and is not an error -- see `Confidence`.
+    let tokens = response
+        .pointer("/choices/0/logprobs/content")
+        .cloned()
+        .and_then(|content| serde_json::from_value::<Vec<TokenLogprob>>(content).ok())
+        .unwrap_or_default();
+    Ok((text, tokens))
 }
 
 #[cfg(test)]
@@ -4707,6 +4962,8 @@ mod failure_tests {
                 stream: false,
                 format: &schema,
                 think: None,
+                logprobs: true,
+                top_logprobs: JUDGE_ALTERNATIVES,
                 options: OllamaJudgeOptions {
                     temperature: 0.0,
                     num_ctx: (pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
@@ -4726,6 +4983,201 @@ mod failure_tests {
         );
     }
 
+    /// Both judge dialects ask for the alternatives, because a verdict with no confidence
+    /// attached is the thing this was added to stop.
+    #[test]
+    fn a_judgment_asks_for_the_alternatives_at_each_position() {
+        let schema = json!({"type": "object"});
+        let ollama = serde_json::to_value(OllamaJudgeRequest {
+            model: "qwen3:8b",
+            messages: vec![],
+            stream: false,
+            format: &schema,
+            think: None,
+            logprobs: true,
+            top_logprobs: JUDGE_ALTERNATIVES,
+            options: OllamaJudgeOptions {
+                temperature: 0.0,
+                num_ctx: None,
+                num_predict: VERDICT_TOKENS,
+            },
+        })
+        .expect("a request serialises");
+        assert_eq!(ollama.pointer("/logprobs"), Some(&json!(true)));
+        assert_eq!(
+            ollama.pointer("/top_logprobs"),
+            Some(&json!(JUDGE_ALTERNATIVES))
+        );
+
+        let openai = serde_json::to_value(OpenAiJudgeRequest {
+            model: "qwen3:8b",
+            messages: vec![],
+            stream: false,
+            temperature: 0.0,
+            max_tokens: VERDICT_TOKENS,
+            response_format: json!({}),
+            logprobs: true,
+            top_logprobs: JUDGE_ALTERNATIVES,
+        })
+        .expect("a request serialises");
+        assert_eq!(openai.pointer("/logprobs"), Some(&json!(true)));
+        assert_eq!(
+            openai.pointer("/top_logprobs"),
+            Some(&json!(JUDGE_ALTERNATIVES))
+        );
+    }
+
+    /// One token, with its alternatives, read as a share of the mass.
+    fn token(text: &str, logprob: f64, alternatives: &[(&str, f64)]) -> TokenLogprob {
+        TokenLogprob {
+            token: text.to_string(),
+            logprob,
+            top_logprobs: alternatives
+                .iter()
+                .map(|(t, lp)| TokenLogprob {
+                    token: (*t).to_string(),
+                    logprob: *lp,
+                    top_logprobs: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The tokens of a verdict, split the way a server splits them, with the field each
+    /// value belongs to confident or not as asked.
+    fn verdict_tokens(difficulty_confident: bool) -> (String, Vec<TokenLogprob>) {
+        // ln(0.95) and ln(0.5): a value the model held firmly, and one it nearly tossed a
+        // coin over against a single named alternative.
+        let firm = -0.051_293;
+        let split = -std::f64::consts::LN_2;
+        let pieces: Vec<TokenLogprob> = vec![
+            token("{\"", 0.0, &[]),
+            token("difficulty", 0.0, &[]),
+            token("\":\"", 0.0, &[]),
+            if difficulty_confident {
+                token("simple", firm, &[("hard", -2.995_732)])
+            } else {
+                token("simple", split, &[("hard", split)])
+            },
+            token("\",\"", 0.0, &[]),
+            token("needs_fresh_facts", 0.0, &[]),
+            token("\":", 0.0, &[]),
+            token("false", firm, &[("true", -2.995_732)]),
+            token(",\"", 0.0, &[]),
+            token("is_code", 0.0, &[]),
+            token("\":", 0.0, &[]),
+            token("false", firm, &[("true", -2.995_732)]),
+            token("}", 0.0, &[]),
+        ];
+        let text: String = pieces.iter().map(|t| t.token.as_str()).collect();
+        (text, pieces)
+    }
+
+    /// The reading this whole mechanism rests on: the token that decided a field is the
+    /// one covering the byte its value starts at, and its share of the mass is that
+    /// field's number.
+    #[test]
+    fn each_field_takes_the_certainty_of_the_token_that_decided_it() {
+        let (text, tokens) = verdict_tokens(false);
+        let answer: Value = serde_json::from_str(&text).expect("the pieces make a verdict");
+        let confidence = confidence_from(&text, &tokens, &answer);
+
+        let difficulty = confidence
+            .of("difficulty")
+            .expect("a number for difficulty");
+        assert!(
+            (difficulty - 0.5).abs() < 0.01,
+            "two equally likely values is a half, not a verdict: got {difficulty}"
+        );
+        let fresh = confidence
+            .of("needs_fresh_facts")
+            .expect("a number for needs_fresh_facts");
+        assert!(
+            fresh > 0.9,
+            "a value held against a much less likely alternative is near certain: got {fresh}"
+        );
+        // Nothing is attributed to a field the model did not answer.
+        assert_eq!(confidence.of("nonsense"), None);
+    }
+
+    /// The fail-safe, four ways. Every one of these is a real server or a real model, and
+    /// every one of them has to come back with nothing rather than with a guess -- because
+    /// `Sureness::read` reads a missing field as one to act on, and a *wrong* number here
+    /// would abstain on a judgment that was fine.
+    #[test]
+    fn nothing_is_claimed_about_certainty_where_nothing_can_be_known() {
+        let (text, tokens) = verdict_tokens(true);
+        let answer: Value = serde_json::from_str(&text).expect("the pieces make a verdict");
+
+        // A server that ignored the request's `logprobs` -- an older Ollama, or anything
+        // OpenAI-compatible that does not implement them.
+        assert_eq!(confidence_from(&text, &[], &answer), Confidence::default());
+
+        // A token stream that does not reconstruct the answer, which is what a tokeniser
+        // this cannot follow looks like from here. A wrong offset would attach one field's
+        // certainty to another field's value, so nothing is reported at all.
+        let elsewhere = vec![token("nothing", -0.1, &[("like it", -2.0)])];
+        assert_eq!(
+            confidence_from(&text, &elsewhere, &answer),
+            Confidence::default()
+        );
+
+        // An answer that is not an object cannot have fields to be sure of.
+        assert_eq!(
+            confidence_from(&text, &tokens, &json!("hard")),
+            Confidence::default()
+        );
+
+        // A field present in the object but absent from the text: no offset, no number,
+        // and in particular not a zero, which would read as "very unsure".
+        let extra = json!({"difficulty": "simple", "unspoken": true});
+        assert_eq!(confidence_from(&text, &tokens, &extra).of("unspoken"), None);
+    }
+
+    /// A position the server named no alternatives for is reported as the chosen token's
+    /// own probability, rather than as a certainty it did not claim.
+    #[test]
+    fn a_position_with_no_alternatives_reports_what_the_server_did_say() {
+        let alone = token("simple", -std::f64::consts::LN_2, &[]);
+        assert!((share_of_mass(&alone) - 0.5).abs() < 0.01);
+        let certain = token("simple", 0.0, &[]);
+        assert!((share_of_mass(&certain) - 1.0).abs() < 0.001);
+    }
+
+    /// The chosen token appearing among its own alternatives is the ordinary case on both
+    /// servers, and must not be counted twice -- which would halve every number.
+    #[test]
+    fn the_chosen_token_is_not_counted_twice_when_the_server_lists_it() {
+        let listed = token(
+            "simple",
+            -0.051_293,
+            &[("simple", -0.051_293), ("hard", -2.995_732)],
+        );
+        let share = share_of_mass(&listed);
+        assert!(
+            share > 0.9,
+            "the server listing its own choice must not dilute it: got {share}"
+        );
+    }
+
+    /// The two readings a field test has to be able to tell apart, said in words.
+    ///
+    /// A server reporting nothing must not read as a confident judge, because the two route
+    /// identically and only this line distinguishes them.
+    #[test]
+    fn a_silent_server_and_a_sure_judge_do_not_read_the_same() {
+        let silent = Confidence::default().describe();
+        assert!(
+            silent.contains("no confidence reported"),
+            "a server that said nothing has to say so: {silent}"
+        );
+
+        let sure = Confidence::from_pairs(&[("difficulty", 0.95), ("is_code", 0.99)]).describe();
+        assert!(sure.contains("difficulty 95%"), "got {sure}");
+        assert!(sure.contains("is_code 99%"), "got {sure}");
+        assert!(!sure.contains("no confidence"));
+    }
+
     /// A thinking model is told not to, and a model that cannot think is told nothing.
     ///
     /// The second desktop log of the router: `qwen3:8b` thinks by default, the verdict
@@ -4743,6 +5195,8 @@ mod failure_tests {
                 stream: false,
                 format: &schema,
                 think: capability.unwrap_or(false).then_some(false),
+                logprobs: true,
+                top_logprobs: JUDGE_ALTERNATIVES,
                 options: OllamaJudgeOptions {
                     temperature: 0.0,
                     num_ctx: None,

@@ -49,6 +49,27 @@ pub const ENABLED_SETTING: &str = "auto_router";
 /// is the right default for a judge -- the job is classification, not composition.
 pub const JUDGE_SETTING: &str = "auto_router_judge";
 
+/// How sure the judge has to be of a field before Auto acts on it, as a percentage.
+///
+/// Stored as a whole number because that is what the settings table holds and what somebody
+/// types. Zero switches abstaining off altogether, which is the setting for an install that
+/// would rather have the old behaviour.
+pub const SURENESS_SETTING: &str = "auto_router_sureness";
+
+/// The share of the probability mass a chosen value has to hold, as a percentage, before
+/// the field it decides is acted on.
+///
+/// Fifty, and the number is doing less work than it looks. Below half, the value the judge
+/// gave is one the alternatives it named were jointly more likely than -- which is not a
+/// classification, it is a coin landing. Above half it is at least the majority reading.
+///
+/// It is deliberately not a tuned figure, because the right figure is not a property of
+/// this program: it is a property of one model on one machine answering one operator's
+/// questions, and the only thing that can find it is `llm::tuning` scoring this install's
+/// own cases. Until that scores calibration as well as accuracy, a defensible floor is the
+/// honest thing to ship, and `SURENESS_SETTING` is how somebody moves it.
+pub const SURENESS_DEFAULT: u64 = 50;
+
 /// The value the model picker sends to mean "let Auto decide". Not a `Provider`: Auto is
 /// not somewhere a question can be sent, it is the decision about where to send it, and
 /// giving it a provider key would put it in every `match` that dispatches a request.
@@ -383,6 +404,49 @@ pub struct Verdict {
     pub is_code: bool,
 }
 
+/// Which fields of a verdict the judge was sure enough of for Auto to use.
+///
+/// The point of the type is the direction of its default: **unknown is sure.** A server that
+/// does not report log probabilities, a tokeniser this cannot follow, a dialect that answers
+/// without the array -- every one of those arrives as an empty `Confidence`, and every one
+/// of them has to leave the router doing what it did before any of this existed. A feature
+/// for catching an unsure judge that instead stops a working one would be strictly worse
+/// than not having it, so the fail-safe is written into the constructor rather than left to
+/// each caller to remember.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sureness {
+    pub difficulty: bool,
+    pub needs_fresh_facts: bool,
+    pub is_code: bool,
+}
+
+impl Sureness {
+    /// Every field acted on: what a judgment was always treated as before confidence
+    /// existed, and what one still is wherever nothing is known about it.
+    pub const EVERYTHING: Sureness = Sureness {
+        difficulty: true,
+        needs_fresh_facts: true,
+        is_code: true,
+    };
+
+    /// Read against a floor given as a percentage, with a missing field counting as sure.
+    ///
+    /// A floor of zero is "never abstain", stated here rather than at the call site so that
+    /// the setting means the same thing everywhere it is read.
+    pub fn read(confidence: &providers::Confidence, floor_percent: u64) -> Sureness {
+        if floor_percent == 0 {
+            return Sureness::EVERYTHING;
+        }
+        let floor = floor_percent as f64 / 100.0;
+        let sure = |field: &str| confidence.of(field).map(|p| p >= floor).unwrap_or(true);
+        Sureness {
+            difficulty: sure("difficulty"),
+            needs_fresh_facts: sure("needs_fresh_facts"),
+            is_code: sure("is_code"),
+        }
+    }
+}
+
 /// The schema the server is told to constrain the answer to.
 ///
 /// Public because the tuning harness scores wordings of the judge prompt through the same
@@ -471,6 +535,7 @@ pub struct Reach {
 /// on. Returns None when there is nothing to route: one candidate is not a choice.
 pub fn decide(
     verdict: Verdict,
+    sure: Sureness,
     available: &Candidates,
     configured: Provider,
     reach: Reach,
@@ -491,7 +556,13 @@ pub fn decide(
     `net::require_online`) and nothing else, so withholding the whole catalogue when they
     are off would break a question that works today. What `reach.web` changes is what
     the operator is *told*: see the `why` below. */
-    let tools = reach.tools && verdict.needs_fresh_facts;
+    /* And where the judge was not sure whether the question needs a fresh fact, the
+    catalogue is left exactly as the operator's own switches leave it. Not narrowed on an
+    unsure "no", because that would be Auto taking a tool away on the strength of a coin
+    flip; and not widened either, which it could not be -- `reach.tools` is still the
+    ceiling, so an install with tools off never acquires them here. The honest fallback for
+    an unsure field is the behaviour of the install without a router at all. */
+    let tools = reach.tools && (verdict.needs_fresh_facts || !sure.needs_fresh_facts);
 
     // The cloud is for the two cases where a frontier model is visibly better and a 7B
     // visibly struggles. Everything else stays on this machine, which is the default this
@@ -501,7 +572,14 @@ pub fn decide(
 
     if wants_cloud {
         if let Some(cloud) = cloud {
-            let subject = if verdict.is_code { "code" } else { "work" };
+            // The one field whose unsureness costs nothing but a word: `is_code` only ever
+            // picked which noun this line uses, so an unsure one takes the general noun
+            // rather than claiming to know.
+            let subject = if verdict.is_code && sure.is_code {
+                "code"
+            } else {
+                "work"
+            };
             return Some(Routed {
                 provider: cloud.provider,
                 model: cloud.model.to_string(),
@@ -544,6 +622,15 @@ pub fn decide(
         model: local_base.unwrap_or_default().to_string(),
         tools,
         why: match (tools, reach.web) {
+            /* Said before the two confident lines below, because a line claiming the
+            question "needs something looked up" would be claiming the very thing the judge
+            declined to decide. The tools are on because the operator has them on, and that
+            is what this says. */
+            (true, _) if !sure.needs_fresh_facts => {
+                "Auto answered this on your machine. It was not sure whether that one needs \
+                 looking up, so your own tool setting stands."
+                    .to_string()
+            }
             (true, true) => "Auto answered this on your machine, with tools -- it needs something \
                  looked up."
                 .to_string(),
@@ -616,8 +703,50 @@ pub fn route(
         };
         format!("{judge}, {state}: {why}")
     })?;
-    let verdict: Verdict = serde_json::from_value(answer.clone())
-        .map_err(|e| format!("the judgment was JSON but not a verdict ({e}): {answer}"))?;
+    let verdict: Verdict = serde_json::from_value(answer.answer.clone()).map_err(|e| {
+        format!(
+            "the judgment was JSON but not a verdict ({e}): {}",
+            answer.answer
+        )
+    })?;
+    /* How sure it was of each of those three, where the server said. The floor is read here
+    rather than inside `Sureness` so that `decide` stays a pure function of a verdict and a
+    sureness, testable without a database -- the same split the rest of this module keeps. */
+    let sure = Sureness::read(
+        &answer.confidence,
+        db.get_setting_u64(SURENESS_SETTING, SURENESS_DEFAULT),
+    );
+    /* One line per judged turn, on stderr, where a developer reading the log is -- and
+    deliberately not on the operator's line, which stays the one sentence about where the
+    question went. `describe` says why this is here at all: without it, a judge that was
+    sure and a server that reported nothing are indistinguishable, because both route in
+    silence and only an abstention speaks. That is the difference between a run on real
+    hardware that answers the question and one that cannot. */
+    eprintln!(
+        "[AETHER1] the Auto router judged with {judge}: {:?}, fresh facts {}, code {} -- {}",
+        verdict.difficulty,
+        verdict.needs_fresh_facts,
+        verdict.is_code,
+        answer.confidence.describe()
+    );
+    /* An unsure `difficulty` is the one that cannot be absorbed, because it is the whole
+    decision: local or cloud is the question Auto exists to answer, and there is no
+    half-answer to fall back on the way there is for the other two. So the turn goes out
+    unrouted, which is what `route` already does for a judge that could not be reached --
+    the operator's own choice, plus a line saying why. Deliberately the same path rather
+    than a second one: "a failed judgment changes nothing" is the property that makes this
+    router safe to put in front of every reply, and an abstention is a judgment that failed
+    in the only way that matters. */
+    if !sure.difficulty {
+        let held = answer
+            .confidence
+            .of("difficulty")
+            .map(|p| format!("{:.0}%", p * 100.0))
+            .unwrap_or_else(|| "little".to_string());
+        return Err(format!(
+            "{judge} was not sure enough about that one -- it put {held} on its own answer"
+        ));
+    }
     /* Whether a locally-answered turn needs a model named for it, judged by asking the
     question directly: is the stored model one the server actually has? Two ways it is not,
     and the second was found by driving it rather than by reasoning:
@@ -639,6 +768,7 @@ pub fn route(
         .flatten();
     decide(
         verdict,
+        sure,
         &available,
         configured,
         reach,
@@ -709,6 +839,27 @@ mod tests {
             needs_fresh_facts: fresh,
             is_code: code,
         }
+    }
+
+    /// Every case written before confidence existed, run as what it has always been: a
+    /// judgment the router is sure of. Shadows `super::decide` so those cases read
+    /// unchanged -- and so that a test which cares about an unsure field has to say so by
+    /// calling `super::decide` with its own `Sureness`, rather than acquiring one silently.
+    fn decide(
+        verdict: Verdict,
+        available: &Candidates,
+        configured: Provider,
+        reach: Reach,
+        local_base: Option<&str>,
+    ) -> Option<Routed> {
+        super::decide(
+            verdict,
+            Sureness::EVERYTHING,
+            available,
+            configured,
+            reach,
+            local_base,
+        )
     }
 
     #[test]
@@ -1173,6 +1324,142 @@ mod tests {
             "is_code": false,
         }))
         .is_err());
+    }
+
+    /// The fail-safe, stated as a test because every other property here depends on it: a
+    /// judgment with nothing known about its certainty is acted on in full, exactly as it
+    /// was before any of this existed.
+    #[test]
+    fn a_judgment_with_no_confidence_attached_is_acted_on_in_full() {
+        let nothing = providers::Confidence::default();
+        assert_eq!(
+            Sureness::read(&nothing, SURENESS_DEFAULT),
+            Sureness::EVERYTHING,
+            "a server that reports no log probabilities must leave the router as it was"
+        );
+    }
+
+    /// A floor of zero is the switch for an install that wants the old behaviour, and it
+    /// has to mean that even for a judgment the model plainly guessed at.
+    #[test]
+    fn a_floor_of_zero_never_abstains() {
+        let coin_flip = providers::Confidence::from_pairs(&[
+            ("difficulty", 0.26),
+            ("needs_fresh_facts", 0.3),
+            ("is_code", 0.4),
+        ]);
+        assert_eq!(Sureness::read(&coin_flip, 0), Sureness::EVERYTHING);
+    }
+
+    /// Each field is read against the floor on its own, because they fall back to
+    /// different things: an unsure `difficulty` stands the router down, an unsure
+    /// `needs_fresh_facts` leaves the operator's tool setting alone, and an unsure
+    /// `is_code` only changes a noun.
+    #[test]
+    fn each_field_is_judged_against_the_floor_on_its_own() {
+        let mixed = providers::Confidence::from_pairs(&[
+            ("difficulty", 0.95),
+            ("needs_fresh_facts", 0.34),
+            ("is_code", 0.5),
+        ]);
+        let sure = Sureness::read(&mixed, SURENESS_DEFAULT);
+        assert!(sure.difficulty);
+        assert!(!sure.needs_fresh_facts);
+        assert!(
+            sure.is_code,
+            "the floor is a floor, so a field exactly on it is acted on"
+        );
+    }
+
+    /// An unsure `needs_fresh_facts` leaves the catalogue as the operator's own switches
+    /// leave it -- not taken away on the strength of a coin flip, and the line says so
+    /// rather than claiming the question needs a lookup.
+    #[test]
+    fn an_unsure_lookup_leaves_the_operators_tool_setting_alone() {
+        let unsure = Sureness {
+            difficulty: true,
+            needs_fresh_facts: false,
+            is_code: true,
+        };
+        let routed = super::decide(
+            // The judge said no fresh facts, but was not sure of it.
+            verdict(Difficulty::Simple, false, false),
+            unsure,
+            &both(),
+            Provider::Anthropic,
+            Reach {
+                tools: true,
+                web: true,
+            },
+            None,
+        )
+        .expect("something to route to");
+        assert!(
+            routed.tools,
+            "an unsure 'no' must not take the catalogue away"
+        );
+        assert!(
+            !routed.why.contains("needs something looked up"),
+            "the line must not claim the thing the judge declined to decide: {}",
+            routed.why
+        );
+        assert!(routed.why.contains("not sure"));
+    }
+
+    /// The ceiling still holds while a field is unsure: Auto narrows what the operator's
+    /// switches leave reachable and never widens it, and an abstention is not a way in.
+    #[test]
+    fn an_unsure_lookup_still_cannot_switch_tools_on() {
+        let unsure = Sureness {
+            difficulty: true,
+            needs_fresh_facts: false,
+            is_code: true,
+        };
+        let routed = super::decide(
+            verdict(Difficulty::Simple, true, false),
+            unsure,
+            &both(),
+            Provider::Anthropic,
+            Reach {
+                tools: false,
+                web: false,
+            },
+            None,
+        )
+        .expect("something to route to");
+        assert!(
+            !routed.tools,
+            "an install with tools off does not acquire them because the judge was unsure"
+        );
+    }
+
+    /// An unsure `is_code` costs a noun and nothing else. The question still goes where
+    /// the difficulty says, because that is the field it was sure of.
+    #[test]
+    fn an_unsure_code_reading_only_changes_the_word() {
+        let unsure = Sureness {
+            difficulty: true,
+            needs_fresh_facts: true,
+            is_code: false,
+        };
+        let routed = super::decide(
+            verdict(Difficulty::Hard, false, true),
+            unsure,
+            &both(),
+            Provider::Anthropic,
+            Reach {
+                tools: true,
+                web: true,
+            },
+            None,
+        )
+        .expect("something to route to");
+        assert_eq!(routed.provider, Provider::Anthropic);
+        assert!(
+            routed.why.contains("work") && !routed.why.contains("code"),
+            "an unsure reading takes the general noun: {}",
+            routed.why
+        );
     }
 
     #[test]

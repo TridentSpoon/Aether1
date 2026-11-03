@@ -382,6 +382,11 @@ impl Judge for LocalJudge {
                 pace: providers::Pace::Unhurried,
             },
         )
+        /* The confidence is dropped here and not elsewhere, and the reason is worth a
+        line. Scoring a wording asks whether the answer was *right*; how sure the model was
+        of a right answer is a different measurement, and a calibration score is the next
+        piece of this harness rather than something to smuggle into an accuracy one. */
+        .map(|judged| judged.answer)
     }
     fn model(&self) -> String {
         self.model.clone()
@@ -457,6 +462,7 @@ pub fn reword_with(
         },
     )?;
     answer
+        .answer
         .get("instructions")
         .and_then(Value::as_str)
         .map(str::to_string)
