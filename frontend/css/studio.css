@@ -1561,3 +1561,15 @@ html[data-shell="studio"][data-studio-avatar="background"] #stage-avatar-opacity
     display: none;
   }
 }
+
+/* ---- modules that are switched off ------------------------------------------------
+ *
+ * Its own class rather than Tailwind's `hidden`, which loses to the `display: flex`
+ * that .studio-nav already carries -- the same collision that left an empty preview
+ * strip above the input card for months. Stated for both shells here because the two
+ * draw the same eight views, as a tab strip and as a sidebar.
+ */
+.chat-tab.module-off,
+.studio-nav.module-off {
+  display: none;
+}
