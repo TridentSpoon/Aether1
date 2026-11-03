@@ -28,6 +28,7 @@
 //! wrong guess here misorders a list; it cannot make the companion claim a capability it
 //! does not have.
 
+use crate::fit;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -166,40 +167,68 @@ pub struct Quant {
     /// the panel says so differently.
     pub fits: Option<bool>,
     pub fits_on_gpu: Option<bool>,
+    /// **How much room this leaves the model to read**, in tokens.
+    ///
+    /// The half of the question the picker used to leave out. A quantisation that fits is
+    /// not thereby a quantisation worth running: what decides that is the window it leaves
+    /// once the weights are paid for, and until now that was chosen somewhere else, out of
+    /// a different number, by code that had never heard of this one. See `fit`.
+    ///
+    /// `None` when the repository reports no size, and also when nothing fits: a window
+    /// below `fit::CTX_FLOOR` is one the model overflows on the first real question, and
+    /// saying so is better than offering it.
+    pub context: Option<u32>,
+    /// What the cache costs at that window. Shown beside the total because it is the term
+    /// that moves: on a 30B it is gigabytes, and an operator wondering why a 5GB file wants
+    /// 9GB of card deserves to see which part is which.
+    pub kv_gb: Option<f64>,
+    /// **What loading this would do to what is already on the card.**
+    ///
+    /// The sentence a picker that knows only arithmetic cannot write, and the reason
+    /// AETHER1 asking the server what it is holding is worth the round trip: "it fits" and
+    /// "it fits as well" are different answers, and so is "it fits, once the model you are
+    /// talking to is turned out". See `fit::Residency`.
+    pub residency: Option<fit::Residency>,
+    /// Roughly how many tokens a second, when the whole model fits the card and the card is
+    /// one whose bandwidth is known. `None` otherwise, and that refusal is deliberate --
+    /// see `fit::speed_estimate`.
+    pub tokens_per_second: Option<f64>,
 }
 
-/// How much room a model wants beyond its own weights: context, the runtime, and the
-/// headroom that stops a machine swapping on the first long answer.
-const RUNTIME_OVERHEAD: f64 = 1.2;
-/// A floor for it, because a fifth of a 400 MB file is not enough overhead for anything.
-const MIN_OVERHEAD_GB: f64 = 1.0;
+/// What this machine has to judge a model against. Defined in `fit`, which is where the
+/// arithmetic that uses it lives, and re-exported here because this is where callers
+/// looking at a model listing expect to find it.
+pub use crate::fit::Machine;
 
-/// What one quantisation needs in memory, from the size of the file.
+/// What the browse tab knows about the graphics card beyond how big it is.
+///
+/// Two facts that are not part of `Machine` because they are not part of the fit: the
+/// card's name only ever feeds the speed estimate, and what is resident only ever feeds
+/// the sentence about what loading this would turn out. Passed in as data, so
+/// `parse_quants` stays a pure function and can be tested without a card or a server.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Card<'a> {
+    /// As the driver spells it. `None` for a machine with no dedicated card.
+    pub name: Option<&'a str>,
+    /// What the local server is already holding in video memory, in gigabytes. Zero when
+    /// nothing is loaded, nothing answered, or there is no server.
+    pub resident_gb: f64,
+}
+
+/// What one quantisation needs in memory, from the size of the file alone.
+///
+/// Kept for the case this module cannot do better in: a repository whose name says nothing
+/// about how big the model is. A fifth on top of the file with a one-gigabyte floor is the
+/// rule of thumb every local-model guide gives, and with no parameter count there is
+/// nothing better available -- the cache term needs a figure this has not got.
+///
+/// Everywhere the parameter count *is* known, `fit::plan` answers instead, and answers the
+/// second half of the question too. See the note at the top of `fit` for why the fifth was
+/// never the right shape: the cache is linear in the context and in the active parameters,
+/// and is not a fraction of anything.
 pub fn memory_needed_gb(bytes: u64) -> f64 {
     let weights = bytes as f64 / 1_000_000_000.0;
-    (weights * RUNTIME_OVERHEAD).max(weights + MIN_OVERHEAD_GB)
-}
-
-/// What this machine has to judge a model against.
-///
-/// Passed in rather than probed here so the sizing is a pure function of two numbers and
-/// can be tested without a machine. The same two fractions `setup::models_for` uses, and
-/// for the same reasons stated there: the OS and the HUD are already resident, and a card
-/// is holding the compositor's framebuffers and the HUD's own scene.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Machine {
-    pub ram_total_gb: f64,
-    pub vram_gb: Option<f64>,
-}
-
-impl Machine {
-    fn usable_ram(&self) -> f64 {
-        self.ram_total_gb * 0.7
-    }
-
-    fn usable_vram(&self) -> Option<f64> {
-        self.vram_gb.filter(|gb| *gb > 0.0).map(|gb| gb * 0.9)
-    }
+    (weights * 1.2).max(weights + 1.0)
 }
 
 #[derive(Deserialize)]
@@ -317,6 +346,48 @@ pub fn parameter_size(id: &str) -> Option<String> {
     None
 }
 
+/// The parameter count out of a repository name, as a number, and the fraction of it a
+/// token actually routes through.
+///
+/// Two figures rather than one, because the second is what the cache is sized by and on a
+/// mixture-of-experts model it is a tenth of the first. Getting that wrong is not a
+/// rounding error: costing `Qwen3-30B-A3B` at thirty billion would refuse a model that
+/// runs comfortably on a card it fits on with room to spare.
+///
+/// Three forms, all read off the name because no listing reports them:
+///
+///   * `30B-A3B` -- the `A` figure is the model telling you its own active count. Trust it.
+///   * `8x7B` -- Mixtral's form. The experts are the feed-forward blocks and the attention
+///     is shared, so the cache is sized by one expert's worth and not by eight.
+///   * `7B` -- dense. Active is total.
+///
+/// `None` when the name claims no size, which is most of the hub's oddities and every
+/// repository whose author put the figure only in the README. A model that did not say is
+/// not thereby any particular size, and guessing one would put a made-up number into a
+/// memory figure somebody is about to decide on.
+pub fn parameters_billions(id: &str) -> Option<(f64, f64)> {
+    let name = id.rsplit('/').next().unwrap_or(id).to_uppercase();
+    let total_text = parameter_size(&name)?;
+    let figure = |text: &str| text.trim_end_matches('B').parse::<f64>().ok();
+
+    // `8x7B`: the written figure is the multiplication, and one expert is what the cache
+    // is sized by.
+    if let Some((left, right)) = total_text.trim_end_matches('B').split_once(['X', 'x']) {
+        let experts: f64 = left.parse().ok()?;
+        let each: f64 = right.parse().ok()?;
+        return Some((experts * each, each));
+    }
+
+    let total = figure(&total_text)?;
+    // `-A3B`: an explicit active count, which overrides everything.
+    let active = name
+        .split(['-', '_', '.'])
+        .filter_map(|piece| piece.strip_prefix('A')?.strip_suffix('B'))
+        .filter_map(|digits| digits.parse::<f64>().ok())
+        .find(|active| *active > 0.0 && *active <= total);
+    Some((total, active.unwrap_or(total)))
+}
+
 /// Lists the GGUF files in one repository, with the name that pulls each and what each
 /// one costs to download and to run.
 ///
@@ -324,7 +395,7 @@ pub fn parameter_size(id: &str) -> Option<String> {
 /// lists filenames and nothing else, so a picker built on it could offer twelve
 /// quantisations between 400 MB and 30 GB with no way to tell which was which. The
 /// operator asking "will this run on my machine" was being asked to guess.
-pub fn quants(repo_id: &str, machine: Machine) -> Result<Vec<Quant>, String> {
+pub fn quants(repo_id: &str, machine: Machine, card: Card) -> Result<Vec<Quant>, String> {
     let repo_id = repo_id.trim().trim_matches('/');
     if repo_id.is_empty() || !repo_id.contains('/') {
         return Err("a Hugging Face model is named owner/repository".to_string());
@@ -340,11 +411,18 @@ pub fn quants(repo_id: &str, machine: Machine) -> Result<Vec<Quant>, String> {
         .read_json()
         .map_err(|e| format!("cannot read what Hugging Face sent: {e}"))?;
 
-    Ok(parse_quants(repo_id, &body, machine))
+    Ok(parse_quants(repo_id, &body, machine, card))
 }
 
 /// The GGUF files out of a repository document.
-pub fn parse_quants(repo_id: &str, body: &Value, machine: Machine) -> Vec<Quant> {
+///
+/// Each one is costed with `fit::plan` where the name says how big the model is, and so
+/// carries the window it leaves as well as the memory it wants. Where the name says
+/// nothing, the old file-size rule of thumb still answers the first half and the second
+/// half is left `None` rather than guessed -- a context figure derived from no parameter
+/// count would be arithmetic over an invented number.
+pub fn parse_quants(repo_id: &str, body: &Value, machine: Machine, card: Card) -> Vec<Quant> {
+    let params = parameters_billions(repo_id);
     let mut quants: Vec<Quant> = body
         .get("siblings")
         .and_then(|s| s.as_array())
@@ -365,7 +443,23 @@ pub fn parse_quants(repo_id: &str, body: &Value, machine: Machine) -> Vec<Quant>
                 .filter(|(name, _)| !is_later_shard(name))
                 .filter_map(|(name, bytes)| {
                     let label = quant_label(name)?;
-                    let needs_gb = bytes.map(memory_needed_gb);
+                    /* The whole fit, where there is enough to compute one: the weights off
+                    the file, the cache off the active parameter count, and the window out
+                    of what is left. Both halves from one call, which is the point -- two
+                    functions answering this would be two answers waiting to disagree, and
+                    that disagreement is what #249 was. */
+                    let plan = match (bytes, params) {
+                        (Some(bytes), Some((_, active))) => Some(crate::fit::plan(
+                            crate::fit::Model::from_file(bytes, active),
+                            machine,
+                        )),
+                        _ => None,
+                    };
+                    // Falls back to the file-size rule of thumb for a repository whose name
+                    // never said how big the model is.
+                    let needs_gb = plan
+                        .map(|plan| plan.needs_gb)
+                        .or_else(|| bytes.map(memory_needed_gb));
                     Some(Quant {
                         pull: pull_name(repo_id, &label),
                         preferred: label.eq_ignore_ascii_case("Q4_K_M"),
@@ -373,11 +467,21 @@ pub fn parse_quants(repo_id: &str, body: &Value, machine: Machine) -> Vec<Quant>
                         file: name.to_string(),
                         bytes,
                         needs_gb,
-                        fits: needs_gb.map(|gb| gb <= machine.usable_ram()),
+                        fits: plan
+                            .map(|plan| plan.fits)
+                            .or_else(|| needs_gb.map(|gb| gb <= machine.usable_ram())),
                         // None rather than false with no card: "there is no card here" and
                         // "it will not fit on the card" are different sentences.
-                        fits_on_gpu: needs_gb
-                            .and_then(|gb| machine.usable_vram().map(|room| gb <= room)),
+                        fits_on_gpu: plan.map(|plan| plan.on_gpu).unwrap_or_else(|| {
+                            needs_gb.and_then(|gb| machine.usable_vram().map(|room| gb <= room))
+                        }),
+                        context: plan.and_then(|plan| plan.context),
+                        kv_gb: plan.map(|plan| plan.kv_gb),
+                        residency: plan
+                            .map(|plan| fit::residency(&plan, machine, card.resident_gb)),
+                        tokens_per_second: plan
+                            .zip(card.name)
+                            .and_then(|(plan, name)| fit::speed_estimate(&plan, name)),
                     })
                 })
                 .collect()
@@ -573,7 +677,12 @@ mod tests {
                 {"rfilename": "big-Q4_K_M-00002-of-00009.gguf"},
             ]
         });
-        let quants = parse_quants("bartowski/Qwen3-8B-GGUF", &body, Machine::default());
+        let quants = parse_quants(
+            "bartowski/Qwen3-8B-GGUF",
+            &body,
+            Machine::default(),
+            Card::default(),
+        );
         let labels: Vec<&str> = quants.iter().map(|q| q.label.as_str()).collect();
         assert_eq!(labels, ["Q2_K", "Q4_K_M", "Q8_0", "F16"]);
         assert_eq!(
@@ -590,14 +699,14 @@ mod tests {
     #[test]
     fn a_repository_with_no_gguf_offers_nothing_rather_than_something_broken() {
         let body = json!({"siblings": [{"rfilename": "config.json"}]});
-        assert!(parse_quants("x/y", &body, Machine::default()).is_empty());
-        assert!(parse_quants("x/y", &json!({}), Machine::default()).is_empty());
+        assert!(parse_quants("x/y", &body, Machine::default(), Card::default()).is_empty());
+        assert!(parse_quants("x/y", &json!({}), Machine::default(), Card::default()).is_empty());
     }
 
     #[test]
     fn a_name_that_is_not_a_repository_is_refused_without_a_request() {
-        assert!(quants("qwen3", Machine::default()).is_err());
-        assert!(quants("", Machine::default()).is_err());
+        assert!(quants("qwen3", Machine::default(), Card::default()).is_err());
+        assert!(quants("", Machine::default(), Card::default()).is_err());
     }
 
     /// The sizes are the whole point of the blobs request: a repository offers a dozen
@@ -617,7 +726,7 @@ mod tests {
             ram_total_gb: 32.0,
             vram_gb: Some(16.0),
         };
-        let quants = parse_quants("x/Qwen3-14B-GGUF", &body, machine);
+        let quants = parse_quants("x/Qwen3-14B-GGUF", &body, machine, Card::default());
         assert_eq!(quants[0].bytes, Some(9_000_000_000));
         assert_eq!(quants[0].fits, Some(true));
         assert_eq!(quants[0].fits_on_gpu, Some(true));
@@ -626,6 +735,65 @@ mod tests {
             quants[1].fits_on_gpu,
             Some(false),
             "15.7 GB of weights does not fit in 14.4 GB of usable card"
+        );
+    }
+
+    /// The second half of the question, which this picker used to leave out: a
+    /// quantisation that fits is not thereby one worth running, and what decides that is
+    /// the window it leaves once the weights are paid for.
+    #[test]
+    fn a_quantisation_says_how_much_room_it_leaves_to_read() {
+        let body = json!({
+            "siblings": [
+                {"rfilename": "Qwen3-14B-Q4_K_M.gguf", "size": 9_000_000_000u64},
+                {"rfilename": "Qwen3-14B-Q6_K.gguf", "size": 12_500_000_000u64},
+            ]
+        });
+        let machine = Machine {
+            ram_total_gb: 32.0,
+            vram_gb: Some(16.0),
+        };
+        let quants = parse_quants("x/Qwen3-14B-GGUF", &body, machine, Card::default());
+
+        let roomy = &quants[0];
+        assert_eq!(roomy.context, Some(fit::CTX_CEILING));
+        assert!(
+            roomy.kv_gb.unwrap() > 1.0,
+            "a 14B's cache at 16K is gigabytes, which is the term the old fifth missed: {roomy:?}"
+        );
+        assert!(
+            roomy.needs_gb.unwrap() > 9.0 + roomy.kv_gb.unwrap(),
+            "and the memory figure includes it"
+        );
+
+        // The bigger file still fits the card, but only with a shorter window -- and the
+        // picker now says which, instead of saying "fits" and leaving it there.
+        let tight = &quants[1];
+        assert_eq!(tight.fits_on_gpu, Some(true));
+        assert!(
+            tight.context < roomy.context,
+            "12.5 GB of weights leaves less room than 9 GB: {tight:?}"
+        );
+    }
+
+    /// A repository whose name never said how big the model is gets the old rule of thumb
+    /// for the memory and no window figure at all -- a context derived from no parameter
+    /// count would be arithmetic over an invented number.
+    #[test]
+    fn a_model_that_never_said_its_size_gets_no_window_figure() {
+        let body = json!({"siblings": [{"rfilename": "m-Q4_K_M.gguf", "size": 4_000_000_000u64}]});
+        let quants = parse_quants(
+            "someone/mystery-gguf",
+            &body,
+            Machine::default(),
+            Card::default(),
+        );
+        assert_eq!(quants[0].context, None);
+        assert_eq!(quants[0].kv_gb, None);
+        assert_eq!(
+            quants[0].needs_gb,
+            Some(memory_needed_gb(4_000_000_000)),
+            "the file-size rule of thumb still answers the first half"
         );
     }
 
@@ -641,6 +809,7 @@ mod tests {
                 ram_total_gb: 64.0,
                 vram_gb: Some(24.0),
             },
+            Card::default(),
         );
         assert_eq!(quants[0].bytes, None);
         assert_eq!(quants[0].needs_gb, None);
@@ -659,9 +828,30 @@ mod tests {
                 ram_total_gb: 16.0,
                 vram_gb: None,
             },
+            Card::default(),
         );
         assert_eq!(quants[0].fits, Some(true));
         assert_eq!(quants[0].fits_on_gpu, None);
+    }
+
+    #[test]
+    fn a_mixture_of_experts_is_costed_on_what_a_token_routes_through() {
+        assert_eq!(parameters_billions("Qwen/Qwen3-8B-GGUF"), Some((8.0, 8.0)));
+        assert_eq!(
+            parameters_billions("Qwen/Qwen3-30B-A3B-GGUF"),
+            Some((30.0, 3.0)),
+            "the A figure is the model naming its own active count"
+        );
+        assert_eq!(
+            parameters_billions("TheBloke/Mixtral-8x7B-Instruct-GGUF"),
+            Some((56.0, 7.0)),
+            "the experts are the feed-forward blocks; the attention is shared"
+        );
+        assert_eq!(
+            parameters_billions("someone/mystery-gguf"),
+            None,
+            "a name that claims no size is not thereby any size"
+        );
     }
 
     /// Overhead is a fifth on top, with a floor -- a fifth of a small file is not enough

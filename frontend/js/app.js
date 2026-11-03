@@ -8514,6 +8514,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return Number.isInteger(value) ? `${value} GB` : `${value.toFixed(1)} GB`;
     }
 
+    /* A context length reads as 16K rather than as 16384 everywhere people talk about
+       them, and the exact figure is not what somebody is deciding on. */
+    function hubTokens(value) {
+        if (typeof value !== 'number' || value <= 0) return '';
+        return value % 1024 === 0 ? `${value / 1024}K` : String(value);
+    }
+
+    /* What loading this would do to what the card is already holding. The 'evicts' case is
+       the one worth a warning: it fits, and the model Aurora1 is mid-conversation with
+       does not survive it. */
+    function hubResidency(verdict) {
+        if (verdict === 'alongside') return '✔ Fits alongside';
+        if (verdict === 'evicts') return '⚠ Turns out what is loaded';
+        if (verdict === 'too_big') return 'Will not fit the card';
+        return 'Nothing else on the card';
+    }
+
     /* The two catalogues as one list. A model that appears in both -- a coding model big
        enough to be the companion as well -- is one entry that says so, not two rows with
        the same name and different buttons. */
@@ -9189,6 +9206,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 : chosen.fits_on_gpu
                     ? '⚡ Whole model fits'
                     : 'Partly on the processor'));
+            /* The other half of the question, and the one this panel used to leave out: a
+               file that fits is not a file worth running until you know what window it
+               leaves. Absent rather than zero where the repository never said how big the
+               model is -- see hf::parse_quants. */
+            if (chosen.context) {
+                facts.appendChild(hubFact('ROOM TO READ', `${hubTokens(chosen.context)} tokens`));
+            } else if (chosen.context === null && chosen.kv_gb !== null && chosen.kv_gb !== undefined) {
+                facts.appendChild(hubFact('ROOM TO READ', '⚠ Not enough for a useful window'));
+            }
+            if (chosen.residency) {
+                facts.appendChild(hubFact('ALREADY LOADED', hubResidency(chosen.residency)));
+            }
+            if (chosen.tokens_per_second) {
+                facts.appendChild(hubFact('ROUGH SPEED', `~${Math.round(chosen.tokens_per_second)} tokens/sec`));
+            }
         }
         facts.appendChild(hubFact('DOWNLOADS', String(repo.downloads)));
         facts.appendChild(hubFact('LIKES', String(repo.likes)));
