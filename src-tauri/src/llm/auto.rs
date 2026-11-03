@@ -716,6 +716,19 @@ pub fn route(
         &answer.confidence,
         db.get_setting_u64(SURENESS_SETTING, SURENESS_DEFAULT),
     );
+    /* One line per judged turn, on stderr, where a developer reading the log is -- and
+    deliberately not on the operator's line, which stays the one sentence about where the
+    question went. `describe` says why this is here at all: without it, a judge that was
+    sure and a server that reported nothing are indistinguishable, because both route in
+    silence and only an abstention speaks. That is the difference between a run on real
+    hardware that answers the question and one that cannot. */
+    eprintln!(
+        "[AETHER1] the Auto router judged with {judge}: {:?}, fresh facts {}, code {} -- {}",
+        verdict.difficulty,
+        verdict.needs_fresh_facts,
+        verdict.is_code,
+        answer.confidence.describe()
+    );
     /* An unsure `difficulty` is the one that cannot be absorbed, because it is the whole
     decision: local or cloud is the question Auto exists to answer, and there is no
     half-answer to fall back on the way there is for the other two. So the turn goes out

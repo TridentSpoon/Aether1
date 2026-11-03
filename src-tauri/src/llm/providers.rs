@@ -2944,6 +2944,26 @@ impl Confidence {
         self.0.get(field).copied()
     }
 
+    /// What the judge was sure of, for the log a developer reads.
+    ///
+    /// This exists because of one thing the operator cannot otherwise tell apart, and it is
+    /// the thing that would make a field test inconclusive. A confident judge and a server
+    /// that never reported a probability both route in silence: the abstention only ever
+    /// prints when it fires, so "it worked and was sure" and "nothing is being read at all"
+    /// look identical from outside. Naming it here, per judged turn, is what separates them.
+    pub fn describe(&self) -> String {
+        if self.0.is_empty() {
+            return "no confidence reported -- the server returned no log probabilities, so \
+                    every field is acted on"
+                .to_string();
+        }
+        self.0
+            .iter()
+            .map(|(field, p)| format!("{field} {:.0}%", p * 100.0))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// A confidence made up by hand, for the tests of what is *done* with one -- which
     /// live in `llm::auto`, where the fallbacks are, rather than here.
     #[cfg(test)]
@@ -4930,6 +4950,24 @@ mod failure_tests {
             share > 0.9,
             "the server listing its own choice must not dilute it: got {share}"
         );
+    }
+
+    /// The two readings a field test has to be able to tell apart, said in words.
+    ///
+    /// A server reporting nothing must not read as a confident judge, because the two route
+    /// identically and only this line distinguishes them.
+    #[test]
+    fn a_silent_server_and_a_sure_judge_do_not_read_the_same() {
+        let silent = Confidence::default().describe();
+        assert!(
+            silent.contains("no confidence reported"),
+            "a server that said nothing has to say so: {silent}"
+        );
+
+        let sure = Confidence::from_pairs(&[("difficulty", 0.95), ("is_code", 0.99)]).describe();
+        assert!(sure.contains("difficulty 95%"), "got {sure}");
+        assert!(sure.contains("is_code 99%"), "got {sure}");
+        assert!(!sure.contains("no confidence"));
     }
 
     /// A thinking model is told not to, and a model that cannot think is told nothing.
