@@ -79,6 +79,16 @@ pub struct Voice {
 /// HUD sends is looked up here and the URL is built from what this table says; a name that
 /// is not in it is refused. Nothing the operator or the page can type becomes part of a URL
 /// or a file path, so there is no request to redirect and no directory to traverse out of.
+///
+/// **Every entry has to exist at that quality, and nothing here can check that.** The table
+/// carried `en_US-kathleen-medium` for months; Hugging Face only publishes kathleen at
+/// `low`, so the one thing the operator saw was a progress bar that reached "Could not fetch
+/// the voice: http status 404" -- a failure that looks like a broken app rather than a
+/// catalogue mistake, and one no test here can reach, because the only authority on what
+/// exists is the other end of the wire. `catalogue_entries_are_self_consistent` pins the
+/// shape, and `scripts/check_voice_catalogue.sh` is what actually asks. Before adding a
+/// voice, check it against the Piper project's own list rather than guessing the quality
+/// from the ones beside it.
 const CATALOGUE: &[(&str, &str, &str, &str)] = &[
     (
         "en_GB-alba-medium",
@@ -112,8 +122,8 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
     ),
     (
         "en_US-arctic-medium",
-        "American, multi-speaker",
-        "about 60 MB",
+        "American, 18 speakers in one file",
+        "about 75 MB",
         "en/en_US/arctic/medium",
     ),
     (
@@ -135,10 +145,10 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
         "en/en_US/john/medium",
     ),
     (
-        "en_US-kathleen-medium",
+        "en_US-kristin-medium",
         "American, female",
         "about 60 MB",
-        "en/en_US/kathleen/medium",
+        "en/en_US/kristin/medium",
     ),
     (
         "en_US-lessac-medium",
@@ -168,6 +178,14 @@ const CATALOGUE: &[(&str, &str, &str, &str)] = &[
 
 fn find(name: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
     CATALOGUE.iter().copied().find(|(n, _, _, _)| *n == name)
+}
+
+/// Where this voice's files sit under the Piper collection, or None for a name the table
+/// does not carry. The preview fetcher needs the same path this module builds its own URLs
+/// from, and it needs it from here rather than from a second copy: a sample URL assembled
+/// from a name the page supplied would be exactly the traversal the fixed table prevents.
+pub fn remote_dir(name: &str) -> Option<&'static str> {
+    find(name).map(|(_, _, _, dir)| dir)
 }
 
 /// The catalogue, each entry saying whether it is already here.
@@ -559,6 +577,49 @@ mod tests {
             .find(|d| d.voice == name)
             .map(|d| d.phase)
             .expect("the entry should still be there")
+    }
+
+    /// The shape half of the kathleen bug. A name is `<lang>-<voice>-<quality>` and the
+    /// folder is `<family>/<lang>/<voice>/<quality>`, so the two restate each other and a
+    /// typo in either shows up as a disagreement. This cannot tell whether the voice is
+    /// really published at that quality -- only the other end of the wire knows that, and
+    /// scripts/check_voice_catalogue.sh is what asks it -- but it does catch the entry
+    /// that was copied from the one above it and half edited.
+    #[test]
+    fn catalogue_entries_are_self_consistent() {
+        for (name, label, size_hint, dir) in CATALOGUE {
+            let parts: Vec<&str> = name.splitn(3, '-').collect();
+            assert_eq!(parts.len(), 3, "{name} is not <lang>-<voice>-<quality>");
+            let (lang, voice, quality) = (parts[0], parts[1], parts[2]);
+            let family = lang
+                .split('_')
+                .next()
+                .expect("a language code has a family");
+            assert_eq!(
+                *dir,
+                format!("{family}/{lang}/{voice}/{quality}"),
+                "{name} and its folder disagree",
+            );
+            assert!(!label.is_empty(), "{name} has no label");
+            assert!(size_hint.contains("MB"), "{name}'s size hint says no size");
+        }
+    }
+
+    /// Two voices with the same name would make the download registry ambiguous, and two
+    /// pointing at the same folder means one of them was edited and the other was not.
+    #[test]
+    fn no_voice_is_listed_twice() {
+        let mut names: Vec<&str> = CATALOGUE.iter().map(|(n, _, _, _)| *n).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "a voice name is in the table twice");
+
+        let mut dirs: Vec<&str> = CATALOGUE.iter().map(|(_, _, _, d)| *d).collect();
+        dirs.sort_unstable();
+        let before = dirs.len();
+        dirs.dedup();
+        assert_eq!(before, dirs.len(), "two voices point at the same folder");
     }
 
     /// A body big enough to clear MIN_VOICE_BYTES, which is what tts.rs uses to tell a voice

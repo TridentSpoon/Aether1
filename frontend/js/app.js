@@ -7441,6 +7441,176 @@ document.addEventListener('DOMContentLoaded', () => {
         return resp.json();
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Hearing a voice before choosing it.                                  */
+    /*                                                                      */
+    /* Fourteen rows, four of them reading "American, male", and sixty      */
+    /* megabytes between the operator and finding out which is which. The   */
+    /* play button is the whole answer to that, and what it plays depends   */
+    /* on what is already here: an installed voice is spoken by Piper on    */
+    /* this machine, so the clip IS the voice; one that is not installed    */
+    /* can only be the Piper project's published recording. The backend     */
+    /* says which, and so does the line under the list -- they are          */
+    /* different claims and only one of them is about this computer.        */
+
+    const voicePreview = { name: null, audio: null, url: null, loading: null };
+
+    async function fetchVoicePreview(name) {
+        if (IS_TAURI) {
+            const data = await tauriInvoke('voice_preview_rust', { voice: name });
+            if (!data || !data.ok) throw new Error((data && data.message) || 'no clip came back');
+            // Bytes over IPC and a blob minted here, never an asset:// URL: the clip goes
+            // through a MediaElementAudioSourceNode and WebKit mutes that node for
+            // anything that would taint the page's origin. See speech_clip_rust.
+            const blob = new Blob([new Uint8Array(data.preview.bytes)], { type: data.preview.mime });
+            return { url: URL.createObjectURL(blob), source: data.preview.source };
+        }
+        const resp = await apiFetch(`/api/voice/preview?voice=${encodeURIComponent(name)}`);
+        if (!resp.ok) throw new Error((await resp.text().catch(() => '')) || `preview failed: ${resp.status}`);
+        const blob = await resp.blob();
+        return {
+            url: URL.createObjectURL(blob),
+            source: resp.headers.get('x-aether1-preview-source') || 'sample',
+        };
+    }
+
+    /* Every play button on the page, wherever it was drawn, painted from the one piece of
+       state that says what is happening. Found by attribute rather than held in a list,
+       because both lists that carry these buttons are rebuilt from scratch whenever a
+       voice lands and a list of stale element references would be painting the dead. */
+    function paintVoicePreviewButtons() {
+        for (const button of document.querySelectorAll('[data-preview-voice]')) {
+            const name = button.dataset.previewVoice;
+            const playing = voicePreview.name === name && voicePreview.audio;
+            const loading = voicePreview.loading === name;
+            button.textContent = loading ? '…' : (playing ? '■' : '▶');
+            // A disabled button keeps the reason it was given; repainting it with "Hear
+            // this voice" would promise something pressing it does not do.
+            if (!button.disabled) {
+                button.title = playing
+                    ? 'Stop'
+                    : (loading ? 'Fetching the clip...' : `Hear ${name}`);
+                button.setAttribute('aria-label', button.title);
+            }
+            button.classList.toggle('cyber-btn-active', Boolean(playing || loading));
+        }
+    }
+
+    function stopVoicePreview() {
+        if (voicePreview.audio) {
+            // Both handlers come off before the element is torn down. Clearing `src` on a
+            // media element fires `error` on it, so a clip that simply finished would
+            // otherwise arrive here from `ended`, be cleared, and come straight back
+            // through `error` to tell the operator that a clip they just listened to all
+            // the way through would not play. Caught by driving it, not by reading it.
+            voicePreview.audio.onended = null;
+            voicePreview.audio.onerror = null;
+            voicePreview.audio.pause();
+            voicePreview.audio.src = '';
+        }
+        // The blob is the page's own memory, and these are played over and over while
+        // somebody compares voices; letting them pile up is a leak with a volume knob.
+        if (voicePreview.url) URL.revokeObjectURL(voicePreview.url);
+        voicePreview.audio = null;
+        voicePreview.url = null;
+        voicePreview.name = null;
+        paintVoicePreviewButtons();
+    }
+
+    /* Pressing play on a voice. Pressing it again, or pressing another, stops this one
+       first: two voices at once is the one outcome that answers nothing. */
+    async function playVoicePreview(name, say) {
+        const announce = say || (() => {});
+        if (voicePreview.name === name && voicePreview.audio) { stopVoicePreview(); return; }
+        stopVoicePreview();
+        if (voicePreview.loading) return;
+
+        voicePreview.loading = name;
+        paintVoicePreviewButtons();
+        try {
+            const clip = await fetchVoicePreview(name);
+            // Another press landed while this was in the air; the one the operator pressed
+            // last is the one they want.
+            if (voicePreview.loading !== name) { URL.revokeObjectURL(clip.url); return; }
+
+            const audio = new Audio(clip.url);
+            // Deliberately not routed through the avatar's audio graph. This is a clip
+            // being auditioned, not the companion speaking, so it should not make the
+            // hologram move its mouth -- and a plain element needs no AudioContext resume.
+            audio.onended = () => stopVoicePreview();
+            audio.onerror = () => {
+                stopVoicePreview();
+                announce('That clip would not play: the file arrived but the window refused it.', 'bad');
+            };
+            voicePreview.audio = audio;
+            voicePreview.url = clip.url;
+            voicePreview.name = name;
+            paintVoicePreviewButtons();
+            await audio.play();
+
+            const label = voiceLabelFor(name) || name;
+            announce(clip.source === 'spoken'
+                ? `That is ${label}, spoken on this computer by Piper just now.`
+                : `That is the Piper project's own recording of ${label}. Download it to hear it say your own words.`,
+                'info');
+        } catch (e) {
+            stopVoicePreview();
+            announce(`Could not play ${name}: ${(e && e.message) || e}`, 'bad');
+        } finally {
+            if (voicePreview.loading === name) voicePreview.loading = null;
+            paintVoicePreviewButtons();
+        }
+    }
+
+    /* The part of `en_US-northern_english_male-medium` that tells two rows apart. The
+       language and the quality are the same for every voice in the catalogue, so printing
+       them in a list of fourteen is fourteen copies of a constant. */
+    function shortVoiceName(name) {
+        const parts = String(name || '').split('-');
+        return parts.length >= 3 ? parts.slice(1, -1).join('-') : String(name || '');
+    }
+
+    /* The label the catalogue gave a voice. Filled by whichever of the two lists drew it
+       -- the wizard and the hub fetch the same catalogue separately, and the status line
+       should say "British, Scottish, female" whichever one the button was pressed in. */
+    const voiceLabels = new Map();
+    function rememberVoiceLabels(voices) {
+        for (const voice of voices || []) {
+            if (voice && voice.name) voiceLabels.set(voice.name, voice.label || voice.name);
+        }
+    }
+    function voiceLabelFor(name) {
+        return voiceLabels.get(name) || null;
+    }
+
+    /* The button itself, shared by the wizard's list and the Voice & Sound hub so both
+       behave the same way and both are painted by the same pass.
+
+       `reachable` is false only in local-only mode, and only matters for a voice that is
+       not here yet: an installed one is spoken by Piper on this machine and that switch
+       has nothing to say about it. A voice that is not installed has no clip to play
+       without fetching one, so the button says so rather than offering an action that
+       will refuse -- the same treatment its Download button already gets. */
+    function voicePreviewButton(voice, say, reachable = true) {
+        const play = document.createElement('button');
+        play.type = 'button';
+        play.className = 'cyber-btn text-[10px] py-1 px-2 voice-preview-btn';
+        play.dataset.previewVoice = voice.name;
+        play.textContent = '▶';
+        play.disabled = !voice.installed && !reachable;
+        play.title = play.disabled
+            ? 'Local-only mode is on, and this voice is not here to be spoken yet.'
+            : `Hear ${voice.name}`;
+        play.setAttribute('aria-label', play.title);
+        play.addEventListener('click', (event) => {
+            // Harmless in the wizard, and necessary anywhere this ends up on a row that is
+            // itself clickable: pressing play should not also move a selection.
+            event.stopPropagation();
+            playVoicePreview(voice.name, say);
+        });
+        return play;
+    }
+
     /* One catalogue row. Nodes rather than markup, for the same reason the model rows
        are: every word of this comes from the backend and is going onto the page. */
     function renderVoiceOption(voice, downloadable) {
@@ -7452,15 +7622,26 @@ document.addEventListener('DOMContentLoaded', () => {
         mark.textContent = voice.installed ? '✔' : '·';
         row.appendChild(mark);
 
+        // The label and the voice's own name, together. Four of these rows read
+        // "American, male" and nothing else on them differs, so on its own the label is
+        // not an identifier -- and the name is what the download bar, the error message
+        // and the Piper voice-file box all use, which makes it the one piece of text that
+        // connects this row to everything else the operator will see about it.
         const name = document.createElement('span');
         name.className = 'text-[11px] font-mono text-cyan-100 flex-1 min-w-0';
         name.textContent = voice.label;
+        const who = document.createElement('span');
+        who.className = 'text-[10px] font-mono text-slate-500 ml-2';
+        who.textContent = shortVoiceName(voice.name);
+        name.appendChild(who);
         row.appendChild(name);
 
         const size = document.createElement('span');
         size.className = 'text-[10px] font-mono text-slate-500';
         size.textContent = voice.installed ? 'already here' : voice.size_hint;
         row.appendChild(size);
+
+        row.appendChild(voicePreviewButton(voice, setVoiceStatus, downloadable));
 
         if (!voice.installed) {
             const get = document.createElement('button');
@@ -7493,6 +7674,7 @@ document.addEventListener('DOMContentLoaded', () => {
                   'Settings, or copy a voice into the folder named above by hand.';
         }
 
+        rememberVoiceLabels(voices);
         voicePickerList.innerHTML = '';
         for (const voice of voices) voicePickerList.appendChild(renderVoiceOption(voice, downloadable));
         voicePicker.classList.remove('hidden');
@@ -7623,6 +7805,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Only the asking stops. The download itself runs on its own thread in the
         // backend and finishes whether this panel is open or not.
         stopVoicePoll();
+        // A preview is not a download: it is a clip playing out of a panel that is no
+        // longer on screen, which is the kind of sound nobody can work out how to stop.
+        stopVoicePreview();
     });
     document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
@@ -7838,6 +8023,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!list) return;
         list.innerHTML = '';
         const voices = soundHubVisibleVoices();
+        rememberVoiceLabels(soundHub.voices);
 
         const title = document.getElementById('vhub-list-title');
         if (title) title.textContent = `Offline voices (${voices.length})`;
@@ -7972,6 +8158,13 @@ document.addEventListener('DOMContentLoaded', () => {
             ? (voice.installed ? voice.path : `Downloads to ${voice.path}`)
             : 'In the voices folder';
         action.appendChild(size);
+
+        // Hearing it comes before anything else that can be done with it, and it is the
+        // one action that is offered whether or not the voice is here: downloaded, it is
+        // spoken by Piper on this machine; not downloaded, it is the published recording.
+        // (The row itself is a <button>, so this cannot live there -- a button inside a
+        // button is not valid HTML and the parser hoists it straight back out.)
+        action.appendChild(voicePreviewButton(voice, setSoundHubStatus));
 
         if (voice.installed) {
             // Fills the Piper voice-file box rather than saving by itself: this panel
@@ -14698,10 +14891,12 @@ document.addEventListener('DOMContentLoaded', () => {
     btnCloseSettings.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         settingsModal.classList.add('hidden');
+        // The Voice & Sound hub can be auditioning a voice when this closes.
+        stopVoicePreview();
     });
 
     settingsModal.addEventListener('click', (event) => {
-        if (event.target === settingsModal) settingsModal.classList.add('hidden');
+        if (event.target === settingsModal) { settingsModal.classList.add('hidden'); stopVoicePreview(); }
     });
 
     const voiceRateInput = document.getElementById('setting-voice-speed');

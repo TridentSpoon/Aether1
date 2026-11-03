@@ -3002,6 +3002,17 @@ select,
     background: var(--bg-core);
 }
 
+/* The play button beside a voice. Fixed width so a list of fourteen does not shuffle
+   sideways when one of them changes from the triangle to the stop square, and tabular
+   digits are irrelevant here but the monospace is not: ▶, ■ and … have very different
+   natural widths. */
+.voice-preview-btn {
+    flex: 0 0 auto;
+    min-width: 2rem;
+    text-align: center;
+    line-height: 1;
+}
+
 .hub-action-size {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.68rem;
