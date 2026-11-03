@@ -14,7 +14,7 @@
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
-    <link rel="stylesheet" href="css/studio.css?v=8">
+    <link rel="stylesheet" href="css/studio.css?v=9">
     <!-- Solo-panel mode: a window opened by open_panel_window_rust loads this exact file with
          `?panel=<id>` on the URL. Stamping the id onto <html> here, before body exists, lets
          layout.css hide everything but that one panel with no flash of the full panel grid
@@ -24,6 +24,7 @@
     <!-- Which shell the window wears, in the head for the same reason the theme is:
          read any later and the panel grid paints before the studio replaces it. -->
     <script src="js/shell.js?v=4"></script>
+    <script src="js/modules.js?v=1"></script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -1868,6 +1869,23 @@
                         nothing hidden here is being kept up to date behind your back.
                     </p>
                 </div>
+
+                <!-- The other half of the same question. The panels above are the big
+                     boxes; these are the eight tabs inside the chat panel, which is
+                     where "I only want the terminal" actually lives. Filled in by
+                     js/modules.js from the tab strip, so a tab added to the HUD appears
+                     here by itself, and screen-local for the same reason the panels
+                     are. Both shells honour them: the studio's sidebar is these same
+                     eight views by another route. -->
+                <div class="pt-1 space-y-1">
+                    <span class="text-[11px] font-mono text-cyan-300 block">Chat tabs to show</span>
+                    <div id="view-toggles" class="space-y-1"></div>
+                    <p class="text-[10px] font-mono text-slate-500 leading-snug">
+                        Switch off everything you do not use and the chat panel becomes
+                        whatever is left -- a terminal, a coding window, a conversation and
+                        nothing else. One has to stay on, since a tab is how you get back.
+                    </p>
+                </div>
                 </div>
             </section>
 
@@ -3659,7 +3677,7 @@
     <script src="js/terminal.js?v=1"></script>
     <script src="js/agent-browser.js?v=3"></script>
     <script src="vendor/qrcode/qrcode.js?v=1"></script>
-    <script src="js/app.js?v=76"></script>
+    <script src="js/app.js?v=77"></script>
     <!-- After app.js: the layout only rearranges boxes app.js has already wired up. -->
     <script src="js/layout.js?v=5"></script>
 </body>

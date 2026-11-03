@@ -4573,6 +4573,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let onTerminalTabShown = null;
 
     function switchChatTab(which) {
+        /* A view the operator has switched off is not somewhere anything may send
+           them -- not the sidebar, not the menu, not sendToTerminal, not a remembered
+           tab from before it was switched off. Asking for one lands on the first that
+           is on, which is always at least one (js/modules.js will not switch off the
+           last). */
+        if (window.A1Modules && !window.A1Modules.isOn(which)) {
+            const first = window.A1Modules.on()[0];
+            if (!first || first === which) return;
+            which = first;
+        }
         document.querySelectorAll('[data-chat-view]').forEach(view => {
             const mine = view.getAttribute('data-chat-view') === which;
             view.classList.toggle('hidden', !mine);
@@ -4616,6 +4626,64 @@ document.addEventListener('DOMContentLoaded', () => {
             switchChatTab(tab.getAttribute('data-chat-tab'));
         });
     });
+
+    /* ---- the chat panel's tabs as modules --------------------------------------
+     *
+     * Trident, 2026-11-03: the app should be modular, down to "sub tabs in chat
+     * are modules to enable I.E chat only or code only or term if a user wanted to
+     * use the terminal only". The panels have had switches since layout.js; these
+     * are the eight tabs inside the chat panel.
+     *
+     * One checkbox per tab, drawn from the tab strip by js/modules.js, in the same
+     * shape as the panel checkboxes directly above them in Settings -> Display --
+     * they are two halves of one question and should not look like two features.
+     */
+    function openChatTab() {
+        const open = document.querySelector('[data-chat-view]:not(.hidden)');
+        return open ? open.getAttribute('data-chat-view') : null;
+    }
+
+    function renderViewToggles() {
+        const host = document.getElementById('view-toggles');
+        if (!host || !window.A1Modules) return;
+        const ids = window.A1Modules.ids();
+        const lastOne = window.A1Modules.on().length <= 1;
+        host.replaceChildren(...ids.map((id) => {
+            const on = window.A1Modules.isOn(id);
+            const row = document.createElement('label');
+            row.className = 'flex items-center gap-2 cursor-pointer';
+            const box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = on;
+            // The last one on cannot be switched off, so it is drawn as the thing it
+            // is rather than as a checkbox that silently refuses.
+            box.disabled = on && lastOne;
+            box.className = 'rounded bg-slate-900 border-cyan-500 text-cyan-400 focus:ring-0';
+            box.addEventListener('change', () => window.A1Modules.set(id, box.checked));
+            const text = document.createElement('span');
+            text.className = 'text-[11px] font-mono text-slate-300';
+            text.textContent = window.A1Modules.label(id);
+            row.append(box, text);
+            return row;
+        }));
+    }
+
+    function initChatModules() {
+        if (!window.A1Modules) return;
+        // After the browser build has removed the terminal, so the list is the tabs
+        // that are really there.
+        window.A1Modules.refresh();
+        window.addEventListener('a1-modules-change', () => {
+            renderViewToggles();
+            // Switching off the tab you are looking at has to move you somewhere, or
+            // the panel is left showing a view with no tab to leave it by.
+            const open = openChatTab();
+            if (open && !window.A1Modules.isOn(open)) switchChatTab(window.A1Modules.on()[0]);
+        });
+        const open = openChatTab();
+        if (open && !window.A1Modules.isOn(open)) switchChatTab(window.A1Modules.on()[0]);
+        renderViewToggles();
+    }
 
     /* Which model is answering, said above the conversation rather than discovered by
        asking it. Reuses the coding panel's own advice so the tab and the setup panel can
@@ -13983,6 +14051,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (terminalView && !IS_TAURI) {
         terminalView.remove();
         document.getElementById('tab-chat-terminal')?.remove();
+        // The tab strip just changed shape; the module list is read from it.
+        window.A1Modules?.refresh();
     } else if (terminalView) {
         const terminalSurface = document.getElementById('terminal-surface');
         const terminalState = document.getElementById('terminal-state');
@@ -15334,7 +15404,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initAvatarTapIntroduction();
     initSpecialityModel();
     initBrainPicker();
+    // After initStudio, which is where the sidebar's eight entries get their
+    // listeners -- the module switches hide those same entries.
     initStudio();
+    initChatModules();
     initFlowMode();
     initSpriteListenBridge();
     runVoiceStartupSelfTest();
