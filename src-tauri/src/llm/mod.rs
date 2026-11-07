@@ -6,6 +6,7 @@
 
 pub mod auto;
 mod db;
+pub mod eyes;
 pub mod flow;
 mod genesis;
 mod persona;
@@ -1265,15 +1266,42 @@ impl LlmEngine {
         ctx: &ChatContext,
         relay: &mut providers::Relay,
     ) -> Option<providers::Completion> {
-        let note = format!(
-            "\n\n[ATTACHMENT NOT SENT]\nThe operator attached {} to this message and {} refused it: the model you are running on cannot see images. Answer the words of their message, say in one short sentence that you could not see the attachment, and never guess at what it shows.",
-            if ctx.images.len() == 1 {
-                "an image".to_string()
-            } else {
-                format!("{} images", ctx.images.len())
-            },
-            config.provider.label(),
+        /* The same question first: is there anything on this machine that can see it?
+        A refusal is a later answer to the question `known_blind_to_images` asks earlier,
+        so the response to it is the same -- borrow a pair of eyes, and fall back to the
+        apology only when there are none. `eyes::borrow` is Ollama-side, so a cloud or
+        LM Studio turn that refused the image lands on the apology unless a local Ollama is
+        the configured provider; that is the honest limit and not a silent one, because the
+        trace says the attachment was not looked at. */
+        let seen = eyes::borrow(
+            &self.db,
+            config.provider,
+            &config.endpoint,
+            &config.model_name,
+            ctx.prompt,
+            ctx.images,
         );
+        let (note, trace_line) = match &seen {
+            Some(seen) => (
+                eyes::seen_note(ctx.images.len(), seen),
+                eyes::seen_trace(&config.model_name, seen),
+            ),
+            None => (
+                format!(
+                    "\n\n[ATTACHMENT NOT SENT]\nThe operator attached {} to this message and {} refused it: the model you are running on cannot see images. Answer the words of their message, say in one short sentence that you could not see the attachment, and never guess at what it shows.",
+                    if ctx.images.len() == 1 {
+                        "an image".to_string()
+                    } else {
+                        format!("{} images", ctx.images.len())
+                    },
+                    config.provider.label(),
+                ),
+                format!(
+                    "{} cannot see images, so the attachment was dropped and the question asked again -- install a vision model, or pick one under The Brain, to have it looked at",
+                    config.model_name
+                ),
+            ),
+        };
         let system_prompt = format!("{}{note}", ctx.system_prompt);
         let stripped = ChatContext {
             system_prompt: &system_prompt,
@@ -1302,10 +1330,7 @@ impl LlmEngine {
             Provider::Offline => return None,
         }
         .ok()?;
-        let trace = crate::tools::protocol::trace_of(&format!(
-            "{} cannot see images, so the attachment was dropped and the question asked again -- pick a vision model under The Brain to have it looked at",
-            config.model_name
-        ));
+        let trace = crate::tools::protocol::trace_of(&trace_line);
         completion.text = format!("{trace}{}", completion.text);
         relay.thinking(&completion.reasoning);
         relay.answered(&completion.text);
@@ -2021,14 +2046,39 @@ impl LlmEngine {
             providers::known_blind_to_images(config.provider, &config.endpoint, &config.model_name),
         ) {
             (false, true) => {
-                system_prompt.push_str(&Self::blind_to_images_note(images.len()));
-                (
-                    &[][..],
-                    crate::tools::protocol::trace_of(&format!(
-                        "{} cannot see images, so the attachment was not sent -- pick a vision model under The Brain to have it looked at",
-                        config.model_name
-                    )),
-                )
+                /* Before giving up on the picture, ask whether anything else on this
+                machine can see it. `eyes::borrow` declines in every case where that is not
+                true, and declining lands on exactly the two lines below -- the behaviour
+                that shipped before it existed. */
+                match eyes::borrow(
+                    &self.db,
+                    config.provider,
+                    &config.endpoint,
+                    &config.model_name,
+                    prompt,
+                    images,
+                ) {
+                    Some(seen) => {
+                        system_prompt.push_str(&eyes::seen_note(images.len(), &seen));
+                        (
+                            &[][..],
+                            crate::tools::protocol::trace_of(&eyes::seen_trace(
+                                &config.model_name,
+                                &seen,
+                            )),
+                        )
+                    }
+                    None => {
+                        system_prompt.push_str(&Self::blind_to_images_note(images.len()));
+                        (
+                            &[][..],
+                            crate::tools::protocol::trace_of(&format!(
+                                "{} cannot see images, so the attachment was not sent -- install a vision model, or pick one under The Brain, to have it looked at",
+                                config.model_name
+                            )),
+                        )
+                    }
+                }
             }
             _ => (images, String::new()),
         };
