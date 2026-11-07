@@ -5,6 +5,46 @@
  * Genesis, and Model Scanner.
  */
 
+/* Aurora's nicknames, one per cloud voice, mirroring persona_voice::VOICE_NAMES in the Rust
+   half. The name was chosen for what it shortens to, and the shortening is not a second
+   decision: picking a voice picks the name that sounds like it, so the Settings pane moves
+   the name when the voice changes -- but only while the name is still one nobody typed (see
+   isUnchosenCompanionName). Both halves have to agree, because either can be the one that
+   answers first on a fresh install. */
+const COMPANION_VOICE_NAMES = {
+    'en-US-AriaNeural': 'Aurora',
+    'en-US-JennyNeural': 'Rora',
+    'en-US-GuyNeural': 'Rory',
+    'en-US-DavisNeural': 'Auro',
+    'en-US-EricNeural': 'Auro',
+    'en-GB-SoniaNeural': 'Aura',
+    'en-GB-LibbyNeural': 'Rora',
+    'en-GB-RyanNeural': 'Rory',
+    'en-GB-ThomasNeural': 'Auro',
+    'en-AU-NatashaNeural': 'Aura',
+    'en-AU-WilliamNeural': 'Rory',
+    'ja-JP-NanamiNeural': 'Aura'
+};
+
+/* The name before Aurora. Here only so that an install still carrying it is recognised as
+   one that never chose -- persona_voice::LEGACY_DEFAULT_NAME says the rest. */
+const LEGACY_COMPANION_NAME = 'HALCY';
+const DEFAULT_COMPANION_NAME = 'Aurora';
+
+function companionNameForVoice(voice) {
+    return COMPANION_VOICE_NAMES[voice] || DEFAULT_COMPANION_NAME;
+}
+
+/* Whether a name in the field is one nobody typed, and may therefore follow the voice. A
+   name from outside the Aurora family was the operator's own and is never moved. */
+function isUnchosenCompanionName(name) {
+    const trimmed = (name || '').trim().toLowerCase();
+    if (!trimmed) return true;
+    if (trimmed === LEGACY_COMPANION_NAME.toLowerCase()) return true;
+    if (trimmed === DEFAULT_COMPANION_NAME.toLowerCase()) return true;
+    return Object.values(COMPANION_VOICE_NAMES).some(n => n.toLowerCase() === trimmed);
+}
+
 const AVATAR_DISPLAY_NAMES = {
     halcy: 'HALCY',
     nexus: 'THE NEXUS',
@@ -372,7 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
        startWaitFeedback below. */
     let hasAnsweredThisSession = false;
     let autoSpeak = true;
-    let currentAgentName = "HALCY";
+    let currentAgentName = DEFAULT_COMPANION_NAME;
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
 
     /* The operator's own name, as the profile knows it -- kept here once it has been read
@@ -625,9 +665,13 @@ document.addEventListener('DOMContentLoaded', () => {
        to switch to, and defaulting it to Custom would hand you the fallback directive without
        saying so. It keeps whatever you had. */
     const AVATAR_PRESETS = {
+        /* The default avatar, so its pairing is the default companion: Aurora, in the
+           voice whose nickname is Aurora. Every preset here is a name and a voice chosen
+           together, which is the same rule the voice picker follows for the nicknames --
+           see COMPANION_VOICE_NAMES. */
         a1: {
-            name: 'AURORA1', persona: 'default', voice: 'en-GB-SoniaNeural',
-            greeting: '🅰️ **Aurora1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
+            name: 'Aurora', persona: 'default', voice: 'en-US-AriaNeural',
+            greeting: '🅰️ **Aurora online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
         },
         halcy: {
             name: 'HALCY', persona: 'halcy', voice: 'en-US-JennyNeural',
@@ -6043,6 +6087,36 @@ document.addEventListener('DOMContentLoaded', () => {
         if (kind) described = `${described}, a ${kind}`;
         line.textContent = described;
     }
+
+    /* The name and the voice are one choice. Changing the voice moves the name to the
+       nickname that matches it -- but only while the name is still one nobody typed, so an
+       operator who has called it something of their own keeps that name whatever voice they
+       try next. The hint under the field says which way round this is. */
+    function companionNameFollowsVoice() {
+        const voice = document.getElementById('setting-voice');
+        const nameField = document.getElementById('setting-agent-name');
+        if (!voice || !nameField) return;
+        if (isUnchosenCompanionName(nameField.value)) {
+            nameField.value = companionNameForVoice(voice.value);
+        }
+        describeCompanionNameForVoice();
+    }
+
+    /* The name lives in Appearance and the voice in Voice & Sound, so the pairing is only
+       visible if the voice pane says it out loud. One line under the picker, naming what
+       the companion will answer to once this voice is saved. */
+    function describeCompanionNameForVoice() {
+        const line = document.getElementById('voice-companion-name');
+        const voice = document.getElementById('setting-voice');
+        const nameField = document.getElementById('setting-agent-name');
+        if (!line || !voice) return;
+        const typed = nameField && !isUnchosenCompanionName(nameField.value);
+        line.textContent = typed
+            ? `Answers to ${nameField.value.trim()} — your own name, so this voice does not change it.`
+            : `Answers to ${companionNameForVoice(voice.value)} in this voice. Give it a name of your own under Appearance to keep one name whatever voice you pick.`;
+    }
+
+    document.getElementById('setting-voice')?.addEventListener('change', companionNameFollowsVoice);
 
     document.getElementById('setting-machine-nickname')?.addEventListener('input', updateMachineDescribed);
     document.getElementById('setting-machine-kind')?.addEventListener('change', updateMachineDescribed);
@@ -13105,8 +13179,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // settings: the level is in the project's file and the sandbox is a fact about
             // the machine.
             refreshCodeEffective();
-            updateAgentNameDisplay(s.agent_name || "HALCY");
-            document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
+            updateAgentNameDisplay(s.agent_name || companionNameForVoice(s.voice_name || 'en-US-AriaNeural'));
+            document.getElementById('setting-agent-name').value =
+                s.agent_name || companionNameForVoice(s.voice_name || 'en-US-AriaNeural');
+            // After the name field, because the line it writes reports on both.
+            describeCompanionNameForVoice();
             document.getElementById('setting-operator-name').value = s.operator_name || '';
             document.getElementById('setting-machine-nickname').value = s.machine_nickname || '';
             document.getElementById('setting-machine-kind').value = s.machine_kind || '';
@@ -13324,7 +13401,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const spriteModeToggle = document.getElementById('setting-sprite-mode');
         const payload = {
             settings: {
-                agent_name: document.getElementById('setting-agent-name').value.trim() || "HALCY",
+                /* An emptied field is a request to go back to the default, and the default
+                   is the nickname for the voice being saved alongside it. */
+                agent_name: document.getElementById('setting-agent-name').value.trim()
+                    || companionNameForVoice(document.getElementById('setting-voice').value),
                 // Saved empty when it is empty: an operator who clears their name is
                 // asking to go back to the model being told nothing about them.
                 operator_name: document.getElementById('setting-operator-name').value.trim(),
