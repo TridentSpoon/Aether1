@@ -878,6 +878,45 @@ fn emit_update_progress<R: tauri::Runtime>(
     }
 }
 
+/// The last `update-progress` of an update that finished, or failed, without this process
+/// exiting.
+///
+/// A rebuild that succeeds never needs one: `perform_update_core` relaunches and exits, and
+/// the strip goes with the window. The two that do are a failure, and a release-mode
+/// download, which ends with a file and leaves the app running. Before these existed the
+/// only consumer of `update-progress` was registered inside the Settings button's own click
+/// handler, so an update started from a conversation emitted five steps into nothing and
+/// then went quiet whatever happened -- while the companion had already told the operator
+/// the app would restart itself.
+///
+/// A flag rather than a label the frontend matches on: "Update failed" is a sentence, and a
+/// sentence is the wrong thing for one half of a program to recognise the other half's
+/// outcome by.
+fn emit_update_outcome<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    label: &str,
+    detail: &str,
+    failed: bool,
+) {
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({
+            "step": UPDATE_STEPS,
+            "steps": UPDATE_STEPS,
+            "label": label,
+            "detail": detail,
+            "percent": 100,
+            "failed": failed,
+            "done": !failed,
+        }),
+    );
+    if failed {
+        eprintln!("[AETHER1] Update failed: {label} -- {detail}");
+    } else {
+        println!("[AETHER1] Update: {label} -- {detail}");
+    }
+}
+
 /// Runs the rebuild with its output read rather than inherited, so the HUD can show which
 /// crate cargo is on right now, and so a failure arrives as the compiler's own last words
 /// rather than as "rebuild did not succeed" -- which was the whole of what an operator got
@@ -3706,30 +3745,67 @@ fn main() {
                     }
                     let app = app.clone();
                     let in_progress = in_progress.clone();
-                    /* Started and reported, not waited for. A rebuild takes minutes and
-                    ends by relaunching the app, so a tool call that blocked on it would
-                    hold the turn open until the process it is running in exited -- the
-                    operator would approve the card and then watch a reply that never
-                    arrived. The five `update-progress` steps are already drawn in the HUD
-                    strip and the Updates panel, which is where this belongs. */
+                    /* The two update mechanisms are two different acts, and this is
+                    where they part. `perform_update_core` refuses `Mode::Release` outright
+                    and says why, so sending an installed copy down it would have the tool
+                    promising a rebuild and a restart while a background thread failed
+                    immediately -- the operator approves the card and nothing ever happens.
+                    An installed copy's update is the signed bundle, which is what
+                    `download_update_to_disk` fetches and verifies. */
+                    let release_mode = releases::mode() == releases::Mode::Release;
+                    /* Started and reported, not waited for, on either path. A rebuild takes
+                    minutes and ends by relaunching the app, and a bundle is half a
+                    gigabyte: a call that blocked on either would hold the turn open past
+                    any sensible timeout, and on the rebuild it would hold it open until the
+                    process the turn is running in exited. The operator would approve the
+                    card and then watch a reply that never arrived. Progress and outcome go
+                    to `update-progress`, which the HUD now listens to for the whole
+                    session rather than only while the Settings button is in flight. */
                     std::thread::spawn(move || {
-                        if let Err((stage, msg)) = perform_update_core(&app) {
-                            let said = update_failure(stage, &msg);
-                            eprintln!("[AETHER1] Update failed: {said}");
+                        if release_mode {
+                            emit_update_progress(
+                                &app,
+                                1,
+                                "Downloading the update",
+                                "fetching the signed bundle",
+                                5,
+                            );
+                            match download_update_to_disk(&app) {
+                                Ok((path, tag)) => emit_update_outcome(
+                                    &app,
+                                    &format!("Downloaded {tag}"),
+                                    &path.display().to_string(),
+                                    false,
+                                ),
+                                Err(e) => emit_update_outcome(&app, "Download failed", &e, true),
+                            }
+                        } else if let Err((stage, msg)) = perform_update_core(&app) {
                             // The operator approved this from a conversation, so the
                             // failure has to reach the same panel the progress did --
                             // otherwise it fails in the terminal and nowhere else.
-                            emit_update_progress(&app, UPDATE_STEPS, "Update failed", &said, 100);
+                            emit_update_outcome(
+                                &app,
+                                "Update failed",
+                                &update_failure(stage, &msg),
+                                true,
+                            );
                         }
                         in_progress.store(false, Ordering::Relaxed);
                     });
-                    Ok(
+                    Ok(if release_mode {
+                        "The download has started: it is fetching the signed bundle and \
+                         checking its signature, and its progress is in the header strip and \
+                         under Settings > Updates. Tell the operator that, and that nothing \
+                         installs itself -- what they get is a verified file, and running it \
+                         is their own last step."
+                            .to_string()
+                    } else {
                         "The update has started: it is fetching, rebuilding and will then \
-                        restart the app. Progress is in the header strip and under \
-                        Settings > Updates. Tell the operator that, and that the app will \
-                        restart itself when it is done."
-                            .to_string(),
-                    )
+                         restart the app. Its progress is in the header strip and under \
+                         Settings > Updates. Tell the operator that, and that the app will \
+                         restart itself when it is done."
+                            .to_string()
+                    })
                 }));
             }
 
