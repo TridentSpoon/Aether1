@@ -879,6 +879,45 @@ fn emit_update_progress<R: tauri::Runtime>(
     }
 }
 
+/// The last `update-progress` of an update that finished, or failed, without this process
+/// exiting.
+///
+/// A rebuild that succeeds never needs one: `perform_update_core` relaunches and exits, and
+/// the strip goes with the window. The two that do are a failure, and a release-mode
+/// download, which ends with a file and leaves the app running. Before these existed the
+/// only consumer of `update-progress` was registered inside the Settings button's own click
+/// handler, so an update started from a conversation emitted five steps into nothing and
+/// then went quiet whatever happened -- while the companion had already told the operator
+/// the app would restart itself.
+///
+/// A flag rather than a label the frontend matches on: "Update failed" is a sentence, and a
+/// sentence is the wrong thing for one half of a program to recognise the other half's
+/// outcome by.
+fn emit_update_outcome<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    label: &str,
+    detail: &str,
+    failed: bool,
+) {
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({
+            "step": UPDATE_STEPS,
+            "steps": UPDATE_STEPS,
+            "label": label,
+            "detail": detail,
+            "percent": 100,
+            "failed": failed,
+            "done": !failed,
+        }),
+    );
+    if failed {
+        eprintln!("[AETHER1] Update failed: {label} -- {detail}");
+    } else {
+        println!("[AETHER1] Update: {label} -- {detail}");
+    }
+}
+
 /// Runs the rebuild with its output read rather than inherited, so the HUD can show which
 /// crate cargo is on right now, and so a failure arrives as the compiler's own last words
 /// rather than as "rebuild did not succeed" -- which was the whole of what an operator got
@@ -1369,17 +1408,23 @@ fn perform_update<R: tauri::Runtime>(
 /// so the frontend only ever observes this call either hang (app about to exit) or reject.
 #[tauri::command(async)]
 fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
-    perform_update_core(&app).map_err(|(stage, msg)| {
-        // Which step it died on, in front of the message. An operator reading "fatal:
-        // couldn't find remote ref" has no way of telling the fetch from the rebuild
-        // otherwise, and the two have nothing in common to try next.
-        let where_it_failed = match stage {
-            UpdateStage::Pull => "Pulling the latest changes failed",
-            UpdateStage::Build => "Rebuilding failed",
-            UpdateStage::Relaunch => "Restarting the new build failed",
-        };
-        format!("{where_it_failed}: {msg}")
-    })
+    perform_update_core(&app).map_err(|(stage, msg)| update_failure(stage, &msg))
+}
+
+/// Which step it died on, in front of the message. An operator reading "fatal: couldn't
+/// find remote ref" has no way of telling the fetch from the rebuild otherwise, and the two
+/// have nothing in common to try next.
+///
+/// Shared by the HUD's button and by the companion's `install_update` tool, which starts
+/// the same install from a conversation and has to report the same failure in the same
+/// words -- see `tools::update`.
+fn update_failure(stage: UpdateStage, msg: &str) -> String {
+    let where_it_failed = match stage {
+        UpdateStage::Pull => "Pulling the latest changes failed",
+        UpdateStage::Build => "Rebuilding failed",
+        UpdateStage::Relaunch => "Restarting the new build failed",
+    };
+    format!("{where_it_failed}: {msg}")
 }
 
 /// Is anything AETHER1 draws actually on a screen right now?
@@ -3703,6 +3748,92 @@ fn main() {
             // second one -- two concurrent `perform_update` calls would run two concurrent
             // `git pull`/`cargo build` and could both relaunch the app.
             let update_in_progress = Arc::new(AtomicBool::new(false));
+
+            /* The companion's way in to the same install. `install_update` is a tool call
+            and has no AppHandle, so the app hands it one of these at startup; outside the
+            desktop app nothing is installed and the tool says so rather than pretending.
+            See `tools::update` for the log that made the tool necessary.
+
+            It shares the tray's own debounce flag deliberately: two concurrent updates
+            would be two concurrent `git pull`s and two rebuilds racing to relaunch, and
+            the operator has two ways to start one. */
+            {
+                let app = app.handle().clone();
+                let in_progress = update_in_progress.clone();
+                tools::update::set_installer(Box::new(move || {
+                    if in_progress
+                        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        return Err("an update is already running -- its progress is in \
+                                    Settings > Updates"
+                            .to_string());
+                    }
+                    let app = app.clone();
+                    let in_progress = in_progress.clone();
+                    /* The two update mechanisms are two different acts, and this is
+                    where they part. `perform_update_core` refuses `Mode::Release` outright
+                    and says why, so sending an installed copy down it would have the tool
+                    promising a rebuild and a restart while a background thread failed
+                    immediately -- the operator approves the card and nothing ever happens.
+                    An installed copy's update is the signed bundle, which is what
+                    `download_update_to_disk` fetches and verifies. */
+                    let release_mode = releases::mode() == releases::Mode::Release;
+                    /* Started and reported, not waited for, on either path. A rebuild takes
+                    minutes and ends by relaunching the app, and a bundle is half a
+                    gigabyte: a call that blocked on either would hold the turn open past
+                    any sensible timeout, and on the rebuild it would hold it open until the
+                    process the turn is running in exited. The operator would approve the
+                    card and then watch a reply that never arrived. Progress and outcome go
+                    to `update-progress`, which the HUD now listens to for the whole
+                    session rather than only while the Settings button is in flight. */
+                    std::thread::spawn(move || {
+                        if release_mode {
+                            emit_update_progress(
+                                &app,
+                                1,
+                                "Downloading the update",
+                                "fetching the signed bundle",
+                                5,
+                            );
+                            match download_update_to_disk(&app) {
+                                Ok((path, tag)) => emit_update_outcome(
+                                    &app,
+                                    &format!("Downloaded {tag}"),
+                                    &path.display().to_string(),
+                                    false,
+                                ),
+                                Err(e) => emit_update_outcome(&app, "Download failed", &e, true),
+                            }
+                        } else if let Err((stage, msg)) = perform_update_core(&app) {
+                            // The operator approved this from a conversation, so the
+                            // failure has to reach the same panel the progress did --
+                            // otherwise it fails in the terminal and nowhere else.
+                            emit_update_outcome(
+                                &app,
+                                "Update failed",
+                                &update_failure(stage, &msg),
+                                true,
+                            );
+                        }
+                        in_progress.store(false, Ordering::Relaxed);
+                    });
+                    Ok(if release_mode {
+                        "The download has started: it is fetching the signed bundle and \
+                         checking its signature, and its progress is in the header strip and \
+                         under Settings > Updates. Tell the operator that, and that nothing \
+                         installs itself -- what they get is a verified file, and running it \
+                         is their own last step."
+                            .to_string()
+                    } else {
+                        "The update has started: it is fetching, rebuilding and will then \
+                         restart the app. Its progress is in the header strip and under \
+                         Settings > Updates. Tell the operator that, and that the app will \
+                         restart itself when it is done."
+                            .to_string()
+                    })
+                }));
+            }
 
             let tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())

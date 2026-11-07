@@ -706,6 +706,13 @@ impl Persona {
             // field covers.
             "self_check",
             "recent_crashes",
+            /* Which build of itself is running, and whether it is the latest. In
+            every field for the same reason the two above are: a program that cannot
+            answer "are you up to date?" about itself answers it out of its training
+            instead, which is what a desktop log of 2026-11-03 shows it doing three
+            times running. Reading a version is not a privilege, and the install is a
+            separate tool that is proposed every time. */
+            "update_status",
         ];
         const READS_FILES: &[&str] = &[
             "read_file",
@@ -716,6 +723,13 @@ impl Persona {
             "fetch_url",
             "self_check",
             "recent_crashes",
+            /* Which build of itself is running, and whether it is the latest. In
+            every field for the same reason the two above are: a program that cannot
+            answer "are you up to date?" about itself answers it out of its training
+            instead, which is what a desktop log of 2026-11-03 shows it doing three
+            times running. Reading a version is not a privilege, and the install is a
+            separate tool that is proposed every time. */
+            "update_status",
         ];
         /// What the two machine-facing personas share: the file tools, plus the two that
         /// answer "what is this machine doing" -- the process table, and the Windows event
@@ -735,6 +749,13 @@ impl Persona {
             "fetch_url",
             "self_check",
             "recent_crashes",
+            /* Which build of itself is running, and whether it is the latest. In
+            every field for the same reason the two above are: a program that cannot
+            answer "are you up to date?" about itself answers it out of its training
+            instead, which is what a desktop log of 2026-11-03 shows it doing three
+            times running. Reading a version is not a privilege, and the install is a
+            separate tool that is proposed every time. */
+            "update_status",
         ];
 
         match self {

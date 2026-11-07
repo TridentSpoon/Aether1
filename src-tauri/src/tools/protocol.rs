@@ -215,6 +215,211 @@ pub fn parse_round(text: &str) -> Round {
     round
 }
 
+/// One call recovered from text that was never meant to be read as a call, with the span
+/// of `text` it occupied.
+#[derive(Debug, PartialEq)]
+pub struct Salvaged {
+    pub call: ToolCall,
+    /// Byte range of the JSON object (and the fence around it, where there was one) in the
+    /// text it was found in, so the caller can take it off the operator's screen.
+    pub at: std::ops::Range<usize>,
+}
+
+/// Tool calls a model wrote as prose, recovered.
+///
+/// This is the failure a desktop log of 2026-11-03 is named after. Asked "are you up to
+/// date?", a local model under Auto said it would call `telemetry_detail`, and then wrote
+///
+///     {"name": "telemetry_detail", "parameters": {}}
+///
+/// into the chat. Nothing ran. `parse_round` found no `tool` fence, `forged_results` found
+/// no `[TOOL RESULTS]` header, so the turn was indistinguishable from chatting -- and the
+/// operator was shown a JSON object where their answer should have been, with the machine
+/// reporting nothing at all about it. The model had done the hard part. Two keys were
+/// spelled the way OpenAI spells them rather than the way `instructions` asks for, and the
+/// fence was missing.
+///
+/// So the spellings are accepted. `tool`, `name` and `function` all name the tool;
+/// `arguments`, `parameters`, `args` and `input` all carry its arguments; the nested
+/// `{"function": {"name": ..., "arguments": ...}}` shape every OpenAI-compatible server
+/// emits is read too. A fence of any tag, or no fence at all, is fine.
+///
+/// **Only a name the registry actually has is salvaged**, which is the whole of what keeps
+/// this from running things nobody asked for. A model writing *about* a tool -- an example
+/// in an explanation, a schema it is quoting back -- produces a JSON object whose name is
+/// usually real, so that alone is not enough, and two further conditions narrow it:
+///
+///   * The object has to stand alone on its own lines, or be the entire contents of a
+///     fence. A JSON object inside a sentence is being talked about, not called.
+///   * The caller only asks when the round called nothing. A round with a real call in it
+///     is already going somewhere, and a second one scraped out of its prose would be a
+///     call the model did not make.
+///
+/// `arguments` absent means no arguments, as it does in `parse_round`: a tool that takes
+/// none is exactly the case this was found on.
+pub fn salvage_calls(text: &str, known: &dyn Fn(&str) -> bool) -> Vec<Salvaged> {
+    let mut found = Vec::new();
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'{' {
+            at += 1;
+            continue;
+        }
+        let Some(end) = object_end(text, at) else {
+            break;
+        };
+        let body = &text[at..end];
+        match serde_json::from_str::<Value>(body).ok().and_then(|parsed| {
+            let call = call_of(&parsed)?;
+            known(&call.tool).then_some(call)
+        }) {
+            Some(call) if stands_alone(text, at, end) => {
+                found.push(Salvaged {
+                    call,
+                    at: fence_around(text, at, end),
+                });
+                at = end;
+            }
+            // Not a call, or not one standing on its own. Step past this object rather
+            // than into it: an object nested inside it is part of what was being talked
+            // about, and reading it on its own would be reading an argument as a call.
+            _ => at = end,
+        }
+    }
+    found
+}
+
+/// Where the JSON object starting at `from` ends, by counting braces outside of strings.
+///
+/// `serde_json` cannot do this: it is given a slice and the slice is all it knows, so
+/// finding the end of an object embedded in prose is this function's own problem. Strings
+/// are tracked because a brace inside one is a character and not a nesting level, and
+/// escapes because `"\\"` ends a string and `"\""` does not.
+fn object_end(text: &str, from: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, ch) in text[from..].char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(from + offset + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The tool and arguments in one JSON object, under any of the spellings a model reaches
+/// for. None when it names no tool, which is most JSON objects.
+fn call_of(parsed: &Value) -> Option<ToolCall> {
+    // The nested shape first: `function` holding an object is OpenAI's own wire format,
+    // and its `name` is the tool while the outer object's `name` is usually absent.
+    let inner = parsed.get("function").filter(|v| v.is_object());
+    let holder = inner.unwrap_or(parsed);
+    let tool = ["tool", "name", "function"]
+        .iter()
+        .find_map(|key| holder.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())?;
+    let arguments = ["arguments", "parameters", "args", "input"]
+        .iter()
+        .find_map(|key| holder.get(*key).or_else(|| parsed.get(*key)))
+        .cloned()
+        // A server that sends arguments as a JSON *string* is sending OpenAI's shape, and
+        // the string is the object. Parsed rather than passed on, so the tool sees an
+        // object either way.
+        .map(|value| match value.as_str() {
+            Some(raw) => serde_json::from_str(raw).unwrap_or(Value::Object(Default::default())),
+            None => value,
+        })
+        .filter(Value::is_object)
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    Some(ToolCall {
+        tool: tool.to_string(),
+        arguments,
+    })
+}
+
+/// Whether the object occupying `from..to` is on its own rather than inside a sentence.
+///
+/// What is allowed in front of it on the line is a fence, and what is allowed after it is
+/// a fence or nothing. "I will call {...} now" is a model describing a call; a line that
+/// is nothing but the object is a model making one.
+fn stands_alone(text: &str, from: usize, to: usize) -> bool {
+    let before = text[..from].trim_end_matches([' ', '\t']);
+    let after = text[to..].trim_start_matches([' ', '\t']);
+    let starts_line = before.is_empty()
+        || before.ends_with('\n')
+        || before.ends_with(FENCE)
+        || before.trim_end().ends_with(FENCE);
+    let ends_line = after.is_empty() || after.starts_with('\n') || after.starts_with(FENCE);
+    starts_line && ends_line
+}
+
+/// The span to withhold: the object, plus the fence it was wrapped in if it was wrapped in
+/// one. Leaving a bare ```` ``` ```` pair behind would render as an empty code block.
+fn fence_around(text: &str, from: usize, to: usize) -> std::ops::Range<usize> {
+    let mut start = from;
+    let mut end = to;
+    let head = text[..from].trim_end();
+    if let Some(fence_at) = head.rfind(FENCE) {
+        // Only the fence immediately in front of it, with nothing but its tag between.
+        if !head[fence_at + FENCE.len()..].contains('\n') {
+            start = fence_at;
+        }
+    }
+    let tail = &text[to..];
+    let offset = tail.len() - tail.trim_start().len();
+    if tail.trim_start().starts_with(FENCE) {
+        end = to + offset + FENCE.len();
+    }
+    start..end
+}
+
+/// `text` with the salvaged spans removed, which is what the operator should have been
+/// shown: the model's sentence about looking something up, and none of the JSON.
+pub fn without_salvaged(text: &str, found: &[Salvaged]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for salvaged in found {
+        if salvaged.at.start >= at {
+            out.push_str(&text[at..salvaged.at.start]);
+            at = salvaged.at.end;
+        }
+    }
+    out.push_str(&text[at..]);
+    out.trim().to_string()
+}
+
+/// The operator's side of a salvaged call: one line saying the call was written rather
+/// than made, and that it was run anyway.
+///
+/// Said rather than hidden. The alternative is a tool running with no trace of why, and
+/// the trace lines exist precisely so a reply that leaned on a tool can be told from one
+/// that did not.
+pub fn salvaged_trace(tool: &str) -> String {
+    trace_of(&format!(
+        "{tool} was written out as text instead of called -- read as a call and run"
+    ))
+}
+
 /// The calls alone, for callers with nothing to do about a malformed one.
 pub fn parse_calls(text: &str) -> Vec<ToolCall> {
     parse_round(text).calls
@@ -1000,5 +1205,110 @@ mod tests {
     fn a_reply_that_is_only_trace_lines_becomes_empty_rather_than_blank_lines() {
         assert_eq!(without_trace_lines("`⚙ vault notes loaded: a`"), "");
         assert_eq!(without_trace_lines(""), "");
+    }
+
+    /// Every known tool is a tool; nothing else is.
+    fn known(name: &str) -> bool {
+        matches!(name, "telemetry_detail" | "read_file" | "search_web")
+    }
+
+    /// The desktop log of 2026-11-03, verbatim: a sentence about calling a tool, then the
+    /// call written out in OpenAI's spelling with no fence around it.
+    #[test]
+    fn a_call_written_out_as_text_is_recovered_and_taken_off_the_screen() {
+        let said = "To answer this question, I will call the telemetry_detail function to \
+                    get a fresh reading of the host.\n\n                    {\"name\": \"telemetry_detail\", \"parameters\": {}}";
+        let found = salvage_calls(said, &known);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].call.tool, "telemetry_detail");
+        assert_eq!(found[0].call.arguments, json!({}));
+        let kept = without_salvaged(said, &found);
+        assert!(kept.ends_with("reading of the host."), "{kept}");
+        assert!(!kept.contains('{'), "{kept}");
+    }
+
+    /// The other spellings, including the nested shape every OpenAI-compatible server
+    /// emits and arguments sent as a JSON string rather than an object.
+    #[test]
+    fn the_spellings_a_model_actually_uses_are_all_read() {
+        for text in [
+            r#"{"tool": "read_file", "arguments": {"path": "/etc/hostname"}}"#,
+            r#"{"name": "read_file", "parameters": {"path": "/etc/hostname"}}"#,
+            r#"{"name": "read_file", "args": {"path": "/etc/hostname"}}"#,
+            r#"{"function": {"name": "read_file", "arguments": "{\"path\": \"/etc/hostname\"}"}}"#,
+            "```json\n{\"name\": \"read_file\", \"input\": {\"path\": \"/etc/hostname\"}}\n```",
+        ] {
+            let found = salvage_calls(text, &known);
+            assert_eq!(found.len(), 1, "{text}");
+            assert_eq!(found[0].call.tool, "read_file", "{text}");
+            assert_eq!(
+                found[0].call.arguments,
+                json!({"path": "/etc/hostname"}),
+                "{text}"
+            );
+            // The fence goes with it, or an empty code block is left on screen.
+            assert_eq!(without_salvaged(text, &found), "", "{text}");
+        }
+    }
+
+    /// The whole of what keeps this from running things nobody asked for. A model talking
+    /// about a tool is not a model calling one, and a name the registry does not have is
+    /// not a tool at all.
+    #[test]
+    fn prose_about_a_tool_and_unknown_names_are_left_alone() {
+        for text in [
+            // Inside a sentence: being described, not called.
+            r#"You could call it like {"name": "read_file", "arguments": {}} if you wanted."#,
+            // Not a tool this build has.
+            r#"{"name": "check_for_update", "parameters": {}}"#,
+            // Names nothing at all.
+            r#"{"path": "/etc/hostname", "lines": 20}"#,
+            // An argument that happens to name a tool, nested inside another object.
+            r#"{"wrapper": {"name": "read_file"}}"#,
+        ] {
+            assert!(salvage_calls(text, &known).is_empty(), "{text}");
+        }
+    }
+
+    /// A proper fenced call is `parse_round`'s business and the caller only reaches the
+    /// salvage when nothing was parsed -- but the two must agree about what they found, so
+    /// that a round can never run the same call twice by two routes.
+    #[test]
+    fn a_properly_fenced_call_is_what_parse_round_reads() {
+        let text = "```tool\n{\"tool\": \"search_web\", \"arguments\": {\"query\": \"f1\"}}\n```";
+        let round = parse_round(text);
+        assert_eq!(round.calls.len(), 1);
+        // The salvage reads it too, by its `tool` key -- which is why the caller asks only
+        // when `parse_round` came back with nothing.
+        assert_eq!(salvage_calls(text, &known).len(), 1);
+    }
+
+    /// Two calls in one round, and the text between them survives.
+    #[test]
+    fn several_calls_are_recovered_in_order() {
+        let said = "First this:\n{\"name\": \"telemetry_detail\", \"parameters\": {}}\n                    then this:\n{\"name\": \"search_web\", \"parameters\": {\"query\": \"f1\"}}";
+        let found = salvage_calls(said, &known);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].call.tool, "telemetry_detail");
+        assert_eq!(found[1].call.tool, "search_web");
+        let kept = without_salvaged(said, &found);
+        assert!(kept.contains("First this:"), "{kept}");
+        assert!(kept.contains("then this:"), "{kept}");
+        assert!(!kept.contains("telemetry_detail"), "{kept}");
+    }
+
+    /// An unterminated object cannot be read, and must not take the scan down with it.
+    #[test]
+    fn an_object_that_never_closes_is_not_a_call() {
+        assert!(salvage_calls(r#"{"name": "read_file", "argum"#, &known).is_empty());
+    }
+
+    /// A brace inside a string is a character, not a nesting level.
+    #[test]
+    fn braces_inside_strings_do_not_confuse_the_scan() {
+        let text = r#"{"name": "read_file", "arguments": {"path": "/tmp/a{b}c"}}"#;
+        let found = salvage_calls(text, &known);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].call.arguments, json!({"path": "/tmp/a{b}c"}));
     }
 }
