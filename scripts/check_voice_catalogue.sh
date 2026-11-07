@@ -54,23 +54,30 @@ import re
 import sys
 
 source = open(sys.argv[1], encoding="utf-8").read()
-start = source.index("const CATALOGUE")
-end = source.index("\n];", start)
+try:
+    start = source.index("const CATALOGUE")
+except ValueError:
+    sys.exit("check_voice_catalogue: no CATALOGUE in voice_download.rs -- has it moved?")
+# An empty table is written `= &[];` on one line, so there is no `\n];` to find. Take
+# whichever terminator comes first rather than assuming the multi-line shape.
+ends = [source.find(marker, start) for marker in ("\n];", "];")]
+end = min(e for e in ends if e != -1)
 block = source[start:end]
 rows = re.findall(
     r'\(\s*"([^"]+)",\s*"([^"]*)",\s*"([^"]*)",\s*"([^"]+)",\s*\)',
     block,
 )
-if not rows:
-    sys.exit("check_voice_catalogue: could not read the table out of voice_download.rs")
+# An empty table is a real state, not a parse failure: voices are offered only once
+# their model card and dataset terms have been reviewed, and the table has been empty
+# since that review began. Nothing to check is a pass.
 for name, _label, _size, folder in rows:
     print(f"{name}\t{folder}")
 PY
 )
 
 if [ "${#entries[@]}" -eq 0 ]; then
-  echo "check_voice_catalogue: the catalogue came back empty -- has the table moved?" >&2
-  exit 1
+  echo "check_voice_catalogue: the catalogue offers no voices, so there is nothing to check."
+  exit 0
 fi
 
 failures=0

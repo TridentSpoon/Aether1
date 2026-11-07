@@ -1,7 +1,8 @@
-; Offline installer for AETHER1 -- packages the already-built aether1.exe plus Piper (TTS)
-; and whisper.cpp (STT) with a voice and a model already bundled, so this installs and runs
-; with no internet access at all. Compiled by scripts\package_offline_windows.ps1, which
-; passes StageDir/OutDir/PiperVoice/WhisperModel in via /D; the #ifndef defaults below only
+; Offline installer for AETHER1 -- packages the already-built aether1.exe plus whisper.cpp
+; (STT) and a speech-recognition model. Windows SAPI provides system TTS; no Piper engine
+; or voice weights are bundled. This installs without internet access. Compiled by
+; scripts\package_offline_windows.ps1, which passes StageDir/OutDir/WhisperModel in via /D;
+; the #ifndef defaults below only
 ; matter if someone runs `iscc aether1.iss` directly against a hand-built staging folder.
 ;
 ; Per-user install (PrivilegesRequired=lowest): no admin rights, no UAC prompt, matching
@@ -13,9 +14,6 @@
 #endif
 #ifndef OutDir
   #define OutDir "..\dist"
-#endif
-#ifndef PiperVoice
-  #define PiperVoice "en_US-lessac-medium"
 #endif
 #ifndef WhisperModel
   #define WhisperModel "small"
@@ -59,20 +57,13 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Source: "{#StageDir}\aether1.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
-; Piper's whole release directory (the exe plus the DLLs it needs next to it) and the
-; standalone whisper-cli.exe both go into {app}\bin, which is the one directory this
+; The standalone whisper-cli.exe goes into {app}\bin, which is the one directory this
 ; installer adds to the user's PATH -- see the [Code] section. whisper-cli.exe is static
 ; (see package_offline_windows.ps1's BUILD_SHARED_LIBS=OFF), so it needs nothing else there.
-Source: "{#StageDir}\piper\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs
 Source: "{#StageDir}\whisper\whisper-cli.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
-; Straight into the same ~/.local/share layout the app already searches on every platform
-; (see src-tauri\src\llm\tts.rs / stt.rs) -- {%USERPROFILE} is what home_dir() resolves to
-; on Windows (paths.rs), so no code on the app side needs to know this installer exists.
-; Note: Inno's env-var constant syntax is {%NAME}, not {%NAME%} -- the brace already
-; supplies the delimiter that Windows' own %NAME% notation would otherwise need.
-Source: "{#StageDir}\models\{#PiperVoice}.onnx"; DestDir: "{%USERPROFILE}\.local\share\piper\voices"; Flags: ignoreversion
-Source: "{#StageDir}\models\{#PiperVoice}.onnx.json"; DestDir: "{%USERPROFILE}\.local\share\piper\voices"; Flags: ignoreversion
+; Whisper's model uses the same ~/.local/share layout the app already searches on every
+; platform (see src-tauri\src\llm\stt.rs). Windows SAPI is the default speech engine.
 Source: "{#StageDir}\models\ggml-{#WhisperModel}.bin"; DestDir: "{%USERPROFILE}\.local\share\whisper"; Flags: ignoreversion
 
 [Icons]
@@ -102,7 +93,7 @@ Type: files; Name: "{app}\aurora1.exe"
 
 [Code]
 // Appends {app}\bin to the current user's PATH so `which::which` (Rust, in the running
-// app) finds piper.exe / whisper-cli.exe the same way it would on Linux with them in
+// app) finds whisper-cli.exe the same way it would on Linux with them in
 // ~/.local/bin -- Inno Setup has no built-in "add to PATH" the way some other installer
 // tools do, so this is the standard hand-rolled version of it (HKCU\Environment, broadcast
 // WM_SETTINGCHANGE so already-open programs -- Explorer included -- notice without a

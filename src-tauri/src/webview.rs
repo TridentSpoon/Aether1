@@ -36,7 +36,13 @@
 //! testable without a GPU, a webview, or a crash. The side-effecting half is four short
 //! functions at the bottom.
 
+#[cfg(target_os = "linux")]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
+#[cfg(target_os = "linux")]
+use std::time::{Duration, Instant};
 
 /// The highest rung. There is no third escape hatch, so a machine that still cannot render
 /// here has a problem that is not WebKitGTK's to work around.
@@ -44,6 +50,8 @@ pub const MAX_LEVEL: u8 = 2;
 
 /// The file the rung is remembered in, under the app's own data directory.
 const RECORD_FILE: &str = "webview-renderer";
+#[cfg(target_os = "linux")]
+static LIVE_RENDERERS: OnceLock<Mutex<HashMap<u32, Instant>>> = OnceLock::new();
 
 /// The two variables, in the order the rungs add them.
 pub const DISABLE_DMABUF: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
@@ -317,6 +325,7 @@ pub fn operator_decides() -> bool {
 /// Matched on the name the operating system reports rather than on a path: `coredumpctl`
 /// says `WebKitWebProcess`, and the older GTK3 build and the sandboxed launcher spell it
 /// slightly differently, so the test is a prefix on a lowercased name.
+#[cfg(target_os = "linux")]
 pub fn is_renderer_process(program: &str) -> bool {
     let name = program
         .rsplit(['/', '\\'])
@@ -326,6 +335,79 @@ pub fn is_renderer_process(program: &str) -> bool {
     name.starts_with("webkitwebprocess")
         || name.starts_with("webkitnetworkprocess")
         || name.starts_with("webkitgpuprocess")
+}
+
+/// Current parent process ID, used by the Linux coredump poller to identify A1's children.
+#[cfg(target_os = "linux")]
+pub fn parent_pid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_name = stat.rsplit_once(") ")?.1;
+    after_name.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Whether a process currently belongs to this A1 process tree. WebKitGTK can insert a
+/// launcher between the app and renderer, so checking only the immediate parent is not
+/// enough. Missing or reparented `/proc` data fails closed.
+#[cfg(target_os = "linux")]
+pub fn is_child_process(pid: u32) -> bool {
+    let mut current = pid;
+    for _ in 0..64 {
+        if current == std::process::id() {
+            return true;
+        }
+        let Some(parent) = parent_pid(current) else {
+            return false;
+        };
+        if parent == 0 || parent == current {
+            return false;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// Remember live WebKit processes in A1's process tree before they can crash and be
+/// reparented. The coredump can arrive after `/proc/<pid>` has disappeared, so ancestry
+/// must be observed while the renderer is alive.
+#[cfg(target_os = "linux")]
+pub fn refresh_own_renderers() {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    let now = Instant::now();
+    let mut renderers = LIVE_RENDERERS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    renderers.retain(|_, seen| now.duration_since(*seen) < Duration::from_secs(120));
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(executable) = std::fs::read_link(entry.path().join("exe")) else {
+            continue;
+        };
+        if is_renderer_process(&executable.to_string_lossy()) && is_child_process(pid) {
+            renderers.insert(pid, now);
+        }
+    }
+}
+
+/// Consume a previously observed renderer PID; unknown, expired and unrelated crashes
+/// never change the persistent fallback level.
+#[cfg(target_os = "linux")]
+pub fn take_own_renderer_crash(pid: u32, program: &str) -> bool {
+    if !is_renderer_process(program) {
+        return false;
+    }
+    LIVE_RENDERERS
+        .get()
+        .and_then(|renderers| renderers.lock().ok().and_then(|mut map| map.remove(&pid)))
+        .is_some_and(|seen| seen.elapsed() < Duration::from_secs(120))
 }
 
 #[cfg(test)]
@@ -393,6 +475,7 @@ mod tests {
         assert_eq!(parse("level=1\nstate=sideways\n"), None);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_renderer_is_recognised_by_name_however_it_is_spelled() {
         assert!(is_renderer_process("WebKitWebProcess"));

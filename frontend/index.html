@@ -9,8 +9,8 @@
          machine (or a blocked network, or a bad afternoon at Cloudflare) got an unstyled
          page with no avatar and nothing saying why -- in an app whose whole point is
          running on your own hardware. See frontend/vendor/README.md. -->
-    <link rel="stylesheet" href="vendor/fonts.css?v=1">
     <link rel="stylesheet" href="vendor/tailwind.css?v=1">
+    <link rel="stylesheet" href="vendor/fonts.css?v=2">
     <link rel="stylesheet" href="css/A1theme.css?v=32">
     <link rel="stylesheet" href="css/layout.css?v=4">
     <link rel="stylesheet" href="css/agent-browser.css?v=2">
@@ -464,7 +464,7 @@
                     <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
                     <span id="chat-panel-title" class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">NEURAL DIALOGUE STREAM</span>
                 </div>
-                <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: HALCY</span>
+                <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: AURORA</span>
             </div>
 
             <!-- Two conversations in one panel, because they are the same act -- typing a
@@ -1129,6 +1129,7 @@
          companion that talks and listens. Same shape on purpose: probe the machine, say
          the one next thing, re-ask after every action. -->
     <div id="voice-modal" class="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <input id="setting-tts-system-voice" type="hidden" value="">
         <div class="hud-panel w-full max-w-2xl p-6 rounded-lg space-y-4 max-h-[90vh] overflow-y-auto">
             <div class="flex items-center justify-between border-b border-cyan-500/30 pb-3">
                 <h2 class="font-orbitron text-md font-bold text-cyan-400 tracking-wider flex items-center gap-2">
@@ -1153,21 +1154,23 @@
                 <div id="voice-speaking" class="voice-half"></div>
                 <ol id="voice-speaking-steps" class="space-y-2"></ol>
 
-                <!-- Piper needs two separate things, and only one of them is a program.
-                     The engine is a package-manager job and stays in the steps above;
-                     a voice is a pair of files Aether1 can fetch for itself, so it
-                     offers to. Hidden until the catalogue loads -- an empty box with a
-                     heading on it is just a question nobody asked. -->
+                <!-- Piper model downloads remain paused until each model and dataset license
+                     has been reviewed. System speech does not require a separate engine. -->
                 <div id="voice-picker" class="hidden bg-slate-900/60 border border-cyan-500/20 rounded p-3 space-y-2">
-                    <div class="font-orbitron text-[11px] font-bold text-cyan-300 tracking-wider">PICK A BETTER VOICE</div>
+                    <div class="font-orbitron text-[11px] font-bold text-cyan-300 tracking-wider">SYSTEM VOICES</div>
                     <p id="voice-picker-note" class="text-[11px] font-mono text-slate-400 leading-snug">
-                        These are voice files for Piper &mdash; recordings turned into numbers,
-                        not programs. Aurora1 saves them in its own voices folder; nothing is
-                        installed, nothing is run, and you still need Piper itself from the
-                        steps above for them to be used. Press &#9654; to hear one first: the
-                        ones already here are spoken by Piper on this computer, and the rest
-                        play the Piper project&rsquo;s own short recording of that voice.
+                        Choose an installed voice, preview it, then save it for replies. System voices stay on this computer.
                     </p>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <select id="system-voice-select" class="bg-slate-950 border border-cyan-500/30 rounded px-2 py-1 text-[11px] font-mono text-cyan-100 flex-1 min-w-[12rem]" aria-label="System speech voice"></select>
+                        <button id="btn-system-voice-preview" class="cyber-btn text-[10px] py-1 px-2">▶ Preview</button>
+                        <button id="btn-system-voice-save" class="cyber-btn cyber-btn-active text-[10px] py-1 px-2">Use this voice</button>
+                    </div>
+                    <p id="system-voice-status" class="text-[10px] font-mono text-slate-400"></p>
+                    <div id="voice-system-install" class="hidden text-[10px] font-mono text-slate-400"></div>
+                    <div class="flex flex-wrap gap-2 pt-1">
+                        <button id="btn-piper-uninstall" class="cyber-btn text-[10px] py-1 px-2">Uninstall A1-managed Piper</button>
+                    </div>
                     <div id="voice-picker-list" class="space-y-1.5"></div>
                     <div id="voice-picker-downloads" class="space-y-2"></div>
                 </div>
@@ -1672,7 +1675,12 @@
 
                                 <div class="space-y-1">
                                     <label class="text-xs font-mono text-cyan-300 block">CUSTOM AGENT NAME</label>
-                                    <input id="setting-agent-name" type="text" placeholder="e.g. HALCY, R.E.D. 9000, THE NEXUS, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                    <input id="setting-agent-name" type="text" placeholder="e.g. Aurora, Rory, Aura, R.E.D. 9000, A.R.X.LIMES" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                                    <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                                        Aurora by default, and the nickname follows the voice
+                                        &mdash; Rory, Aura, Rora, Auro. Type anything else here
+                                        and it stays whatever voice you pick.
+                                    </p>
                                 </div>
 
                                 <div class="pt-2 border-t border-purple-500/30 space-y-2">
@@ -1741,9 +1749,8 @@
                                 <p id="avatar-detail-access" class="avatar-fact-body"></p>
                             </div>
                             <!-- The voice an avatar speaks in is the identity table's choice
-                                 until the operator makes their own here. Both halves are
-                                 offered because they are different questions: the cloud voice
-                                 and the Piper model on this machine. Changing one saves it on
+                                 until the operator makes their own here. Both optional models
+                                 are offered: cloud voice and local Piper. Changing one saves it on
                                  the spot -- it writes its own settings row and never touches
                                  the form the Save Changes button commits. -->
                             <div class="avatar-fact" id="avatar-detail-voice-row">
@@ -1756,7 +1763,7 @@
                                         <select id="avatar-voice-cloud" class="avatar-voice-select"></select>
                                     </label>
                                     <label class="avatar-voice-field">
-                                        <span class="avatar-voice-field-label">Piper voice</span>
+                                    <span class="avatar-voice-field-label">Local model voice</span>
                                         <select id="avatar-voice-local" class="avatar-voice-select"></select>
                                     </label>
                                 </div>
@@ -2384,13 +2391,12 @@
                          monitor".
 
                          Two tabs, because they are two questions. Voices is which voice it
-                         speaks in -- the same fixed Piper catalogue the wizard offers, now
-                         with a detail panel instead of a row of buttons. Devices is which
+                         speaks in. The Piper model picker is paused pending rights review.
+                         Devices is which
                          speaker and which microphone, read from the operating system by
                          audio_devices.rs and merged with what this page itself can see.
 
-                         Nothing here is fetched from a website except a voice file the
-                         operator asks for by name. The device list is this machine, asked
+                         The device list is this machine, asked
                          with a fixed command and never a shell. -->
                     <div class="hub-head">
                         <div class="min-w-0">
@@ -2553,12 +2559,12 @@
                         </summary>
                         <div class="settings-group-body">
                     <div class="space-y-1">
-                        <label for="setting-tts-engine" class="text-xs font-mono text-cyan-300 block">WHAT DOES THE SPEAKING</label>
+                        <label for="setting-tts-engine" class="text-xs font-mono text-cyan-300 block">SPEECH ENGINE</label>
                         <select id="setting-tts-engine" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="auto">Auto — Piper, then cloud, then this OS's built-in voice</option>
-                            <option value="local">Local only (Piper) — never leaves this machine</option>
-                            <option value="cloud">Cloud (Microsoft) — better voices, text is sent away</option>
-                            <option value="os">This OS's built-in voice only — always available, never leaves this machine</option>
+                            <option value="os">System voice — this computer's speech engine (default)</option>
+                            <option value="auto">Automatic — system voice, then an installed local model</option>
+                            <option value="local">Local Piper model — then system voice; never leaves this machine</option>
+                            <option value="cloud">Cloud (Microsoft) — explicit online choice; text is sent away</option>
                         </select>
                         <div id="voice-status" class="text-[10px] font-mono text-slate-400 leading-snug"></div>
                     </div>
@@ -2566,19 +2572,20 @@
                     <div class="space-y-1">
                         <label for="setting-voice" class="text-xs font-mono text-cyan-300 block">WHICH VOICE</label>
                         <select id="setting-voice" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
-                            <option value="en-US-AriaNeural">en-US-AriaNeural (hAlcy Primary)</option>
-                            <option value="en-US-GuyNeural">en-US-GuyNeural (R.E.D. 9000 / Tactical)</option>
-                            <option value="en-GB-SoniaNeural">en-GB-SoniaNeural (The Nexus / Sophisticated)</option>
-                            <option value="en-US-JennyNeural">en-US-JennyNeural (hAlcy Alternative)</option>
-                            <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural (Cyberpunk Tokyo)</option>
+                            <option value="en-US-AriaNeural">en-US-AriaNeural &mdash; Aurora (American, female, warm)</option>
+                            <option value="en-US-GuyNeural">en-US-GuyNeural &mdash; Rory (American, male, level)</option>
+                            <option value="en-GB-SoniaNeural">en-GB-SoniaNeural &mdash; Aura (British, female, composed)</option>
+                            <option value="en-US-JennyNeural">en-US-JennyNeural &mdash; Rora (American, female, bright)</option>
+                            <option value="ja-JP-NanamiNeural">ja-JP-NanamiNeural &mdash; Aura (Japanese, female)</option>
                         </select>
+                        <p id="voice-companion-name" class="text-[10px] font-mono text-cyan-300 leading-snug"></p>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                            These names are the cloud voices. Piper and the built-in OS voice pick
+                            These names are the cloud voices. The local Piper model and built-in OS voice pick
                             their own; this box has no effect on them.
                         </p>
                         <p class="text-[10px] font-mono text-slate-400 leading-snug">
                             An avatar with an identity of its own speaks in its own voice instead
-                            &mdash; on Piper too, once that voice has been downloaded below. This
+                            &mdash; on Piper too, once a compatible model is configured. This
                             box is the voice for the ones that have none: Model&rsquo;s Own, and
                             an avatar you forged yourself.
                         </p>
@@ -2599,10 +2606,8 @@
                         </div>
                     </details>
 
-                    <!-- These three have been saved settings, and read by the backend
-                         (voice_status and transcribe_audio), since before there was anywhere
-                         to set them from. Nested because most people never touch them: the
-                         defaults find Piper and Whisper on their own if they are installed. -->
+            <!-- The installed model path remains available for users with an existing
+                         Piper model; A1 no longer installs or downloads Piper. -->
                     <details id="settings-group-offline-speech" class="settings-group settings-group-nested">
                         <summary class="settings-group-summary">
                             <span class="settings-group-title">Offline speech files</span>
@@ -2610,12 +2615,11 @@
                         </summary>
                         <div class="settings-group-body">
                             <div class="space-y-1">
-                                <label for="setting-tts-local-voice" class="text-xs font-mono text-cyan-300 block">PIPER VOICE FILE</label>
+                                <label for="setting-tts-local-voice" class="text-xs font-mono text-cyan-300 block">OPTIONAL PIPER MODEL FILE</label>
                                 <input id="setting-tts-local-voice" type="text" placeholder="leave empty to find it automatically" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
                                 <p class="text-[10px] font-mono text-slate-400 leading-snug">
-                                    The full path to a Piper <span class="text-cyan-300">.onnx</span> voice.
-                                    Leave it empty unless the status line above says Piper was found but a
-                                    voice was not.
+                                    The system voice is the default. This path is only for an existing
+                                    Piper <span class="text-cyan-300">.onnx</span> model you have rights to use.
                                 </p>
                             </div>
 
@@ -3127,7 +3131,7 @@
                             <p class="net-row-title">Local only &mdash; never reach the internet</p>
                             <p class="net-row-hint">
                                 Nothing leaves this machine or your local network. Cloud providers are
-                                refused, speech uses Piper or stays silent rather than sending your words
+                                refused, speech uses the system voice rather than sending your words
                                 to Microsoft, and update checks and model downloads stop. A model server
                                 on your own LAN still works &mdash; that is the point. Turning this on
                                 does not delete anything; switch it off and your cloud settings are still

@@ -56,7 +56,7 @@
      * Returns { start, stop, fit, running, destroy }. */
     function mount(surface, { invoke, listen, onState }) {
         const term = new window.Terminal({
-            fontFamily: '"Share Tech Mono", ui-monospace, monospace',
+            fontFamily: '"Noto Sans Mono", ui-monospace, monospace',
             fontSize: 13,
             cursorBlink: true,
             /* Enough to scroll back through a build, not so much that a runaway process

@@ -436,19 +436,6 @@ pub fn start_voice_download(engine: &LlmEngine, voice: String) -> Value {
     }
 }
 
-/// A clip of one catalogue voice, for the play button beside it.
-///
-/// The two sources are not interchangeable and the answer says which one this is: a voice
-/// already on the machine is spoken by Piper here and now, so the clip *is* the voice; one
-/// that is not yet here can only be the project's published recording. See
-/// `voice_preview::preview`.
-pub fn voice_preview(engine: &LlmEngine, voice: String) -> Value {
-    match crate::voice_preview::preview(engine, &voice) {
-        Ok(preview) => serde_json::json!({ "ok": true, "preview": preview }),
-        Err(message) => serde_json::json!({ "ok": false, "message": message }),
-    }
-}
-
 /// Every voice download this session knows about. Polled about once a second while a bar is
 /// on screen, so it stays a cheap read for the same reason `download_status` does.
 pub fn voice_download_status() -> Value {
@@ -970,8 +957,14 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         .db()
         .get_all_settings()
         .unwrap_or(serde_json::json!({}));
+    // The default name is the nickname for whichever voice is configured, so the pane
+    // shows the name the companion actually answers to rather than a second default that
+    // could disagree with the engine's. See persona_voice::VOICE_NAMES.
+    let configured_voice = engine
+        .db()
+        .get_setting_string("voice_name", llm::DEFAULT_VOICE);
     let mut defaults = serde_json::json!({
-        "agent_name": "HALCY",
+        "agent_name": crate::persona_voice::default_name_for_voice(&configured_voice),
         "llm_provider": "offline",
         "llm_model": "halcy-core",
         "llm_endpoint": "http://localhost:11434",
@@ -992,8 +985,9 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         by then. The same reading feeds the studio's Tools chip. */
         "tools_enabled": true,
         "command_allowlist": [],
-        "tts_engine": "auto",
+        "tts_engine": "os",
         "tts_local_voice": "",
+        "tts_system_voice": "",
         // Which speaker and microphone to use, as audio_devices.rs names them. Empty is
         // the ordinary value and means "whatever the system picks" -- the behaviour
         // everything had before there was anywhere to choose. The label is stored beside
@@ -1785,6 +1779,7 @@ pub fn synthesize_speech(
     let cache_dir = project_root().join("backend").join("audio_cache");
     let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
     let configured_local_voice = db.get_setting_string("tts_local_voice", "");
+    let system_voice = db.get_setting_string("tts_system_voice", "");
 
     // The voice belongs to the avatar. Resolving it here, from whichever persona is
     // selected at the moment of speech, is what makes that true for every way the avatar
@@ -1809,13 +1804,11 @@ pub fn synthesize_speech(
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or(configured_local_voice);
 
-    // The cloud voice is the one path that used to leave the machine without anyone
-    // choosing it: with Piper absent, `auto` quietly sent the text of everything the
-    // companion said to Microsoft. Local-only mode collapses that choice to Piper, and
-    // when Piper is not installed it says so instead of reaching out.
+    // Cloud speech is an explicit choice. Auto tries the system voice, then an installed
+    // local model; local-only mode overrides any cloud choice with system speech.
     let local_only = crate::local_only::enabled(db);
     let tts_engine =
-        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
+        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "os")).resolve(local_only);
 
     // How the operator says the words, applied on the way to whichever engine speaks. It is
     // read here, per clip, rather than held anywhere: the list is edited in Settings while
@@ -1829,6 +1822,7 @@ pub fn synthesize_speech(
         tts_engine,
         Some(&persona_voice),
         Some(&local_voice),
+        Some(&system_voice),
         &speller,
     )
     .map_err(|why| {
@@ -2008,7 +2002,7 @@ pub fn voice_advice(engine: &LlmEngine) -> crate::voice_setup::VoiceAdvice {
     let local_only = crate::local_only::enabled(db);
     crate::voice_setup::advise(
         db.get_setting_bool("auto_speak", true),
-        &db.get_setting_string("tts_engine", "auto"),
+        &db.get_setting_string("tts_engine", "os"),
         &db.get_setting_string("tts_local_voice", ""),
         &db.get_setting_string("stt_model_path", ""),
         local_only,
@@ -2654,8 +2648,8 @@ pub const VOICE_TEST_SENTENCE: &str =
 
 /// Actually says something out loud, and reports every engine it tried on the way.
 ///
-/// The point is the report. A status field can say Piper is installed and the operator can
-/// still hear nothing, because "installed" and "produces audio on this machine right now"
+/// The point is the report. A status field can say the system voice is available and the
+/// operator can still hear nothing, because "installed" and "produces audio on this machine right now"
 /// are different claims and only one of them is the one they care about. So this makes the
 /// real attempt and hands back what each engine said -- including on success, because
 /// "it spoke, but with the basic voice" is the answer to the most common complaint.
@@ -2664,9 +2658,10 @@ pub fn test_speech(engine: &LlmEngine) -> Result<(PathBuf, Value), Value> {
     let cache_dir = project_root().join("backend").join("audio_cache");
     let configured_voice = db.get_setting_string("voice_name", llm::DEFAULT_VOICE);
     let local_voice = db.get_setting_string("tts_local_voice", "");
+    let system_voice = db.get_setting_string("tts_system_voice", "");
     let local_only = crate::local_only::enabled(db);
     let tts_engine =
-        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "auto")).resolve(local_only);
+        llm::TtsEngine::from_key(&db.get_setting_string("tts_engine", "os")).resolve(local_only);
 
     // The test sentence goes through the operator's list like anything else. A test that
     // took a different route through this function would be proving the wrong route works.
@@ -2678,6 +2673,7 @@ pub fn test_speech(engine: &LlmEngine) -> Result<(PathBuf, Value), Value> {
         tts_engine,
         Some(&configured_voice),
         Some(&local_voice),
+        Some(&system_voice),
         &speller,
     ) {
         Ok(speech) => {
@@ -2702,6 +2698,55 @@ pub fn test_speech(engine: &LlmEngine) -> Result<(PathBuf, Value), Value> {
     }
 }
 
+pub fn available_system_voices() -> Value {
+    match llm::tts_system_voices() {
+        Ok(voices) => serde_json::json!({
+            "ok": true,
+            "voices": voices.into_iter().map(|(id, label)| serde_json::json!({ "id": id, "label": label })).collect::<Vec<_>>(),
+        }),
+        Err(why) => serde_json::json!({ "ok": false, "why": why, "voices": [] }),
+    }
+}
+
+pub fn uninstall_managed_piper() -> Value {
+    match llm::tts::uninstall_managed_piper() {
+        Ok(message) => serde_json::json!({ "ok": true, "message": message }),
+        Err(message) => serde_json::json!({ "ok": false, "message": message }),
+    }
+}
+
+pub fn test_system_voice(engine: &LlmEngine, voice: &str) -> Result<(PathBuf, Value), Value> {
+    let voices = match llm::tts_system_voices() {
+        Ok(voices) => voices,
+        Err(why) => return Err(serde_json::json!({ "ok": false, "why": why })),
+    };
+    if !voices.iter().any(|(id, _)| id == voice) {
+        return Err(
+            serde_json::json!({ "ok": false, "why": "That voice is not available on this computer. Refresh the list and choose an installed voice." }),
+        );
+    }
+    let db = engine.db();
+    let cache_dir = project_root().join("backend").join("audio_cache");
+    let speller = crate::speech_words::speller(db);
+    match llm::generate_speech_reporting(
+        &cache_dir,
+        VOICE_TEST_SENTENCE,
+        llm::TtsEngine::Os,
+        None,
+        None,
+        Some(voice),
+        &speller,
+    ) {
+        Ok(speech) => Ok((
+            speech.path,
+            serde_json::json!({ "ok": true, "engine": speech.engine, "attempts": speech.attempts, "spoken": VOICE_TEST_SENTENCE }),
+        )),
+        Err(attempts) => Err(
+            serde_json::json!({ "ok": false, "attempts": attempts, "why": attempts.last().map(|a| format!("{}: {}", a.engine, a.detail)).unwrap_or_else(|| "nothing tried to speak".to_string()) }),
+        ),
+    }
+}
+
 /// Transcribes a recording made in the page. The audio is written to the same cache
 /// directory the synthesized speech lives in, transcribed, and deleted -- a recording of
 /// the operator's voice is not something to leave lying around after it has been read.
@@ -2723,35 +2768,21 @@ pub fn transcribe_audio(engine: &LlmEngine, wav: &[u8]) -> Result<String, String
 /// microphone button does nothing.
 pub fn voice_status(engine: &LlmEngine) -> Value {
     let db = engine.db();
-    let tts_engine = db.get_setting_string("tts_engine", "auto");
-    let local_voice = db.get_setting_string("tts_local_voice", "");
+    let tts_engine = db.get_setting_string("tts_engine", "os");
     let stt_model = db.get_setting_string("stt_model_path", "");
 
-    let speech_out = llm::tts_local_status(Some(&local_voice));
+    let speech_out = llm::tts_os_status();
     let speech_in = llm::stt_local_status(Some(&stt_model));
 
     serde_json::json!({
         "tts_engine": tts_engine,
-        // Reported next to the two engines because it changes what they mean: with the
-        // mode on, "auto" is Piper or nothing, and a missing Piper is now silence rather
-        // than an unannounced trip to a third party.
+        // Reported next to the engine because local-only mode overrules explicit cloud
+        // synthesis; Auto itself only tries on-device engines.
         "local_only": crate::local_only::enabled(db),
         "local_only_forced": crate::local_only::env_forced(),
         "speech_out": match &speech_out {
-            Ok((binary, voice)) => serde_json::json!({
-                "local": true,
-                "binary": binary.display().to_string(),
-                "voice": voice.display().to_string(),
-            }),
-            // Piper isn't installed/configured, but Auto (and the OS-only choice) can
-            // still speak through the OS's own voice -- SAPI on Windows always, espeak-ng
-            // on Linux if setup.sh's package got installed. That is what "always works"
-            // means for speech out, so it counts as local here too rather than reporting
-            // the operator as one step further from offline than they actually are.
-            Err(why) => match llm::tts_os_status() {
-                Ok(()) => serde_json::json!({ "local": true, "binary": llm::tts_os_engine_name() }),
-                Err(_) => serde_json::json!({ "local": false, "why": why }),
-            },
+            Ok(()) => serde_json::json!({ "local": true, "binary": llm::tts_os_engine_name() }),
+            Err(why) => serde_json::json!({ "local": false, "why": why }),
         },
         "speech_in": match &speech_in {
             Ok((binary, model)) => serde_json::json!({

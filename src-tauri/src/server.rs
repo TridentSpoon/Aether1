@@ -263,6 +263,9 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/net/decide", post(code_net_decide))
         .route("/api/code/net/clear", post(code_net_clear))
         .route("/api/voice/test", post(test_speech))
+        .route("/api/voice/voices", get(system_voices))
+        .route("/api/voice/test-system", post(test_system_voice))
+        .route("/api/voice/piper/uninstall", post(uninstall_managed_piper))
         .route("/api/scanner/pull-model", post(pull_model))
         .route("/api/setup/download", post(start_download))
         .route("/api/setup/downloads", get(download_status))
@@ -273,7 +276,6 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/graft/install/status", get(graft_install_status))
         .route("/api/graft/install/forget", post(forget_graft_install))
         .route("/api/voice/download", post(start_voice_download))
-        .route("/api/voice/preview", get(voice_preview))
         .route("/api/voice/downloads", get(voice_download_status))
         .route("/api/voice/download/forget", post(forget_voice_download))
         .route("/api/audio/devices", get(audio_devices))
@@ -1864,6 +1866,40 @@ async fn test_speech(State(state): State<AppState>) -> Json<serde_json::Value> {
     })
 }
 
+async fn system_voices() -> Json<serde_json::Value> {
+    Json(commands::available_system_voices())
+}
+
+async fn uninstall_managed_piper() -> Json<serde_json::Value> {
+    Json(commands::uninstall_managed_piper())
+}
+
+#[derive(Deserialize)]
+struct SystemVoiceRequest {
+    voice: String,
+}
+
+async fn test_system_voice(
+    State(state): State<AppState>,
+    Json(request): Json<SystemVoiceRequest>,
+) -> Json<serde_json::Value> {
+    let outcome = tokio::task::spawn_blocking(move || {
+        commands::test_system_voice(&state.engine, &request.voice)
+    })
+    .await
+    .expect("test_system_voice panicked");
+    Json(match outcome {
+        Ok((path, mut report)) => {
+            if let Some(file_name) = path.file_name() {
+                report["audio_url"] =
+                    serde_json::json!(format!("/api/audio/{}", file_name.to_string_lossy()));
+            }
+            report
+        }
+        Err(report) => report,
+    })
+}
+
 #[derive(Deserialize)]
 struct PullQuery {
     model_name: Option<String>,
@@ -1960,39 +1996,6 @@ async fn start_voice_download(
             .await
             .expect("start_voice_download panicked"),
     )
-}
-
-/// One voice's preview clip, as the audio itself rather than as JSON.
-///
-/// The Tauri side hands the page a byte array because IPC is the only channel it has; over
-/// HTTP there is a perfectly good one already, and a hundred kilobytes of MP3 re-encoded as
-/// a JSON array of integers would be three times the size for no gain. The page makes a
-/// blob out of the response either way.
-///
-/// Which of the two kinds of clip this is travels as a header, because the body has to stay
-/// playable audio. The page says it out loud: "spoken here" and "a published recording" are
-/// different claims.
-///
-/// Spawned off the request thread: for an installed voice this runs Piper, and for one that
-/// is not installed it may fetch.
-async fn voice_preview(State(state): State<AppState>, Query(q): Query<VoiceQuery>) -> Response {
-    let engine = state.engine.clone();
-    let voice = q.voice.unwrap_or_default();
-    let made = tokio::task::spawn_blocking(move || crate::voice_preview::preview(&engine, &voice))
-        .await
-        .expect("voice_preview panicked");
-
-    match made {
-        Ok(preview) => Response::builder()
-            .header(header::CONTENT_TYPE, preview.mime)
-            .header("x-aether1-preview-source", preview.source)
-            // Never cached by the browser: an installed voice is re-spoken each press, and
-            // the operator's pronunciation list may have changed since the last one.
-            .header(header::CACHE_CONTROL, "no-store")
-            .body(Body::from(preview.bytes))
-            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
-        Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
-    }
 }
 
 async fn voice_download_status() -> Json<serde_json::Value> {

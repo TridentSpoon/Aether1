@@ -175,9 +175,9 @@ pub fn find_installed_binary(names: &[&str]) -> Option<PathBuf> {
         home_dir().map(|home| home.join(".local").join("bin"))
     };
     // PATH first, then the installer's directory, then Aether1's own Python environment --
-    // a `pip install piper-tts` into that venv leaves `piper` in its bin directory and
-    // nowhere else, which a PATH lookup can never see. Last of the three because a piper
-    // the operator installed through their package manager is the one they chose.
+    // model runtimes installed in the managed venv keep their executables there, which a
+    // PATH lookup can never see. Last of the three because a runtime the operator installed
+    // through their package manager is the one they chose.
     [installer_bin, managed_python_bin_dir()]
         .into_iter()
         .flatten()

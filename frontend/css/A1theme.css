@@ -153,7 +153,7 @@
   border-radius: 4px;
   background: var(--bg-panel);
   cursor: pointer;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 11px;
   line-height: 1.4;
   transition: border-color 0.15s ease;
@@ -241,7 +241,7 @@
   background: transparent;
   color: var(--text-main);
   cursor: pointer;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 11px;
 }
 
@@ -260,7 +260,7 @@
   background: transparent;
   color: var(--text-main);
   cursor: pointer;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 11px;
   text-align: left;
   white-space: nowrap;
@@ -281,7 +281,7 @@
   padding: 4px 6px 2px;
   border-top: 1px solid var(--border-neon);
   color: var(--text-dim);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 9px;
   letter-spacing: 0.1em;
 }
@@ -443,7 +443,7 @@
   border: 0;
   background: var(--viewport-bg);
   color: rgba(255, 255, 255, 0.75);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 11px;
   line-height: 1.5;
   text-align: center;
@@ -485,7 +485,7 @@
 body {
   background-color: var(--bg-core);
   color: var(--text-main);
-  font-family: 'Rajdhani', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
   overflow: hidden;
   height: 100vh;
   width: 100vw;
@@ -826,7 +826,7 @@ select,
   cursor: pointer;
   list-style: none;
   padding: 2px 6px;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--text-dim);
@@ -843,7 +843,7 @@ select,
   max-height: 16rem;
   overflow-y: auto;
   border-top: 1px dashed var(--border-neon);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-dim);
@@ -901,7 +901,7 @@ select,
     grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) 2.6rem;
     align-items: center;
     gap: 0.4rem;
-    font-family: 'Share Tech Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.625rem;
 }
 
@@ -943,7 +943,7 @@ select,
     padding: 1px 0;
     border: 0;
     background: none;
-    font-family: 'Share Tech Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.625rem;
     letter-spacing: 0.08em;
     color: var(--text-dim);
@@ -1011,7 +1011,7 @@ select,
 }
 
 .settings-group-title {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 0.1em;
@@ -1022,7 +1022,7 @@ select,
    reading "Network" tells you what the group is called, not whether your question is
    in it. */
 .settings-group-hint {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.625rem;
     color: var(--text-dim);
 }
@@ -1128,7 +1128,7 @@ select,
     border: 0;
     outline: none;
     color: var(--text-main);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
 }
 
@@ -1145,7 +1145,7 @@ select,
     border-radius: 0.375rem;
     background: transparent;
     color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.72rem;
     text-align: left;
     cursor: pointer;
@@ -1182,7 +1182,7 @@ select,
 
 .settings-nav-empty {
     padding: 0.35rem 0.55rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     color: var(--text-dim);
 }
@@ -1204,7 +1204,7 @@ select,
     border: 1px solid transparent;
     border-radius: 0.375rem;
     color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -1278,7 +1278,7 @@ select,
 .settings-pane-title,
 .settings-pane > .settings-group > .settings-group-summary .settings-group-title {
     margin: 0;
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.95rem;
     font-weight: 700;
     letter-spacing: 0.06em;
@@ -1288,7 +1288,7 @@ select,
 .settings-pane-hint,
 .settings-pane > .settings-group > .settings-group-summary .settings-group-hint {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     color: var(--text-dim);
 }
@@ -1342,7 +1342,7 @@ select,
 
 .avatar-stage-lede {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.72rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1350,7 +1350,7 @@ select,
 
 .avatar-stage-title {
     margin: 0;
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.9rem;
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -1364,7 +1364,7 @@ select,
     background: none;
     border: 0;
     padding: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     letter-spacing: 0.05em;
     color: var(--text-dim);
@@ -1401,7 +1401,7 @@ select,
 .avatar-group-faces { font-size: 1.1rem; line-height: 1.3; letter-spacing: 0.1em; }
 
 .avatar-group-name {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.85rem;
     font-weight: 700;
     letter-spacing: 0.06em;
@@ -1409,13 +1409,13 @@ select,
 }
 
 .avatar-group-tagline {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-highlight);
 }
 
 .avatar-group-blurb {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1426,7 +1426,7 @@ select,
        lengths -- the grid stretches every card to the tallest in its row. */
     margin-top: auto;
     padding-top: 0.35rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.62rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -1463,7 +1463,7 @@ select,
 .avatar-card-face { font-size: 1.6rem; line-height: 1.1; }
 
 .avatar-card-name {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -1471,7 +1471,7 @@ select,
 }
 
 .avatar-card-role {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.62rem;
     line-height: 1.4;
     color: var(--text-dim);
@@ -1481,7 +1481,7 @@ select,
     position: absolute;
     top: 0.3rem;
     right: 0.35rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.5rem;
     letter-spacing: 0.12em;
     color: var(--neon-cyan);
@@ -1504,7 +1504,7 @@ select,
     border: 1px solid var(--border-neon);
     border-radius: 0.3rem;
     background: var(--bg-panel);
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.62rem;
     letter-spacing: 0.12em;
     color: var(--text-highlight);
@@ -1522,7 +1522,7 @@ select,
 .avatar-line-note {
     margin: 0;
     flex: 1 1 14rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.66rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1530,7 +1530,7 @@ select,
 
 .avatar-locked-note {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.66rem;
     color: var(--text-dim);
     font-style: italic;
@@ -1559,7 +1559,7 @@ select,
 
 .avatar-preview-structure {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     letter-spacing: 0.1em;
     color: var(--text-accent);
@@ -1567,7 +1567,7 @@ select,
 
 .avatar-preview-note {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1577,7 +1577,7 @@ select,
 
 .avatar-detail-line {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -1586,7 +1586,7 @@ select,
 
 .avatar-detail-name {
     margin: 0;
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 1.15rem;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -1595,7 +1595,7 @@ select,
 
 .avatar-detail-form {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.72rem;
     line-height: 1.55;
     color: var(--text-main);
@@ -1614,7 +1614,7 @@ select,
 }
 
 .avatar-fact-label {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.58rem;
     letter-spacing: 0.12em;
     text-transform: uppercase;
@@ -1623,7 +1623,7 @@ select,
 
 .avatar-fact-body {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     line-height: 1.55;
     color: var(--text-main);
@@ -1631,7 +1631,7 @@ select,
 
 .avatar-fact-sub {
     margin: 0.2rem 0 0 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1650,7 +1650,7 @@ select,
 .avatar-voice-field { display: flex; flex-direction: column; gap: 0.15rem; }
 
 .avatar-voice-field-label {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.55rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -1665,7 +1665,7 @@ select,
     border: 1px solid var(--border-neon);
     border-radius: 0.25rem;
     padding: 0.3rem 0.35rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
 }
 
@@ -1678,7 +1678,7 @@ select,
 }
 
 .avatar-voice-note {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1688,7 +1688,7 @@ select,
 
 .avatar-detail-current {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     color: var(--neon-cyan);
 }
@@ -1718,21 +1718,21 @@ select,
 .avatar-entry-body, .settings-entry-body { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
 
 .avatar-entry-label, .settings-entry-label {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.58rem;
     letter-spacing: 0.12em;
     color: var(--text-accent);
 }
 
 .avatar-entry-name, .settings-entry-name {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.9rem;
     font-weight: 700;
     color: var(--text-main);
 }
 
 .avatar-entry-meta, .settings-entry-meta {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.64rem;
     color: var(--text-dim);
     overflow: hidden;
@@ -1743,7 +1743,7 @@ select,
 .avatar-entry-go, .settings-entry-go {
     margin-left: auto;
     flex: 0 0 auto;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     letter-spacing: 0.06em;
     color: var(--neon-cyan);
@@ -1814,7 +1814,7 @@ select,
 
 .setup-more > summary {
     cursor: pointer;
-    font-family: 'Share Tech Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6875rem;
     color: var(--neon-cyan);
     list-style: none;
@@ -1926,7 +1926,7 @@ select,
     margin-top: 0.5rem;
     padding-top: 0.5rem;
     border-top: 1px solid var(--border-neon);
-    font-family: 'Share Tech Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.75rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -1958,7 +1958,7 @@ select,
 }
 
 .no-brain-head {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-weight: 700;
     font-size: 1rem;
     letter-spacing: 0.08em;
@@ -1967,7 +1967,7 @@ select,
 }
 
 .no-brain-body {
-    font-family: 'Share Tech Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.8125rem;
     line-height: 1.5;
     color: #fde68a;
@@ -2148,7 +2148,7 @@ select,
     border-radius: 3px;
     background: rgba(0, 240, 255, 0.05);
     color: var(--text-accent);
-    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 11px;
     line-height: 1.4;
     white-space: nowrap;
@@ -2166,7 +2166,7 @@ select,
     border-radius: 3px;
     background: rgba(0, 240, 255, 0.05);
     color: var(--text-accent);
-    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 10px;
     line-height: 1.5;
     cursor: pointer;
@@ -2282,7 +2282,7 @@ select,
     gap: 0.35rem;
     padding: 0 0.6rem;
     white-space: nowrap;
-    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     line-height: 1.1;
     border-left: 1px solid rgba(0, 240, 255, 0.18);
 }
@@ -2411,7 +2411,7 @@ select,
     border: 1px solid var(--border-neon-bright);
     background: var(--bg-panel-hover);
     color: var(--text-accent);
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 1.9rem;
     font-weight: 700;
     text-transform: uppercase;
@@ -2428,7 +2428,7 @@ select,
 
 .profile-identity-meta {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     color: var(--text-dim);
 }
@@ -2442,7 +2442,7 @@ select,
 
 .profile-section-title {
     margin: 0;
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.8rem;
     letter-spacing: 0.06em;
     color: var(--text-main);
@@ -2451,7 +2451,7 @@ select,
 .profile-section-hint,
 .profile-card-hint {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     line-height: 1.45;
     color: var(--text-dim);
@@ -2473,7 +2473,7 @@ select,
 .profile-stat { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
 
 .profile-stat-value {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 1.35rem;
     font-weight: 700;
     color: var(--text-accent);
@@ -2481,7 +2481,7 @@ select,
 }
 
 .profile-stat-label {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     color: var(--text-dim);
     text-align: center;
@@ -2508,7 +2508,7 @@ select,
 
 .profile-card-title {
     margin: 0;
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.75rem;
     letter-spacing: 0.05em;
     color: var(--text-main);
@@ -2543,7 +2543,7 @@ select,
 .profile-activity-months {
     display: flex;
     justify-content: space-between;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.55rem;
     color: var(--text-dim);
 }
@@ -2561,7 +2561,7 @@ select,
     align-items: baseline;
     justify-content: space-between;
     gap: 0.75rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-dim);
 }
@@ -2577,7 +2577,7 @@ select,
     align-items: baseline;
     justify-content: space-between;
     gap: 0.5rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-main);
 }
@@ -2601,16 +2601,16 @@ select,
 }
 
 .profile-device-name {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     color: var(--text-main);
     overflow-wrap: anywhere;
 }
 
-.profile-device-meta { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; color: var(--text-dim); }
+.profile-device-meta { font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 0.58rem; color: var(--text-dim); }
 
 .profile-empty {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -2630,7 +2630,7 @@ select,
     border: 1px dashed var(--border-neon);
     border-radius: 0.375rem;
     background: var(--bg-panel-hover);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.8rem;
     color: var(--text-main);
     overflow-wrap: anywhere;
@@ -2655,7 +2655,7 @@ select,
 }
 
 .hub-title {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 1.05rem;
     font-weight: 700;
     letter-spacing: 0.04em;
@@ -2663,7 +2663,7 @@ select,
 }
 
 .hub-sub {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     color: var(--text-dim);
 }
@@ -2686,7 +2686,7 @@ select,
     border: 1px solid var(--border-neon);
     border-radius: 999px;
     background: var(--bg-panel);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     white-space: nowrap;
 }
@@ -2720,7 +2720,7 @@ select,
     border-radius: 999px;
     background: transparent;
     color: var(--text-dim);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     cursor: pointer;
     transition: color 0.15s ease, background 0.15s ease;
@@ -2755,7 +2755,7 @@ select,
     border-radius: 999px;
     background: var(--bg-core);
     color: var(--text-main);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
 }
 
@@ -2770,7 +2770,7 @@ select,
     border-radius: 0.35rem;
     background: var(--bg-core);
     color: var(--text-main);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
 }
 
@@ -2803,7 +2803,7 @@ select,
 }
 
 .hub-list-title {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-dim);
     overflow: hidden;
@@ -2858,7 +2858,7 @@ select,
 .hub-row-body { min-width: 0; flex: 1 1 auto; }
 
 .hub-row-name {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.72rem;
     color: var(--text-main);
     /* A span is inline, and overflow/text-overflow do nothing to an inline box -- so
@@ -2872,7 +2872,7 @@ select,
 .hub-row-meta {
     display: flex;
     gap: 0.5rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     color: var(--text-dim);
 }
@@ -2917,7 +2917,7 @@ select,
 
 .provider-account-name,
 .provider-account-meta {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     display: block;
     overflow: hidden;
     white-space: nowrap;
@@ -2929,7 +2929,7 @@ select,
 .provider-account-answering { color: var(--text-accent); }
 
 .provider-account-note {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -2937,7 +2937,7 @@ select,
 
 .hub-empty {
     padding: 0.75rem 0.5rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-dim);
     line-height: 1.5;
@@ -2955,7 +2955,7 @@ select,
 }
 
 .hub-detail-name {
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.95rem;
     font-weight: 700;
     color: var(--text-main);
@@ -2963,7 +2963,7 @@ select,
 }
 
 .hub-detail-sub {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     color: var(--text-dim);
 }
@@ -2978,7 +2978,7 @@ select,
     border: 1px solid var(--border-neon);
     border-radius: 0.3rem;
     background: var(--bg-core);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     color: var(--text-dim);
 }
@@ -3002,19 +3002,8 @@ select,
     background: var(--bg-core);
 }
 
-/* The play button beside a voice. Fixed width so a list of fourteen does not shuffle
-   sideways when one of them changes from the triangle to the stop square, and tabular
-   digits are irrelevant here but the monospace is not: ▶, ■ and … have very different
-   natural widths. */
-.voice-preview-btn {
-    flex: 0 0 auto;
-    min-width: 2rem;
-    text-align: center;
-    line-height: 1;
-}
-
 .hub-action-size {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-main);
 }
@@ -3043,7 +3032,7 @@ select,
     border: 1px solid var(--border-neon);
     border-radius: 0.35rem;
     padding: 0.4rem 0.5rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.72rem;
     color: var(--text-main);
 }
@@ -3056,7 +3045,7 @@ select,
 
 .words-arrow {
     flex: 0 0 auto;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     color: var(--text-dim);
     white-space: nowrap;
@@ -3092,7 +3081,7 @@ select,
 }
 
 .hub-blurb {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     line-height: 1.55;
     color: var(--text-dim);
@@ -3108,7 +3097,7 @@ select,
     padding: 0.35rem 0.5rem;
     border: 1px solid rgba(125, 165, 201, 0.25);
     border-radius: 0.35rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
 }
 
 .hub-fact-label { font-size: 0.55rem; letter-spacing: 0.08em; color: var(--text-dim); }
@@ -3167,7 +3156,7 @@ select,
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
-    font-family: 'Orbitron', sans-serif;
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
     font-size: 0.8rem;
     letter-spacing: 0.05em;
     color: var(--text-main);
@@ -3175,7 +3164,7 @@ select,
 
 .net-card-hint {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -3187,7 +3176,7 @@ select,
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     letter-spacing: 0.04em;
     color: var(--text-dim);
@@ -3212,7 +3201,7 @@ select,
     border: 1px solid var(--text-accent);
     border-radius: 0.375rem;
     background: color-mix(in srgb, var(--text-accent) 18%, transparent);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-accent);
     cursor: pointer;
@@ -3239,7 +3228,7 @@ select,
     padding: 0.5rem 0.875rem;
     border-top: 1px solid var(--border-neon);
     background: var(--bg-panel-hover);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.63rem;
     line-height: 1.5;
     color: var(--neon-amber);
@@ -3308,14 +3297,14 @@ select,
 
 .net-row-title {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     color: var(--text-main);
 }
 
 .net-row-hint {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     line-height: 1.5;
     color: var(--text-dim);
@@ -3326,7 +3315,7 @@ select,
     flex: 0 0 auto;
     max-width: 45%;
     text-align: right;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.68rem;
     color: var(--text-accent);
     overflow-wrap: anywhere;
@@ -3346,7 +3335,7 @@ select,
 
 .net-phrase-label {
     margin: 0 0 0.35rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     letter-spacing: 0.04em;
     color: var(--neon-amber);
@@ -3354,7 +3343,7 @@ select,
 
 .net-phrase-words {
     margin: 0 0 0.35rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.8rem;
     line-height: 1.6;
     color: var(--text-accent);
@@ -3434,7 +3423,7 @@ select,
     height: 1.5rem;
     border: 1px solid var(--border-neon);
     border-radius: 999px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.65rem;
     color: var(--text-dim);
     background: var(--bg-panel);
@@ -3475,7 +3464,7 @@ select,
 
 .pair-address {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.7rem;
     color: var(--text-accent);
     word-break: break-all;
@@ -3484,7 +3473,7 @@ select,
 /* Read across a room and typed on a phone, so it is the largest thing in the pane. */
 .pair-code {
     margin: 0.6rem 0 0.3rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 1.5rem;
     letter-spacing: 0.22em;
     color: var(--text-accent);
@@ -3578,7 +3567,7 @@ select,
 .theme-palette-bar:first-child { flex: 2 1 0; }
 
 .theme-palette-name {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.58rem;
     letter-spacing: 0.04em;
     color: var(--text-dim);
@@ -3654,7 +3643,7 @@ select,
 }
 
 .a1-switch-text {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.72rem;
     line-height: 1.35;
     color: var(--text-main);
@@ -3694,7 +3683,7 @@ select,
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  font-family: 'Share Tech Mono', monospace;
+  font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   font-size: 12px;
   line-height: 1;
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
@@ -3767,7 +3756,7 @@ select,
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     letter-spacing: 0.04em;
     color: var(--text-dim);
@@ -3805,7 +3794,7 @@ select,
 /* Who decided. Quiet, because it is the second thing read, and never hidden, because it is
    the whole reason this card exists. */
 .code-effective-layer {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.55rem;
     letter-spacing: 0.04em;
     color: var(--text-muted);
@@ -3822,7 +3811,7 @@ select,
 .code-effective-exceptions { margin-top: 0.2rem; }
 
 .code-effective-exceptions > summary {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     color: var(--text-muted);
     cursor: pointer;
@@ -3841,7 +3830,7 @@ select,
 }
 
 .code-effective-exceptions li {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Noto Sans Mono', ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
     font-size: 0.6rem;
     line-height: 1.5;
     color: var(--text-dim);

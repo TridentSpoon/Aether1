@@ -16,6 +16,7 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+#![recursion_limit = "256"]
 
 mod agents;
 mod audio_devices;
@@ -70,7 +71,6 @@ mod terminal;
 mod tools;
 mod vault;
 mod voice_download;
-mod voice_preview;
 mod voice_setup;
 mod watchers;
 mod websearch;
@@ -879,6 +879,45 @@ fn emit_update_progress<R: tauri::Runtime>(
     }
 }
 
+/// The last `update-progress` of an update that finished, or failed, without this process
+/// exiting.
+///
+/// A rebuild that succeeds never needs one: `perform_update_core` relaunches and exits, and
+/// the strip goes with the window. The two that do are a failure, and a release-mode
+/// download, which ends with a file and leaves the app running. Before these existed the
+/// only consumer of `update-progress` was registered inside the Settings button's own click
+/// handler, so an update started from a conversation emitted five steps into nothing and
+/// then went quiet whatever happened -- while the companion had already told the operator
+/// the app would restart itself.
+///
+/// A flag rather than a label the frontend matches on: "Update failed" is a sentence, and a
+/// sentence is the wrong thing for one half of a program to recognise the other half's
+/// outcome by.
+fn emit_update_outcome<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    label: &str,
+    detail: &str,
+    failed: bool,
+) {
+    let _ = app.emit(
+        "update-progress",
+        serde_json::json!({
+            "step": UPDATE_STEPS,
+            "steps": UPDATE_STEPS,
+            "label": label,
+            "detail": detail,
+            "percent": 100,
+            "failed": failed,
+            "done": !failed,
+        }),
+    );
+    if failed {
+        eprintln!("[AETHER1] Update failed: {label} -- {detail}");
+    } else {
+        println!("[AETHER1] Update: {label} -- {detail}");
+    }
+}
+
 /// Runs the rebuild with its output read rather than inherited, so the HUD can show which
 /// crate cargo is on right now, and so a failure arrives as the compiler's own last words
 /// rather than as "rebuild did not succeed" -- which was the whole of what an operator got
@@ -1369,17 +1408,23 @@ fn perform_update<R: tauri::Runtime>(
 /// so the frontend only ever observes this call either hang (app about to exit) or reject.
 #[tauri::command(async)]
 fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
-    perform_update_core(&app).map_err(|(stage, msg)| {
-        // Which step it died on, in front of the message. An operator reading "fatal:
-        // couldn't find remote ref" has no way of telling the fetch from the rebuild
-        // otherwise, and the two have nothing in common to try next.
-        let where_it_failed = match stage {
-            UpdateStage::Pull => "Pulling the latest changes failed",
-            UpdateStage::Build => "Rebuilding failed",
-            UpdateStage::Relaunch => "Restarting the new build failed",
-        };
-        format!("{where_it_failed}: {msg}")
-    })
+    perform_update_core(&app).map_err(|(stage, msg)| update_failure(stage, &msg))
+}
+
+/// Which step it died on, in front of the message. An operator reading "fatal: couldn't
+/// find remote ref" has no way of telling the fetch from the rebuild otherwise, and the two
+/// have nothing in common to try next.
+///
+/// Shared by the HUD's button and by the companion's `install_update` tool, which starts
+/// the same install from a conversation and has to report the same failure in the same
+/// words -- see `tools::update`.
+fn update_failure(stage: UpdateStage, msg: &str) -> String {
+    let where_it_failed = match stage {
+        UpdateStage::Pull => "Pulling the latest changes failed",
+        UpdateStage::Build => "Rebuilding failed",
+        UpdateStage::Relaunch => "Restarting the new build failed",
+    };
+    format!("{where_it_failed}: {msg}")
 }
 
 /// Is anything AETHER1 draws actually on a screen right now?
@@ -1870,6 +1915,27 @@ fn forget_download_rust(model_name: String) -> serde_json::Value {
 #[tauri::command(async)]
 fn voice_catalogue_rust() -> serde_json::Value {
     commands::voice_catalogue()
+}
+
+#[tauri::command(async)]
+fn system_voices_rust() -> serde_json::Value {
+    commands::available_system_voices()
+}
+
+#[tauri::command(async)]
+fn test_system_voice_rust(engine: tauri::State<LlmEngine>, voice: String) -> serde_json::Value {
+    match commands::test_system_voice(&engine, &voice) {
+        Ok((path, mut report)) => {
+            report["path"] = serde_json::json!(path.to_string_lossy());
+            report
+        }
+        Err(report) => report,
+    }
+}
+
+#[tauri::command(async)]
+fn uninstall_managed_piper_rust() -> serde_json::Value {
+    commands::uninstall_managed_piper()
 }
 
 #[tauri::command(async)]
@@ -2529,17 +2595,6 @@ fn speech_clip_rust(
     Ok(serde_json::json!({ "bytes": bytes, "mime": mime }))
 }
 
-/// One voice's preview clip, as bytes, for the play button in the voice picker.
-///
-/// Bytes over IPC rather than a path for exactly the reason `speech_clip_rust` gives: an
-/// `asset://` URL is a different origin, the page routes clips through a
-/// `MediaElementAudioSourceNode`, and WebKit mutes that node outright for anything that
-/// would taint the page's origin -- silence, with nothing in any log to say why.
-#[tauri::command(async)]
-fn voice_preview_rust(engine: tauri::State<LlmEngine>, voice: String) -> serde_json::Value {
-    commands::voice_preview(&engine, voice)
-}
-
 /// Builds (but does not show-if-already-open -- callers check first) the floating "desktop
 /// sprite" window: a small, transparent, undecorated, always-on-top webview showing just the
 /// hologram avatar (frontend/sprite.html reuses the same Three.js avatar code as the main
@@ -3008,6 +3063,7 @@ fn announce_crash<R: tauri::Runtime>(
     crash: &watchers::crash::Crash,
     amber: Option<tauri::image::Image<'static>>,
     plain: Option<tauri::image::Image<'static>>,
+    own_renderer: bool,
 ) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         if let Some(amber) = amber {
@@ -3039,7 +3095,7 @@ fn announce_crash<R: tauri::Runtime>(
         .notification()
         .builder()
         .title(crash.headline())
-        .body(if webview::is_renderer_process(&crash.program) {
+        .body(if own_renderer {
             // AETHER1's own window process. Saying "open AETHER1 to look into it" about the
             // thing that draws AETHER1 would be asking the operator to use what just broke.
             "This is AETHER1's own window process. The next launch will start it with the \
@@ -3171,6 +3227,8 @@ fn build_llm_engine() -> LlmEngine {
     // for the same reason `net::install` is: it is the single path every entry point
     // shares, and it has to happen before anything asks a model a question.
     tools::apply_default_on(engine.db());
+    // And the one-time move off the old default name, here for the same reason.
+    persona_voice::apply_default_name(engine.db());
     // Before anything reads the provider: a mislabelled Ollama is the difference between a
     // companion that can search and one that cannot. See the function for why.
     llm::adopt_ollama_behind_openai_label(engine.db());
@@ -3359,7 +3417,9 @@ fn main() {
             download_status_rust,
             forget_download_rust,
             voice_catalogue_rust,
-            voice_preview_rust,
+            system_voices_rust,
+            test_system_voice_rust,
+            uninstall_managed_piper_rust,
             start_graft_install_rust,
             graft_install_status_rust,
             forget_graft_install_rust,
@@ -3691,6 +3751,92 @@ fn main() {
             // `git pull`/`cargo build` and could both relaunch the app.
             let update_in_progress = Arc::new(AtomicBool::new(false));
 
+            /* The companion's way in to the same install. `install_update` is a tool call
+            and has no AppHandle, so the app hands it one of these at startup; outside the
+            desktop app nothing is installed and the tool says so rather than pretending.
+            See `tools::update` for the log that made the tool necessary.
+
+            It shares the tray's own debounce flag deliberately: two concurrent updates
+            would be two concurrent `git pull`s and two rebuilds racing to relaunch, and
+            the operator has two ways to start one. */
+            {
+                let app = app.handle().clone();
+                let in_progress = update_in_progress.clone();
+                tools::update::set_installer(Box::new(move || {
+                    if in_progress
+                        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        return Err("an update is already running -- its progress is in \
+                                    Settings > Updates"
+                            .to_string());
+                    }
+                    let app = app.clone();
+                    let in_progress = in_progress.clone();
+                    /* The two update mechanisms are two different acts, and this is
+                    where they part. `perform_update_core` refuses `Mode::Release` outright
+                    and says why, so sending an installed copy down it would have the tool
+                    promising a rebuild and a restart while a background thread failed
+                    immediately -- the operator approves the card and nothing ever happens.
+                    An installed copy's update is the signed bundle, which is what
+                    `download_update_to_disk` fetches and verifies. */
+                    let release_mode = releases::mode() == releases::Mode::Release;
+                    /* Started and reported, not waited for, on either path. A rebuild takes
+                    minutes and ends by relaunching the app, and a bundle is half a
+                    gigabyte: a call that blocked on either would hold the turn open past
+                    any sensible timeout, and on the rebuild it would hold it open until the
+                    process the turn is running in exited. The operator would approve the
+                    card and then watch a reply that never arrived. Progress and outcome go
+                    to `update-progress`, which the HUD now listens to for the whole
+                    session rather than only while the Settings button is in flight. */
+                    std::thread::spawn(move || {
+                        if release_mode {
+                            emit_update_progress(
+                                &app,
+                                1,
+                                "Downloading the update",
+                                "fetching the signed bundle",
+                                5,
+                            );
+                            match download_update_to_disk(&app) {
+                                Ok((path, tag)) => emit_update_outcome(
+                                    &app,
+                                    &format!("Downloaded {tag}"),
+                                    &path.display().to_string(),
+                                    false,
+                                ),
+                                Err(e) => emit_update_outcome(&app, "Download failed", &e, true),
+                            }
+                        } else if let Err((stage, msg)) = perform_update_core(&app) {
+                            // The operator approved this from a conversation, so the
+                            // failure has to reach the same panel the progress did --
+                            // otherwise it fails in the terminal and nowhere else.
+                            emit_update_outcome(
+                                &app,
+                                "Update failed",
+                                &update_failure(stage, &msg),
+                                true,
+                            );
+                        }
+                        in_progress.store(false, Ordering::Relaxed);
+                    });
+                    Ok(if release_mode {
+                        "The download has started: it is fetching the signed bundle and \
+                         checking its signature, and its progress is in the header strip and \
+                         under Settings > Updates. Tell the operator that, and that nothing \
+                         installs itself -- what they get is a verified file, and running it \
+                         is their own last step."
+                            .to_string()
+                    } else {
+                        "The update has started: it is fetching, rebuilding and will then \
+                         restart the app. Its progress is in the header strip and under \
+                         Settings > Updates. Tell the operator that, and that the app will \
+                         restart itself when it is done."
+                            .to_string()
+                    })
+                }));
+            }
+
             let tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip(format!(
@@ -3917,6 +4063,8 @@ fn main() {
                         {
                             continue;
                         }
+                        #[cfg(target_os = "linux")]
+                        webview::refresh_own_renderers();
                         let muted = watchers::crash::muted_programs(
                             engine
                                 .db()
@@ -3938,10 +4086,21 @@ fn main() {
                             // The webview's own renderer dying is a crash AETHER1 can do
                             // something about rather than merely report: remembered here,
                             // the next launch starts it on a rung that works.
-                            if webview::is_renderer_process(&crash.program) {
+                            #[cfg(target_os = "linux")]
+                            let own_renderer =
+                                webview::take_own_renderer_crash(crash.pid, &crash.program);
+                            #[cfg(not(target_os = "linux"))]
+                            let own_renderer = false;
+                            if own_renderer {
                                 webview::note_crash();
                             }
-                            announce_crash(&app_handle, &crash, amber.clone(), plain.clone());
+                            announce_crash(
+                                &app_handle,
+                                &crash,
+                                amber.clone(),
+                                plain.clone(),
+                                own_renderer,
+                            );
                         }
                     }
                 });

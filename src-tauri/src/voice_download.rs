@@ -79,113 +79,14 @@ pub struct Voice {
 /// HUD sends is looked up here and the URL is built from what this table says; a name that
 /// is not in it is refused. Nothing the operator or the page can type becomes part of a URL
 /// or a file path, so there is no request to redirect and no directory to traverse out of.
-///
-/// **Every entry has to exist at that quality, and nothing here can check that.** The table
-/// carried `en_US-kathleen-medium` for months; Hugging Face only publishes kathleen at
-/// `low`, so the one thing the operator saw was a progress bar that reached "Could not fetch
-/// the voice: http status 404" -- a failure that looks like a broken app rather than a
-/// catalogue mistake, and one no test here can reach, because the only authority on what
-/// exists is the other end of the wire. `catalogue_entries_are_self_consistent` pins the
-/// shape, and `scripts/check_voice_catalogue.sh` is what actually asks. Before adding a
-/// voice, check it against the Piper project's own list rather than guessing the quality
-/// from the ones beside it.
-const CATALOGUE: &[(&str, &str, &str, &str)] = &[
-    (
-        "en_GB-alba-medium",
-        "British, Scottish, female",
-        "about 60 MB",
-        "en/en_GB/alba/medium",
-    ),
-    (
-        "en_GB-alan-medium",
-        "British, English, male",
-        "about 60 MB",
-        "en/en_GB/alan/medium",
-    ),
-    (
-        "en_GB-cori-medium",
-        "British, English, female",
-        "about 60 MB",
-        "en/en_GB/cori/medium",
-    ),
-    (
-        "en_GB-northern_english_male-medium",
-        "British, northern English, male",
-        "about 60 MB",
-        "en/en_GB/northern_english_male/medium",
-    ),
-    (
-        "en_US-amy-medium",
-        "American, female",
-        "about 60 MB",
-        "en/en_US/amy/medium",
-    ),
-    (
-        "en_US-arctic-medium",
-        "American, 18 speakers in one file",
-        "about 75 MB",
-        "en/en_US/arctic/medium",
-    ),
-    (
-        "en_US-hfc_female-medium",
-        "American, female",
-        "about 60 MB",
-        "en/en_US/hfc_female/medium",
-    ),
-    (
-        "en_US-hfc_male-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/hfc_male/medium",
-    ),
-    (
-        "en_US-john-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/john/medium",
-    ),
-    (
-        "en_US-kristin-medium",
-        "American, female",
-        "about 60 MB",
-        "en/en_US/kristin/medium",
-    ),
-    (
-        "en_US-lessac-medium",
-        "American, female, clear and neutral",
-        "about 60 MB",
-        "en/en_US/lessac/medium",
-    ),
-    (
-        "en_US-ryan-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/ryan/medium",
-    ),
-    (
-        "en_US-ljspeech-medium",
-        "American, female, expressive",
-        "about 60 MB",
-        "en/en_US/ljspeech/medium",
-    ),
-    (
-        "en_US-norman-medium",
-        "American, male",
-        "about 60 MB",
-        "en/en_US/norman/medium",
-    ),
-];
+/// A voice belongs here only after its model card and underlying dataset terms have been
+/// reviewed. Lessac is deliberately absent: its card points to a non-commercial dataset.
+/// The catalogue is currently empty until the remaining cards and training datasets have
+/// been reviewed. Users may still point Piper at a model they are entitled to use.
+const CATALOGUE: &[(&str, &str, &str, &str)] = &[];
 
 fn find(name: &str) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
     CATALOGUE.iter().copied().find(|(n, _, _, _)| *n == name)
-}
-
-/// Where this voice's files sit under the Piper collection, or None for a name the table
-/// does not carry. The preview fetcher needs the same path this module builds its own URLs
-/// from, and it needs it from here rather than from a second copy: a sample URL assembled
-/// from a name the page supplied would be exactly the traversal the fixed table prevents.
-pub fn remote_dir(name: &str) -> Option<&'static str> {
-    find(name).map(|(_, _, _, dir)| dir)
 }
 
 /// The catalogue, each entry saying whether it is already here.

@@ -5,7 +5,7 @@
 #
 # Must run on Windows (needs cargo build --release for the .exe, and iscc.exe to compile
 # the installer) -- this is what release.yml's windows-latest job runs. Needs internet
-# access to fetch Piper/whisper.cpp/the models; the *installer it produces* needs none.
+# access to fetch whisper.cpp/the Whisper model; the *installer it produces* needs none.
 #
 # Usage: powershell -File scripts\package_offline_windows.ps1 [-OutDir dist]
 
@@ -23,8 +23,6 @@
 param(
     [string]$OutDir = "dist",
     [string]$SignedExe = "",
-    [string]$PiperVersion = "2023.11.14-2",
-    [string]$PiperVoice = "en_US-lessac-medium",
     [string]$WhisperCppRef = "v1.9.3",
     [string]$WhisperModel = "small"
 )
@@ -35,7 +33,7 @@ Set-Location $RepoRoot
 
 $Stage = Join-Path $env:TEMP "aether1-offline-stage-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $Stage | Out-Null
-New-Item -ItemType Directory -Path "$Stage\piper", "$Stage\whisper", "$Stage\models" | Out-Null
+New-Item -ItemType Directory -Path "$Stage\whisper", "$Stage\models" | Out-Null
 
 try {
     Write-Host "======================================================================"
@@ -54,20 +52,6 @@ try {
         Pop-Location
         Copy-Item "src-tauri\target\release\aether1.exe" "$Stage\aether1.exe"
     }
-
-    Write-Host "Fetching Piper $PiperVersion (TTS)..."
-    $piperZip = "$Stage\piper.zip"
-    Invoke-WebRequest -Uri "https://github.com/rhasspy/piper/releases/download/$PiperVersion/piper_windows_amd64.zip" -OutFile $piperZip
-    # The zip unpacks to a piper\ directory holding piper.exe plus the DLLs it needs
-    # (onnxruntime.dll, piper_phonemize.dll, etc.) -- those all have to sit next to the
-    # exe, which Inno Setup preserves as-is by installing this whole directory verbatim.
-    Expand-Archive -Path $piperZip -DestinationPath $Stage -Force
-    Remove-Item $piperZip
-
-    Write-Host "Fetching the $PiperVoice voice..."
-    $voiceBase = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
-    Invoke-WebRequest -Uri "$voiceBase/$PiperVoice.onnx" -OutFile "$Stage\models\$PiperVoice.onnx"
-    Invoke-WebRequest -Uri "$voiceBase/$PiperVoice.onnx.json" -OutFile "$Stage\models\$PiperVoice.onnx.json"
 
     Write-Host "Building whisper.cpp $WhisperCppRef (STT)..."
     $whisperSrc = "$Stage\whisper.cpp-src"
@@ -102,7 +86,7 @@ try {
             throw "iscc.exe (Inno Setup) not found -- install it or add it to PATH."
         }
     }
-    & $iscc "/DStageDir=$Stage" "/DOutDir=$OutDirFull" "/DPiperVoice=$PiperVoice" "/DWhisperModel=$WhisperModel" `
+    & $iscc "/DStageDir=$Stage" "/DOutDir=$OutDirFull" "/DWhisperModel=$WhisperModel" `
         "installer\aether1.iss"
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
 

@@ -5,6 +5,46 @@
  * Genesis, and Model Scanner.
  */
 
+/* Aurora's nicknames, one per cloud voice, mirroring persona_voice::VOICE_NAMES in the Rust
+   half. The name was chosen for what it shortens to, and the shortening is not a second
+   decision: picking a voice picks the name that sounds like it, so the Settings pane moves
+   the name when the voice changes -- but only while the name is still one nobody typed (see
+   isUnchosenCompanionName). Both halves have to agree, because either can be the one that
+   answers first on a fresh install. */
+const COMPANION_VOICE_NAMES = {
+    'en-US-AriaNeural': 'Aurora',
+    'en-US-JennyNeural': 'Rora',
+    'en-US-GuyNeural': 'Rory',
+    'en-US-DavisNeural': 'Auro',
+    'en-US-EricNeural': 'Auro',
+    'en-GB-SoniaNeural': 'Aura',
+    'en-GB-LibbyNeural': 'Rora',
+    'en-GB-RyanNeural': 'Rory',
+    'en-GB-ThomasNeural': 'Auro',
+    'en-AU-NatashaNeural': 'Aura',
+    'en-AU-WilliamNeural': 'Rory',
+    'ja-JP-NanamiNeural': 'Aura'
+};
+
+/* The name before Aurora. Here only so that an install still carrying it is recognised as
+   one that never chose -- persona_voice::LEGACY_DEFAULT_NAME says the rest. */
+const LEGACY_COMPANION_NAME = 'HALCY';
+const DEFAULT_COMPANION_NAME = 'Aurora';
+
+function companionNameForVoice(voice) {
+    return COMPANION_VOICE_NAMES[voice] || DEFAULT_COMPANION_NAME;
+}
+
+/* Whether a name in the field is one nobody typed, and may therefore follow the voice. A
+   name from outside the Aurora family was the operator's own and is never moved. */
+function isUnchosenCompanionName(name) {
+    const trimmed = (name || '').trim().toLowerCase();
+    if (!trimmed) return true;
+    if (trimmed === LEGACY_COMPANION_NAME.toLowerCase()) return true;
+    if (trimmed === DEFAULT_COMPANION_NAME.toLowerCase()) return true;
+    return Object.values(COMPANION_VOICE_NAMES).some(n => n.toLowerCase() === trimmed);
+}
+
 const AVATAR_DISPLAY_NAMES = {
     halcy: 'HALCY',
     nexus: 'THE NEXUS',
@@ -372,7 +412,7 @@ document.addEventListener('DOMContentLoaded', () => {
        startWaitFeedback below. */
     let hasAnsweredThisSession = false;
     let autoSpeak = true;
-    let currentAgentName = "HALCY";
+    let currentAgentName = DEFAULT_COMPANION_NAME;
     let currentAvatar = localStorage.getItem('aether_avatar') || 'a1';
 
     /* The operator's own name, as the profile knows it -- kept here once it has been read
@@ -625,9 +665,13 @@ document.addEventListener('DOMContentLoaded', () => {
        to switch to, and defaulting it to Custom would hand you the fallback directive without
        saying so. It keeps whatever you had. */
     const AVATAR_PRESETS = {
+        /* The default avatar, so its pairing is the default companion: Aurora, in the
+           voice whose nickname is Aurora. Every preset here is a name and a voice chosen
+           together, which is the same rule the voice picker follows for the nicknames --
+           see COMPANION_VOICE_NAMES. */
         a1: {
-            name: 'AURORA1', persona: 'default', voice: 'en-GB-SoniaNeural',
-            greeting: '🅰️ **Aurora1 online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
+            name: 'Aurora', persona: 'default', voice: 'en-US-AriaNeural',
+            greeting: '🅰️ **Aurora online.** I read this machine -- logs, services, load, what changed. Ask me what is wrong with it.'
         },
         halcy: {
             name: 'HALCY', persona: 'halcy', voice: 'en-US-JennyNeural',
@@ -1156,10 +1200,8 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    /* Both voices, named, because they are two different answers to "what does it sound
-       like": the cloud voice and the Piper model on this machine. Which of the two actually
-       speaks is decided at the moment of speech (see commands::synthesize_speech), and an
-       operator running local-only wants to read the second one. */
+    /* Both optional voice choices, named: the cloud voice and the Piper model on this
+       machine. The system voice remains the default. */
     function avatarVoiceLine(persona) {
         const parts = [];
         if (persona.voice) parts.push(persona.voice);
@@ -1226,6 +1268,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 // the download list in Voice & Sound.
                 label: `${v.name} — ${v.label}${v.installed ? '' : ' (not downloaded)'}`,
             })), persona.default_local_voice, persona.local_voice);
+            if (lists.local.length === 0) {
+                note.textContent = 'Piper models are unavailable until their model and dataset licenses are reviewed. You can still configure a model you have rights to use in Voice & Sound.';
+                local.disabled = true;
+            } else {
+                local.disabled = false;
+            }
         }).catch((e) => {
             console.warn('Could not load the voice lists', e);
             note.textContent = 'The voice lists could not be loaded, so this avatar keeps '
@@ -3087,15 +3135,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const status = IS_TAURI
                 ? await tauriInvoke('voice_status_rust')
                 : await toolsApi('/api/voice/status');
-            // Only speaking has ever had a cloud fallback. Listening is local or it does
-            // not happen -- saying "cloud" there told the operator a missing whisper.cpp
-            // still worked over the network, which was never true. And with local-only
-            // mode on, speaking has no fallback either.
+            // Speech recognition is local or it does not happen -- saying "cloud" there
+            // told the operator a missing whisper.cpp still worked over the network, which
+            // was never true. TTS cloud is an explicit choice only.
             const line = (label, part, hasCloudFallback) => {
                 if (part.local) {
-                    return `<span class="text-emerald-400">✔</span> ${label}: local (${part.binary.split('/').pop()})`;
+                    const engineLabel = label === 'Speaking' && status.tts_engine === 'local'
+                        ? 'local model' : 'system';
+                    return `<span class="text-emerald-400">✔</span> ${label}: ${engineLabel} (${part.binary.split('/').pop()})`;
                 }
-                const state = hasCloudFallback && !status.local_only ? 'cloud' : 'unavailable';
+                const state = hasCloudFallback && !status.local_only && status.tts_engine === 'cloud'
+                    ? 'cloud (explicit)' : 'unavailable';
                 return `<span class="text-amber-400">•</span> ${label}: ${state} — ${part.why}`;
             };
             const missingLocally = !status.speech_out.local || !status.speech_in.local;
@@ -3121,17 +3171,15 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (forcedNote) forcedNote.classList.toggle('hidden', !status.local_only_forced);
 
-            // The engine dropdown above describes a cloud fallback the mode has closed, so
-            // it is reworded rather than left advertising something that cannot happen.
+            // The cloud option is unavailable while local-only is active, so reflect that
+            // in the selector rather than leaving it looking usable.
             const engineSelect = document.getElementById('setting-tts-engine');
             if (engineSelect) {
                 const cloud = engineSelect.querySelector('option[value="cloud"]');
                 if (cloud) cloud.disabled = !!status.local_only;
                 const auto = engineSelect.querySelector('option[value="auto"]');
                 if (auto) {
-                    auto.textContent = status.local_only
-                        ? 'Auto — Piper only while Local only is on'
-                        : 'Auto — local if installed, otherwise cloud';
+                    auto.textContent = 'Automatic — system voice, then an installed local model';
                 }
             }
         } catch (e) {
@@ -6040,6 +6088,36 @@ document.addEventListener('DOMContentLoaded', () => {
         line.textContent = described;
     }
 
+    /* The name and the voice are one choice. Changing the voice moves the name to the
+       nickname that matches it -- but only while the name is still one nobody typed, so an
+       operator who has called it something of their own keeps that name whatever voice they
+       try next. The hint under the field says which way round this is. */
+    function companionNameFollowsVoice() {
+        const voice = document.getElementById('setting-voice');
+        const nameField = document.getElementById('setting-agent-name');
+        if (!voice || !nameField) return;
+        if (isUnchosenCompanionName(nameField.value)) {
+            nameField.value = companionNameForVoice(voice.value);
+        }
+        describeCompanionNameForVoice();
+    }
+
+    /* The name lives in Appearance and the voice in Voice & Sound, so the pairing is only
+       visible if the voice pane says it out loud. One line under the picker, naming what
+       the companion will answer to once this voice is saved. */
+    function describeCompanionNameForVoice() {
+        const line = document.getElementById('voice-companion-name');
+        const voice = document.getElementById('setting-voice');
+        const nameField = document.getElementById('setting-agent-name');
+        if (!line || !voice) return;
+        const typed = nameField && !isUnchosenCompanionName(nameField.value);
+        line.textContent = typed
+            ? `Answers to ${nameField.value.trim()} — your own name, so this voice does not change it.`
+            : `Answers to ${companionNameForVoice(voice.value)} in this voice. Give it a name of your own under Appearance to keep one name whatever voice you pick.`;
+    }
+
+    document.getElementById('setting-voice')?.addEventListener('change', companionNameFollowsVoice);
+
     document.getElementById('setting-machine-nickname')?.addEventListener('input', updateMachineDescribed);
     document.getElementById('setting-machine-kind')?.addEventListener('change', updateMachineDescribed);
 
@@ -7195,8 +7273,7 @@ document.addEventListener('DOMContentLoaded', () => {
      * to a console nobody has open, and the companion simply did not say anything. So
      * the centrepiece here is not the status fields, it is the "Say something" button:
      * it makes a real attempt and reports what every engine said on the way, because
-     * "Piper: not installed. Microsoft's online voice: timed out. Windows Speech:
-     * spoke." is a diagnosis and silence is not.
+     * "Windows Speech: spoke." is a diagnosis and silence is not.
      */
 
     const voiceModal = document.getElementById('voice-modal');
@@ -7211,6 +7288,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const btnVoiceRecheck = document.getElementById('btn-voice-recheck');
     const btnVoiceTest = document.getElementById('btn-voice-test');
     const btnVoiceEnable = document.getElementById('btn-voice-enable');
+    const systemVoiceSelect = document.getElementById('system-voice-select');
+    const systemVoiceStatus = document.getElementById('system-voice-status');
 
     function setVoiceStatus(text, tone = 'info') {
         if (!voiceWizardStatus) return;
@@ -7284,6 +7363,14 @@ document.addEventListener('DOMContentLoaded', () => {
             voiceListeningSteps.innerHTML = '';
             (advice.listening?.steps || []).forEach((step, i) => voiceListeningSteps.appendChild(renderSetupStep(step, i)));
         }
+        const installNote = document.getElementById('voice-system-install');
+        if (installNote) {
+            const playbackMissing = advice.speaking?.stage === 'unheard';
+            installNote.classList.toggle('hidden', !playbackMissing);
+            installNote.textContent = playbackMissing
+                ? 'A1 checked audio playback too: required GStreamer decoders are missing. Follow the install step above, then restart A1 and check again.'
+                : '';
+        }
 
         // Replies not being spoken at all is the one fault here Aether1 can fix itself,
         // so it offers to rather than describing a checkbox somewhere else.
@@ -7292,7 +7379,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (advice.auto_speak === false) {
             setVoiceStatus('Everything below is switched off until speaking is turned back on.', 'info');
         } else if (advice.local_only && advice.chosen_engine === 'cloud') {
-            setVoiceStatus('Local-only mode is on, so the cloud voice you picked is being overruled -- Piper or nothing.', 'info');
+            setVoiceStatus('Local-only mode is on, so the cloud voice is overruled by this computer’s system voice.', 'info');
         } else {
             setVoiceStatus('');
         }
@@ -7306,6 +7393,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Not awaited: the verdict above is the answer somebody opened this for, and
             // it should not wait on a list of optional extras to appear underneath it.
             renderVoiceCatalogue(advice).catch(() => null);
+            refreshSystemVoices().catch(() => null);
             return advice;
         } catch (e) {
             if (voiceHeadline) voiceHeadline.textContent = 'Could not check this computer.';
@@ -7377,6 +7465,113 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function refreshSystemVoices() {
+        if (!systemVoiceSelect) return;
+        const data = IS_TAURI
+            ? await tauriInvoke('system_voices_rust')
+            : await (async () => {
+                const response = await apiFetch('/api/voice/voices');
+                if (!response.ok) throw new Error(`voice list failed: ${response.status}`);
+                return response.json();
+            })();
+        const previous = systemVoiceSelect.value || document.getElementById('setting-tts-system-voice')?.value || '';
+        systemVoiceSelect.innerHTML = '';
+        for (const voice of data.voices || []) {
+            const option = document.createElement('option');
+            option.value = voice.id;
+            option.textContent = voice.label || voice.id;
+            systemVoiceSelect.appendChild(option);
+        }
+        if (previous && [...systemVoiceSelect.options].some(option => option.value === previous)) {
+            systemVoiceSelect.value = previous;
+        }
+        const usable = systemVoiceSelect.options.length > 0;
+        systemVoiceSelect.disabled = !usable;
+        document.getElementById('btn-system-voice-preview')?.toggleAttribute('disabled', !usable);
+        document.getElementById('btn-system-voice-save')?.toggleAttribute('disabled', !usable);
+        if (systemVoiceStatus) systemVoiceStatus.textContent = usable
+            ? `${systemVoiceSelect.options.length} installed system voice${systemVoiceSelect.options.length === 1 ? '' : 's'} found.`
+            : (data.why || 'No system voices found. Install or enable the system speech engine, then check again.');
+    }
+
+    async function previewSystemVoice() {
+        const voice = systemVoiceSelect?.value;
+        if (!voice) return;
+        const button = document.getElementById('btn-system-voice-preview');
+        if (button) button.disabled = true;
+        setVoiceStatus('Previewing selected system voice...', 'busy');
+        try {
+            let report, url;
+            if (IS_TAURI) {
+                report = await tauriInvoke('test_system_voice_rust', { voice });
+                if (report.path) url = window.__TAURI__.core.convertFileSrc(report.path);
+            } else {
+                const response = await apiFetch('/api/voice/test-system', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice }),
+                });
+                if (!response.ok) throw new Error(`voice preview failed: ${response.status}`);
+                report = await response.json();
+                if (report.audio_url) url = API_BASE + report.audio_url;
+            }
+            renderVoiceAttempts(report.attempts);
+            if (!report.ok || !url) throw new Error(report.why || 'The selected voice could not produce audio.');
+            await voiceEngine.playTTSAudio(url);
+            setVoiceStatus(`Previewed ${systemVoiceSelect.selectedOptions[0]?.textContent || voice}.`, 'good');
+        } catch (error) {
+            setVoiceStatus(`Preview failed: ${error.message || error}`, 'bad');
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
+    async function saveSystemVoice() {
+        const voice = systemVoiceSelect?.value;
+        if (!voice) return;
+        try {
+            const voices = await (IS_TAURI
+                ? tauriInvoke('system_voices_rust')
+                : (await apiFetch('/api/voice/voices')).json());
+            if (!(voices.voices || []).some(item => item.id === voice)) {
+                throw new Error('That voice is no longer available. Refresh the list and select an installed voice.');
+            }
+            const advice = await fetchVoiceAdvice();
+            if (advice.speaking?.stage === 'unheard') {
+                throw new Error('Audio playback dependencies are missing. Follow the decoder install step above, restart A1, then activate the voice.');
+            }
+            document.getElementById('setting-tts-system-voice').value = voice;
+            document.getElementById('setting-tts-engine').value = 'os';
+            await saveSettings(false);
+            setVoiceStatus(`System speech is active with ${systemVoiceSelect.selectedOptions[0]?.textContent || voice}.`, 'good');
+            await refreshVoiceAdvice();
+        } catch (error) {
+            setVoiceStatus(`Could not activate this voice: ${error.message || error}`, 'bad');
+        }
+    }
+
+    async function uninstallManagedPiper() {
+        if (!window.confirm('Remove Piper only if it was installed in A1’s private Python environment? A1 will switch to system speech; voice model files will be kept.')) return;
+        const button = document.getElementById('btn-piper-uninstall');
+        if (button) button.disabled = true;
+        try {
+            const result = IS_TAURI
+                ? await tauriInvoke('uninstall_managed_piper_rust')
+                : await (async () => {
+                    const response = await apiFetch('/api/voice/piper/uninstall', { method: 'POST' });
+                    if (!response.ok) throw new Error(`Piper removal failed: ${response.status}`);
+                    return response.json();
+                })();
+            if (!result.ok) throw new Error(result.message || 'Piper could not be removed.');
+            document.getElementById('setting-tts-engine').value = 'os';
+            await saveSettings(false);
+            setVoiceStatus(result.message, 'good');
+            await refreshVoiceAdvice();
+        } catch (error) {
+            setVoiceStatus(error.message || `${error}`, 'bad');
+        } finally {
+            if (button) button.disabled = false;
+        }
+    }
+
     /* Turning speaking back on. Saved through the ordinary settings path so the checkbox
        in Settings and this button can never disagree about what is stored. */
     async function handleVoiceEnable() {
@@ -7397,13 +7592,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* ------------------------------------------------------------------ */
-    /* Picking a voice.                                                     */
+    /* Optional Piper voice catalogue. Downloads remain disabled until rights review. */
     /*                                                                      */
-    /* Only the voice file is fetched here, never the engine: a .onnx is    */
-    /* numbers handed to a program the operator installed themselves, so a  */
-    /* bad one costs garbled speech. Downloading the engine would be        */
-    /* downloading something that runs, which is a different risk and is    */
-    /* deliberately left to the package manager in the steps above.         */
+    /* Voice files have separate dataset rights from Piper's engine. The   */
+    /* built-in list stays empty until each model and dataset is reviewed.  */
 
     const voicePicker = document.getElementById('voice-picker');
     const voicePickerNote = document.getElementById('voice-picker-note');
@@ -7441,176 +7633,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return resp.json();
     }
 
-    /* ------------------------------------------------------------------ */
-    /* Hearing a voice before choosing it.                                  */
-    /*                                                                      */
-    /* Fourteen rows, four of them reading "American, male", and sixty      */
-    /* megabytes between the operator and finding out which is which. The   */
-    /* play button is the whole answer to that, and what it plays depends   */
-    /* on what is already here: an installed voice is spoken by Piper on    */
-    /* this machine, so the clip IS the voice; one that is not installed    */
-    /* can only be the Piper project's published recording. The backend     */
-    /* says which, and so does the line under the list -- they are          */
-    /* different claims and only one of them is about this computer.        */
-
-    const voicePreview = { name: null, audio: null, url: null, loading: null };
-
-    async function fetchVoicePreview(name) {
-        if (IS_TAURI) {
-            const data = await tauriInvoke('voice_preview_rust', { voice: name });
-            if (!data || !data.ok) throw new Error((data && data.message) || 'no clip came back');
-            // Bytes over IPC and a blob minted here, never an asset:// URL: the clip goes
-            // through a MediaElementAudioSourceNode and WebKit mutes that node for
-            // anything that would taint the page's origin. See speech_clip_rust.
-            const blob = new Blob([new Uint8Array(data.preview.bytes)], { type: data.preview.mime });
-            return { url: URL.createObjectURL(blob), source: data.preview.source };
-        }
-        const resp = await apiFetch(`/api/voice/preview?voice=${encodeURIComponent(name)}`);
-        if (!resp.ok) throw new Error((await resp.text().catch(() => '')) || `preview failed: ${resp.status}`);
-        const blob = await resp.blob();
-        return {
-            url: URL.createObjectURL(blob),
-            source: resp.headers.get('x-aether1-preview-source') || 'sample',
-        };
-    }
-
-    /* Every play button on the page, wherever it was drawn, painted from the one piece of
-       state that says what is happening. Found by attribute rather than held in a list,
-       because both lists that carry these buttons are rebuilt from scratch whenever a
-       voice lands and a list of stale element references would be painting the dead. */
-    function paintVoicePreviewButtons() {
-        for (const button of document.querySelectorAll('[data-preview-voice]')) {
-            const name = button.dataset.previewVoice;
-            const playing = voicePreview.name === name && voicePreview.audio;
-            const loading = voicePreview.loading === name;
-            button.textContent = loading ? '…' : (playing ? '■' : '▶');
-            // A disabled button keeps the reason it was given; repainting it with "Hear
-            // this voice" would promise something pressing it does not do.
-            if (!button.disabled) {
-                button.title = playing
-                    ? 'Stop'
-                    : (loading ? 'Fetching the clip...' : `Hear ${name}`);
-                button.setAttribute('aria-label', button.title);
-            }
-            button.classList.toggle('cyber-btn-active', Boolean(playing || loading));
-        }
-    }
-
-    function stopVoicePreview() {
-        if (voicePreview.audio) {
-            // Both handlers come off before the element is torn down. Clearing `src` on a
-            // media element fires `error` on it, so a clip that simply finished would
-            // otherwise arrive here from `ended`, be cleared, and come straight back
-            // through `error` to tell the operator that a clip they just listened to all
-            // the way through would not play. Caught by driving it, not by reading it.
-            voicePreview.audio.onended = null;
-            voicePreview.audio.onerror = null;
-            voicePreview.audio.pause();
-            voicePreview.audio.src = '';
-        }
-        // The blob is the page's own memory, and these are played over and over while
-        // somebody compares voices; letting them pile up is a leak with a volume knob.
-        if (voicePreview.url) URL.revokeObjectURL(voicePreview.url);
-        voicePreview.audio = null;
-        voicePreview.url = null;
-        voicePreview.name = null;
-        paintVoicePreviewButtons();
-    }
-
-    /* Pressing play on a voice. Pressing it again, or pressing another, stops this one
-       first: two voices at once is the one outcome that answers nothing. */
-    async function playVoicePreview(name, say) {
-        const announce = say || (() => {});
-        if (voicePreview.name === name && voicePreview.audio) { stopVoicePreview(); return; }
-        stopVoicePreview();
-        if (voicePreview.loading) return;
-
-        voicePreview.loading = name;
-        paintVoicePreviewButtons();
-        try {
-            const clip = await fetchVoicePreview(name);
-            // Another press landed while this was in the air; the one the operator pressed
-            // last is the one they want.
-            if (voicePreview.loading !== name) { URL.revokeObjectURL(clip.url); return; }
-
-            const audio = new Audio(clip.url);
-            // Deliberately not routed through the avatar's audio graph. This is a clip
-            // being auditioned, not the companion speaking, so it should not make the
-            // hologram move its mouth -- and a plain element needs no AudioContext resume.
-            audio.onended = () => stopVoicePreview();
-            audio.onerror = () => {
-                stopVoicePreview();
-                announce('That clip would not play: the file arrived but the window refused it.', 'bad');
-            };
-            voicePreview.audio = audio;
-            voicePreview.url = clip.url;
-            voicePreview.name = name;
-            paintVoicePreviewButtons();
-            await audio.play();
-
-            const label = voiceLabelFor(name) || name;
-            announce(clip.source === 'spoken'
-                ? `That is ${label}, spoken on this computer by Piper just now.`
-                : `That is the Piper project's own recording of ${label}. Download it to hear it say your own words.`,
-                'info');
-        } catch (e) {
-            stopVoicePreview();
-            announce(`Could not play ${name}: ${(e && e.message) || e}`, 'bad');
-        } finally {
-            if (voicePreview.loading === name) voicePreview.loading = null;
-            paintVoicePreviewButtons();
-        }
-    }
-
-    /* The part of `en_US-northern_english_male-medium` that tells two rows apart. The
-       language and the quality are the same for every voice in the catalogue, so printing
-       them in a list of fourteen is fourteen copies of a constant. */
-    function shortVoiceName(name) {
-        const parts = String(name || '').split('-');
-        return parts.length >= 3 ? parts.slice(1, -1).join('-') : String(name || '');
-    }
-
-    /* The label the catalogue gave a voice. Filled by whichever of the two lists drew it
-       -- the wizard and the hub fetch the same catalogue separately, and the status line
-       should say "British, Scottish, female" whichever one the button was pressed in. */
-    const voiceLabels = new Map();
-    function rememberVoiceLabels(voices) {
-        for (const voice of voices || []) {
-            if (voice && voice.name) voiceLabels.set(voice.name, voice.label || voice.name);
-        }
-    }
-    function voiceLabelFor(name) {
-        return voiceLabels.get(name) || null;
-    }
-
-    /* The button itself, shared by the wizard's list and the Voice & Sound hub so both
-       behave the same way and both are painted by the same pass.
-
-       `reachable` is false only in local-only mode, and only matters for a voice that is
-       not here yet: an installed one is spoken by Piper on this machine and that switch
-       has nothing to say about it. A voice that is not installed has no clip to play
-       without fetching one, so the button says so rather than offering an action that
-       will refuse -- the same treatment its Download button already gets. */
-    function voicePreviewButton(voice, say, reachable = true) {
-        const play = document.createElement('button');
-        play.type = 'button';
-        play.className = 'cyber-btn text-[10px] py-1 px-2 voice-preview-btn';
-        play.dataset.previewVoice = voice.name;
-        play.textContent = '▶';
-        play.disabled = !voice.installed && !reachable;
-        play.title = play.disabled
-            ? 'Local-only mode is on, and this voice is not here to be spoken yet.'
-            : `Hear ${voice.name}`;
-        play.setAttribute('aria-label', play.title);
-        play.addEventListener('click', (event) => {
-            // Harmless in the wizard, and necessary anywhere this ends up on a row that is
-            // itself clickable: pressing play should not also move a selection.
-            event.stopPropagation();
-            playVoicePreview(voice.name, say);
-        });
-        return play;
-    }
-
     /* One catalogue row. Nodes rather than markup, for the same reason the model rows
        are: every word of this comes from the backend and is going onto the page. */
     function renderVoiceOption(voice, downloadable) {
@@ -7622,26 +7644,15 @@ document.addEventListener('DOMContentLoaded', () => {
         mark.textContent = voice.installed ? '✔' : '·';
         row.appendChild(mark);
 
-        // The label and the voice's own name, together. Four of these rows read
-        // "American, male" and nothing else on them differs, so on its own the label is
-        // not an identifier -- and the name is what the download bar, the error message
-        // and the Piper voice-file box all use, which makes it the one piece of text that
-        // connects this row to everything else the operator will see about it.
         const name = document.createElement('span');
         name.className = 'text-[11px] font-mono text-cyan-100 flex-1 min-w-0';
         name.textContent = voice.label;
-        const who = document.createElement('span');
-        who.className = 'text-[10px] font-mono text-slate-500 ml-2';
-        who.textContent = shortVoiceName(voice.name);
-        name.appendChild(who);
         row.appendChild(name);
 
         const size = document.createElement('span');
         size.className = 'text-[10px] font-mono text-slate-500';
         size.textContent = voice.installed ? 'already here' : voice.size_hint;
         row.appendChild(size);
-
-        row.appendChild(voicePreviewButton(voice, setVoiceStatus, downloadable));
 
         if (!voice.installed) {
             const get = document.createElement('button');
@@ -7656,7 +7667,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return row;
     }
 
-    /* The catalogue. `local_only` is asked of the advice rather than guessed at, and the
+    /* The reviewed catalogue. `local_only` is asked of the advice rather than guessed at, and the
        buttons go dead with a reason beside them -- a button that silently refuses is how
        someone ends up thinking the app is broken rather than doing as it was told. */
     async function renderVoiceCatalogue(advice) {
@@ -7664,7 +7675,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const data = await fetchVoiceCatalogue().catch(() => null);
         const voices = (data && data.voices) || [];
-        if (!voices.length) { voicePicker.classList.add('hidden'); return; }
+        if (!voices.length) {
+            if (voicePickerNote) voicePickerNote.textContent =
+                'Choose an installed system voice above. Piper downloads are paused until each model and dataset license is reviewed; existing models can still be configured in Settings.';
+            voicePicker.classList.remove('hidden');
+            voicePickerList.innerHTML = '';
+            if (voicePickerDownloads) voicePickerDownloads.innerHTML = '';
+            return;
+        }
 
         const downloadable = !(advice && advice.local_only);
         if (voicePickerNote) {
@@ -7674,7 +7692,6 @@ document.addEventListener('DOMContentLoaded', () => {
                   'Settings, or copy a voice into the folder named above by hand.';
         }
 
-        rememberVoiceLabels(voices);
         voicePickerList.innerHTML = '';
         for (const voice of voices) voicePickerList.appendChild(renderVoiceOption(voice, downloadable));
         voicePicker.classList.remove('hidden');
@@ -7799,15 +7816,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-voice-setup')?.addEventListener('click', openVoiceWizard);
     if (btnVoiceRecheck) btnVoiceRecheck.addEventListener('click', () => { voiceEngine.playSFX('click'); refreshVoiceAdvice(); });
     if (btnVoiceTest) btnVoiceTest.addEventListener('click', handleVoiceTest);
+    document.getElementById('btn-system-voice-preview')?.addEventListener('click', previewSystemVoice);
+    document.getElementById('btn-system-voice-save')?.addEventListener('click', saveSystemVoice);
+    document.getElementById('btn-piper-uninstall')?.addEventListener('click', uninstallManagedPiper);
     if (btnVoiceEnable) btnVoiceEnable.addEventListener('click', handleVoiceEnable);
     document.getElementById('btn-close-voice')?.addEventListener('click', () => {
         voiceModal.classList.add('hidden');
         // Only the asking stops. The download itself runs on its own thread in the
         // backend and finishes whether this panel is open or not.
         stopVoicePoll();
-        // A preview is not a download: it is a clip playing out of a panel that is no
-        // longer on screen, which is the kind of sound nobody can work out how to stop.
-        stopVoicePreview();
     });
     document.getElementById('btn-open-voice-settings')?.addEventListener('click', () => {
         settingsModal.classList.add('hidden');
@@ -7819,7 +7836,7 @@ document.addEventListener('DOMContentLoaded', () => {
      *
      * Two tabs, because the pane answers two questions and they had been stirred
      * together into one column of fields. Voices is *which voice it speaks in*: the
-     * fixed Piper catalogue, with a detail panel instead of a row of download buttons.
+     * Piper model list, with a detail panel instead of a row of download buttons.
      * Devices is *which speaker and which microphone*, which the app had never asked
      * about at all -- it used whatever the system handed it, which on a desk with a
      * headset, an interface and an HDMI monitor is a coin toss, and the symptom is
@@ -8023,7 +8040,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!list) return;
         list.innerHTML = '';
         const voices = soundHubVisibleVoices();
-        rememberVoiceLabels(soundHub.voices);
 
         const title = document.getElementById('vhub-list-title');
         if (title) title.textContent = `Offline voices (${voices.length})`;
@@ -8158,13 +8174,6 @@ document.addEventListener('DOMContentLoaded', () => {
             ? (voice.installed ? voice.path : `Downloads to ${voice.path}`)
             : 'In the voices folder';
         action.appendChild(size);
-
-        // Hearing it comes before anything else that can be done with it, and it is the
-        // one action that is offered whether or not the voice is here: downloaded, it is
-        // spoken by Piper on this machine; not downloaded, it is the published recording.
-        // (The row itself is a <button>, so this cannot live there -- a button inside a
-        // button is not valid HTML and the parser hoists it straight back out.)
-        action.appendChild(voicePreviewButton(voice, setSoundHubStatus));
 
         if (voice.installed) {
             // Fills the Piper voice-file box rather than saving by itself: this panel
@@ -12217,15 +12226,26 @@ document.addEventListener('DOMContentLoaded', () => {
         box.replaceChildren(...rows);
     }
 
-    async function handleApplyUpdate() {
-        if (!confirm('Pull the latest changes, rebuild, and relaunch Aurora1? The app will restart.')) return;
-        voiceEngine.playSFX('click');
+    /* The one listener for `update-progress`, and the state the three views share.
+    
+       It used to live inside handleApplyUpdate, registered when the Settings button was
+       clicked and torn down when the invoke returned. That was fine while clicking that
+       button was the only way to start an update. It stopped being fine when the companion
+       gained `install_update`: the backend emitted its five steps and its outcome into a
+       session with no listener at all, so an update approved from a conversation showed
+       nothing in the header strip, nothing in the Updates panel, and said nothing when a
+       dirty checkout or a failed build stopped it -- while the companion had already said
+       the app would restart itself.
+    
+       So the listener is registered once, for the session, and whoever starts an update
+       joins the same watch. A tool-started update opens the overlay on its first event,
+       because by then the machine is already rebuilding the program the operator is
+       looking at and there is nothing to ask. */
+    let updateWatch = null;
 
-        // The state the two views share. Both are redrawn on every event and once a
-        // second, so the elapsed time keeps moving through the rebuild -- the stretch
-        // where nothing else changes for a minute at a time, and where a frozen panel
-        // and a hung one look exactly alike.
-        const state = {
+    function startUpdateWatch({ overlay = true } = {}) {
+        if (updateWatch) return updateWatch;
+        const watch = {
             startedAt: Date.now(),
             step: 0,
             steps: 5,
@@ -12234,79 +12254,120 @@ document.addEventListener('DOMContentLoaded', () => {
             percent: 0,
             log: [],
             version: versionBadge ? versionBadge.textContent.trim() : '',
+            ticker: null,
         };
+        updateWatch = watch;
+        if (overlay) showUpdateOverlay(true);
+        drawUpdateWatch();
+        // Once a second as well as on every event, so the elapsed time keeps moving
+        // through the rebuild -- the stretch where nothing else changes for a minute at a
+        // time, and where a frozen panel and a hung one look exactly alike.
+        watch.ticker = setInterval(drawUpdateWatch, 1000);
+        return watch;
+    }
 
-        const draw = () => {
-            const short = state.step
-                ? `${state.label} · ${state.step}/${state.steps} · ${elapsedSince(state.startedAt)}`
-                : `${state.label} · ${elapsedSince(state.startedAt)}`;
-            updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
-            renderApplyProgress(updateStatusBox, state);
+    function drawUpdateWatch() {
+        const state = updateWatch;
+        if (!state) return;
+        const short = state.step
+            ? `${state.label} · ${state.step}/${state.steps} · ${elapsedSince(state.startedAt)}`
+            : `${state.label} · ${elapsedSince(state.startedAt)}`;
+        updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
+        renderApplyProgress(updateStatusBox, state);
+        renderUpdateOverlay(state);
+    }
+
+    function stopUpdateWatch() {
+        if (updateWatch?.ticker) clearInterval(updateWatch.ticker);
+        updateWatch = null;
+    }
+
+    /* A terminal state, drawn and then left on screen. Reached three ways: the invoke
+       behind the Settings button rejecting, and the backend's own `failed`/`done` outcome
+       event, which is the only thing a tool-started update has -- see emit_update_outcome.
+    
+       Built as nodes rather than interpolated: this string is git's and cargo's own output,
+       full of branch names, paths and remote URLs, and none of that belongs in innerHTML. */
+    function finishUpdateWatch(detail, { failed = true } = {}) {
+        const state = updateWatch || startUpdateWatch({ overlay: false });
+        const ran = elapsedSince(state.startedAt);
+        if (failed) {
+            updateHeaderProgress(`Update failed after ${ran}`, 0, false, String(detail).split('\n')[0]);
+            renderUpdateOverlay(state, String(detail));
+        } else {
+            updateHeaderProgress(`Update ready · ${ran}`, 100, false, String(detail).split('\n')[0]);
             renderUpdateOverlay(state);
-        };
-        showUpdateOverlay(true);
-        draw();
+        }
+        if (updateStatusBox) {
+            const line = document.createElement('div');
+            line.className = failed
+                ? 'text-red-400 whitespace-pre-wrap break-words select-all'
+                : 'text-cyan-200 whitespace-pre-wrap break-words select-all';
+            line.textContent = `${failed ? '⚠' : '✔'} ${detail}`;
+            const note = document.createElement('div');
+            note.className = 'text-[11px] text-slate-500';
+            note.textContent = failed
+                ? `It ran for ${ran} and stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. Nothing was installed; the copy you are running is untouched.`
+                : `Finished after ${ran}. Nothing has been installed — run the file when you are ready.`;
+            const rows = [line, note];
+            if (state.log.length) {
+                const log = document.createElement('pre');
+                log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words select-all';
+                log.textContent = state.log.slice(-20).join('\n');
+                rows.push(log);
+            }
+            updateStatusBox.replaceChildren(...rows);
+        }
+        if (btnApplyUpdate) btnApplyUpdate.disabled = false;
+        if (btnCheckUpdate) btnCheckUpdate.disabled = false;
+        document.getElementById('btn-update-dismiss')?.classList.remove('hidden');
+        stopUpdateWatch();
+    }
 
+    function initUpdateProgressWatch() {
+        if (!window.__TAURI__?.event?.listen) return;
+        window.__TAURI__.event.listen('update-progress', (event) => {
+            const payload = event.payload || {};
+            // No watch yet means nobody in this window started it: the companion did, with
+            // the operator's approval on a tool card. Join it rather than drop the event.
+            const state = updateWatch || startUpdateWatch({ overlay: true });
+            state.step = payload.step || state.step;
+            state.steps = payload.steps || state.steps;
+            state.label = payload.label || state.label;
+            state.detail = payload.detail || '';
+            state.percent = typeof payload.percent === 'number' ? payload.percent : state.percent;
+            // The tail, not the whole build log: enough to see it moving and to read the
+            // lines around a failure, without the panel becoming a terminal.
+            if (payload.detail) {
+                state.log.push(payload.detail);
+                if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
+            }
+            if (payload.failed) return finishUpdateWatch(payload.detail || payload.label || 'The update failed.');
+            if (payload.done) return finishUpdateWatch(payload.detail || payload.label || 'Done.', { failed: false });
+            drawUpdateWatch();
+        });
+    }
+
+    async function handleApplyUpdate() {
+        if (!confirm('Pull the latest changes, rebuild, and relaunch Aurora1? The app will restart.')) return;
+        voiceEngine.playSFX('click');
+
+        startUpdateWatch({ overlay: true });
         if (btnApplyUpdate) btnApplyUpdate.disabled = true;
         if (btnCheckUpdate) btnCheckUpdate.disabled = true;
 
-        const ticker = setInterval(draw, 1000);
-        let unlisten = null;
         try {
-            if (window.__TAURI__?.event?.listen) {
-                unlisten = await window.__TAURI__.event.listen('update-progress', (event) => {
-                    const payload = event.payload || {};
-                    state.step = payload.step || state.step;
-                    state.steps = payload.steps || state.steps;
-                    state.label = payload.label || state.label;
-                    state.detail = payload.detail || '';
-                    state.percent = typeof payload.percent === 'number' ? payload.percent : state.percent;
-                    // The tail, not the whole build log: enough to see it moving and to
-                    // read the lines around a failure, without the panel becoming a
-                    // terminal.
-                    if (payload.detail) {
-                        state.log.push(payload.detail);
-                        if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
-                    }
-                    draw();
-                });
-            }
-
             // On success the app exits and relaunches before this ever resolves --
-            // reaching the catch block means it genuinely failed.
+            // reaching the catch block means it genuinely failed. The progress in between
+            // is drawn by the session-wide `update-progress` listener, which is also what
+            // an update started from a conversation reaches; see initUpdateProgressWatch.
             await tauriInvoke('apply_update_rust');
         } catch (e) {
-            // The message is git's or cargo's own now, with the step it died on in front
-            // of it (see apply_update_rust), and this panel is the only place an operator
-            // will ever read it: a windowed build has no terminal to be pointed at, which
-            // is what the old "see the terminal" line amounted to on Windows. Shown
-            // whole, wrapped, and selectable. Built as nodes rather than interpolated:
-            // this string contains branch names, paths and remote URLs, and none of that
-            // belongs in innerHTML.
-            const detail = String(e && e.message ? e.message : e);
-            updateHeaderProgress(`Update failed after ${elapsedSince(state.startedAt)}`, 0, false, detail.split('\n')[0]);
-            renderUpdateOverlay(state, detail);
-            if (updateStatusBox) {
-                const line = document.createElement('div');
-                line.className = 'text-red-400 whitespace-pre-wrap break-words select-all';
-                line.textContent = `⚠ ${detail}`;
-                const note = document.createElement('div');
-                note.className = 'text-[11px] text-slate-500';
-                note.textContent = `It ran for ${elapsedSince(state.startedAt)} and stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. Nothing was installed; the copy you are running is untouched.`;
-                const rows = [line, note];
-                if (state.log.length) {
-                    const log = document.createElement('pre');
-                    log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words select-all';
-                    log.textContent = state.log.slice(-20).join('\n');
-                    rows.push(log);
-                }
-                updateStatusBox.replaceChildren(...rows);
-            }
-            if (btnApplyUpdate) btnApplyUpdate.disabled = false;
-            if (btnCheckUpdate) btnCheckUpdate.disabled = false;
-        } finally {
-            clearInterval(ticker);
-            if (unlisten) unlisten();
+            /* The message is git's or cargo's own now, with the step it died on in front of
+               it (see apply_update_rust), and this panel is the only place an operator will
+               ever read it: a windowed build has no terminal to be pointed at, which is
+               what the old "see the terminal" line amounted to on Windows. */
+            finishUpdateWatch(String(e && e.message ? e.message : e));
         }
     }
 
@@ -13170,8 +13231,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // settings: the level is in the project's file and the sandbox is a fact about
             // the machine.
             refreshCodeEffective();
-            updateAgentNameDisplay(s.agent_name || "HALCY");
-            document.getElementById('setting-agent-name').value = s.agent_name || "HALCY";
+            updateAgentNameDisplay(s.agent_name || companionNameForVoice(s.voice_name || 'en-US-AriaNeural'));
+            document.getElementById('setting-agent-name').value =
+                s.agent_name || companionNameForVoice(s.voice_name || 'en-US-AriaNeural');
+            // After the name field, because the line it writes reports on both.
+            describeCompanionNameForVoice();
             document.getElementById('setting-operator-name').value = s.operator_name || '';
             document.getElementById('setting-machine-nickname').value = s.machine_nickname || '';
             document.getElementById('setting-machine-kind').value = s.machine_kind || '';
@@ -13200,7 +13264,8 @@ document.addEventListener('DOMContentLoaded', () => {
             showPersonaSpeciality();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
-            document.getElementById('setting-tts-engine').value = s.tts_engine || 'auto';
+            document.getElementById('setting-tts-engine').value = s.tts_engine || 'os';
+            document.getElementById('setting-tts-system-voice').value = s.tts_system_voice || '';
             // Empty is the normal, working value for these two: it means "find Piper and
             // Whisper yourself". They are here so a machine where that search fails has a
             // way out that isn't editing the database by hand.
@@ -13388,7 +13453,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const spriteModeToggle = document.getElementById('setting-sprite-mode');
         const payload = {
             settings: {
-                agent_name: document.getElementById('setting-agent-name').value.trim() || "HALCY",
+                /* An emptied field is a request to go back to the default, and the default
+                   is the nickname for the voice being saved alongside it. */
+                agent_name: document.getElementById('setting-agent-name').value.trim()
+                    || companionNameForVoice(document.getElementById('setting-voice').value),
                 // Saved empty when it is empty: an operator who clears their name is
                 // asking to go back to the model being told nothing about them.
                 operator_name: document.getElementById('setting-operator-name').value.trim(),
@@ -13405,6 +13473,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 custom_directive: document.getElementById('setting-custom-directive').value.trim(),
                 voice_name: document.getElementById('setting-voice').value,
                 tts_engine: document.getElementById('setting-tts-engine').value,
+                tts_system_voice: document.getElementById('setting-tts-system-voice').value,
                 tts_local_voice: document.getElementById('setting-tts-local-voice').value.trim(),
                 stt_model_path: document.getElementById('setting-stt-model').value.trim(),
                 // Falls back rather than saving an empty language: transcribe_audio passes
@@ -14891,12 +14960,10 @@ document.addEventListener('DOMContentLoaded', () => {
     btnCloseSettings.addEventListener('click', () => {
         voiceEngine.playSFX('click');
         settingsModal.classList.add('hidden');
-        // The Voice & Sound hub can be auditioning a voice when this closes.
-        stopVoicePreview();
     });
 
     settingsModal.addEventListener('click', (event) => {
-        if (event.target === settingsModal) { settingsModal.classList.add('hidden'); stopVoicePreview(); }
+        if (event.target === settingsModal) settingsModal.classList.add('hidden');
     });
 
     const voiceRateInput = document.getElementById('setting-voice-speed');
@@ -15588,6 +15655,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initWindowChrome();
     initVersionAndUpdates();
     initUpdateOverlay();
+    // One `update-progress` listener for the session, so an update the companion started
+    // with the operator's approval is drawn and reported like one started from the button.
+    initUpdateProgressWatch();
     initModelHub();
     initSpriteMode();
     initStartupPerformance();

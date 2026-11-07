@@ -21,9 +21,9 @@ module.exports = {
                 }
             },
             fontFamily: {
-                orbitron: ['Orbitron', 'sans-serif'],
-                rajdhani: ['Rajdhani', 'sans-serif'],
-                mono: ['"Share Tech Mono"', 'monospace']
+                orbitron: ['Noto Sans', 'system-ui', 'Segoe UI', 'sans-serif'],
+                rajdhani: ['Noto Sans', 'system-ui', 'Segoe UI', 'sans-serif'],
+                mono: ['Noto Sans Mono', 'ui-monospace', 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'monospace']
             }
         }
     }
