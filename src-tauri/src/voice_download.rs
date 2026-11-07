@@ -480,6 +480,49 @@ mod tests {
             .expect("the entry should still be there")
     }
 
+    /// The shape half of the kathleen bug. A name is `<lang>-<voice>-<quality>` and the
+    /// folder is `<family>/<lang>/<voice>/<quality>`, so the two restate each other and a
+    /// typo in either shows up as a disagreement. This cannot tell whether the voice is
+    /// really published at that quality -- only the other end of the wire knows that, and
+    /// scripts/check_voice_catalogue.sh is what asks it -- but it does catch the entry
+    /// that was copied from the one above it and half edited.
+    #[test]
+    fn catalogue_entries_are_self_consistent() {
+        for (name, label, size_hint, dir) in CATALOGUE {
+            let parts: Vec<&str> = name.splitn(3, '-').collect();
+            assert_eq!(parts.len(), 3, "{name} is not <lang>-<voice>-<quality>");
+            let (lang, voice, quality) = (parts[0], parts[1], parts[2]);
+            let family = lang
+                .split('_')
+                .next()
+                .expect("a language code has a family");
+            assert_eq!(
+                *dir,
+                format!("{family}/{lang}/{voice}/{quality}"),
+                "{name} and its folder disagree",
+            );
+            assert!(!label.is_empty(), "{name} has no label");
+            assert!(size_hint.contains("MB"), "{name}'s size hint says no size");
+        }
+    }
+
+    /// Two voices with the same name would make the download registry ambiguous, and two
+    /// pointing at the same folder means one of them was edited and the other was not.
+    #[test]
+    fn no_voice_is_listed_twice() {
+        let mut names: Vec<&str> = CATALOGUE.iter().map(|(n, _, _, _)| *n).collect();
+        names.sort_unstable();
+        let before = names.len();
+        names.dedup();
+        assert_eq!(before, names.len(), "a voice name is in the table twice");
+
+        let mut dirs: Vec<&str> = CATALOGUE.iter().map(|(_, _, _, d)| *d).collect();
+        dirs.sort_unstable();
+        let before = dirs.len();
+        dirs.dedup();
+        assert_eq!(before, dirs.len(), "two voices point at the same folder");
+    }
+
     /// A body big enough to clear MIN_VOICE_BYTES, which is what tts.rs uses to tell a voice
     /// from a truncated download.
     fn plausible_voice() -> Vec<u8> {
