@@ -12152,15 +12152,26 @@ document.addEventListener('DOMContentLoaded', () => {
         box.replaceChildren(...rows);
     }
 
-    async function handleApplyUpdate() {
-        if (!confirm('Pull the latest changes, rebuild, and relaunch Aurora1? The app will restart.')) return;
-        voiceEngine.playSFX('click');
+    /* The one listener for `update-progress`, and the state the three views share.
+    
+       It used to live inside handleApplyUpdate, registered when the Settings button was
+       clicked and torn down when the invoke returned. That was fine while clicking that
+       button was the only way to start an update. It stopped being fine when the companion
+       gained `install_update`: the backend emitted its five steps and its outcome into a
+       session with no listener at all, so an update approved from a conversation showed
+       nothing in the header strip, nothing in the Updates panel, and said nothing when a
+       dirty checkout or a failed build stopped it -- while the companion had already said
+       the app would restart itself.
+    
+       So the listener is registered once, for the session, and whoever starts an update
+       joins the same watch. A tool-started update opens the overlay on its first event,
+       because by then the machine is already rebuilding the program the operator is
+       looking at and there is nothing to ask. */
+    let updateWatch = null;
 
-        // The state the two views share. Both are redrawn on every event and once a
-        // second, so the elapsed time keeps moving through the rebuild -- the stretch
-        // where nothing else changes for a minute at a time, and where a frozen panel
-        // and a hung one look exactly alike.
-        const state = {
+    function startUpdateWatch({ overlay = true } = {}) {
+        if (updateWatch) return updateWatch;
+        const watch = {
             startedAt: Date.now(),
             step: 0,
             steps: 5,
@@ -12169,79 +12180,120 @@ document.addEventListener('DOMContentLoaded', () => {
             percent: 0,
             log: [],
             version: versionBadge ? versionBadge.textContent.trim() : '',
+            ticker: null,
         };
+        updateWatch = watch;
+        if (overlay) showUpdateOverlay(true);
+        drawUpdateWatch();
+        // Once a second as well as on every event, so the elapsed time keeps moving
+        // through the rebuild -- the stretch where nothing else changes for a minute at a
+        // time, and where a frozen panel and a hung one look exactly alike.
+        watch.ticker = setInterval(drawUpdateWatch, 1000);
+        return watch;
+    }
 
-        const draw = () => {
-            const short = state.step
-                ? `${state.label} · ${state.step}/${state.steps} · ${elapsedSince(state.startedAt)}`
-                : `${state.label} · ${elapsedSince(state.startedAt)}`;
-            updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
-            renderApplyProgress(updateStatusBox, state);
+    function drawUpdateWatch() {
+        const state = updateWatch;
+        if (!state) return;
+        const short = state.step
+            ? `${state.label} · ${state.step}/${state.steps} · ${elapsedSince(state.startedAt)}`
+            : `${state.label} · ${elapsedSince(state.startedAt)}`;
+        updateHeaderProgress(short, state.percent, state.step === 0, state.detail);
+        renderApplyProgress(updateStatusBox, state);
+        renderUpdateOverlay(state);
+    }
+
+    function stopUpdateWatch() {
+        if (updateWatch?.ticker) clearInterval(updateWatch.ticker);
+        updateWatch = null;
+    }
+
+    /* A terminal state, drawn and then left on screen. Reached three ways: the invoke
+       behind the Settings button rejecting, and the backend's own `failed`/`done` outcome
+       event, which is the only thing a tool-started update has -- see emit_update_outcome.
+    
+       Built as nodes rather than interpolated: this string is git's and cargo's own output,
+       full of branch names, paths and remote URLs, and none of that belongs in innerHTML. */
+    function finishUpdateWatch(detail, { failed = true } = {}) {
+        const state = updateWatch || startUpdateWatch({ overlay: false });
+        const ran = elapsedSince(state.startedAt);
+        if (failed) {
+            updateHeaderProgress(`Update failed after ${ran}`, 0, false, String(detail).split('\n')[0]);
+            renderUpdateOverlay(state, String(detail));
+        } else {
+            updateHeaderProgress(`Update ready · ${ran}`, 100, false, String(detail).split('\n')[0]);
             renderUpdateOverlay(state);
-        };
-        showUpdateOverlay(true);
-        draw();
+        }
+        if (updateStatusBox) {
+            const line = document.createElement('div');
+            line.className = failed
+                ? 'text-red-400 whitespace-pre-wrap break-words select-all'
+                : 'text-cyan-200 whitespace-pre-wrap break-words select-all';
+            line.textContent = `${failed ? '⚠' : '✔'} ${detail}`;
+            const note = document.createElement('div');
+            note.className = 'text-[11px] text-slate-500';
+            note.textContent = failed
+                ? `It ran for ${ran} and stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. Nothing was installed; the copy you are running is untouched.`
+                : `Finished after ${ran}. Nothing has been installed — run the file when you are ready.`;
+            const rows = [line, note];
+            if (state.log.length) {
+                const log = document.createElement('pre');
+                log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words select-all';
+                log.textContent = state.log.slice(-20).join('\n');
+                rows.push(log);
+            }
+            updateStatusBox.replaceChildren(...rows);
+        }
+        if (btnApplyUpdate) btnApplyUpdate.disabled = false;
+        if (btnCheckUpdate) btnCheckUpdate.disabled = false;
+        document.getElementById('btn-update-dismiss')?.classList.remove('hidden');
+        stopUpdateWatch();
+    }
 
+    function initUpdateProgressWatch() {
+        if (!window.__TAURI__?.event?.listen) return;
+        window.__TAURI__.event.listen('update-progress', (event) => {
+            const payload = event.payload || {};
+            // No watch yet means nobody in this window started it: the companion did, with
+            // the operator's approval on a tool card. Join it rather than drop the event.
+            const state = updateWatch || startUpdateWatch({ overlay: true });
+            state.step = payload.step || state.step;
+            state.steps = payload.steps || state.steps;
+            state.label = payload.label || state.label;
+            state.detail = payload.detail || '';
+            state.percent = typeof payload.percent === 'number' ? payload.percent : state.percent;
+            // The tail, not the whole build log: enough to see it moving and to read the
+            // lines around a failure, without the panel becoming a terminal.
+            if (payload.detail) {
+                state.log.push(payload.detail);
+                if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
+            }
+            if (payload.failed) return finishUpdateWatch(payload.detail || payload.label || 'The update failed.');
+            if (payload.done) return finishUpdateWatch(payload.detail || payload.label || 'Done.', { failed: false });
+            drawUpdateWatch();
+        });
+    }
+
+    async function handleApplyUpdate() {
+        if (!confirm('Pull the latest changes, rebuild, and relaunch Aurora1? The app will restart.')) return;
+        voiceEngine.playSFX('click');
+
+        startUpdateWatch({ overlay: true });
         if (btnApplyUpdate) btnApplyUpdate.disabled = true;
         if (btnCheckUpdate) btnCheckUpdate.disabled = true;
 
-        const ticker = setInterval(draw, 1000);
-        let unlisten = null;
         try {
-            if (window.__TAURI__?.event?.listen) {
-                unlisten = await window.__TAURI__.event.listen('update-progress', (event) => {
-                    const payload = event.payload || {};
-                    state.step = payload.step || state.step;
-                    state.steps = payload.steps || state.steps;
-                    state.label = payload.label || state.label;
-                    state.detail = payload.detail || '';
-                    state.percent = typeof payload.percent === 'number' ? payload.percent : state.percent;
-                    // The tail, not the whole build log: enough to see it moving and to
-                    // read the lines around a failure, without the panel becoming a
-                    // terminal.
-                    if (payload.detail) {
-                        state.log.push(payload.detail);
-                        if (state.log.length > 40) state.log.splice(0, state.log.length - 40);
-                    }
-                    draw();
-                });
-            }
-
             // On success the app exits and relaunches before this ever resolves --
-            // reaching the catch block means it genuinely failed.
+            // reaching the catch block means it genuinely failed. The progress in between
+            // is drawn by the session-wide `update-progress` listener, which is also what
+            // an update started from a conversation reaches; see initUpdateProgressWatch.
             await tauriInvoke('apply_update_rust');
         } catch (e) {
-            // The message is git's or cargo's own now, with the step it died on in front
-            // of it (see apply_update_rust), and this panel is the only place an operator
-            // will ever read it: a windowed build has no terminal to be pointed at, which
-            // is what the old "see the terminal" line amounted to on Windows. Shown
-            // whole, wrapped, and selectable. Built as nodes rather than interpolated:
-            // this string contains branch names, paths and remote URLs, and none of that
-            // belongs in innerHTML.
-            const detail = String(e && e.message ? e.message : e);
-            updateHeaderProgress(`Update failed after ${elapsedSince(state.startedAt)}`, 0, false, detail.split('\n')[0]);
-            renderUpdateOverlay(state, detail);
-            if (updateStatusBox) {
-                const line = document.createElement('div');
-                line.className = 'text-red-400 whitespace-pre-wrap break-words select-all';
-                line.textContent = `⚠ ${detail}`;
-                const note = document.createElement('div');
-                note.className = 'text-[11px] text-slate-500';
-                note.textContent = `It ran for ${elapsedSince(state.startedAt)} and stopped at step ${state.step || 1} of ${state.steps}: ${state.label}. Nothing was installed; the copy you are running is untouched.`;
-                const rows = [line, note];
-                if (state.log.length) {
-                    const log = document.createElement('pre');
-                    log.className = 'text-[10px] text-slate-500 bg-black/40 rounded p-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words select-all';
-                    log.textContent = state.log.slice(-20).join('\n');
-                    rows.push(log);
-                }
-                updateStatusBox.replaceChildren(...rows);
-            }
-            if (btnApplyUpdate) btnApplyUpdate.disabled = false;
-            if (btnCheckUpdate) btnCheckUpdate.disabled = false;
-        } finally {
-            clearInterval(ticker);
-            if (unlisten) unlisten();
+            /* The message is git's or cargo's own now, with the step it died on in front of
+               it (see apply_update_rust), and this panel is the only place an operator will
+               ever read it: a windowed build has no terminal to be pointed at, which is
+               what the old "see the terminal" line amounted to on Windows. */
+            finishUpdateWatch(String(e && e.message ? e.message : e));
         }
     }
 
@@ -15523,6 +15575,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initWindowChrome();
     initVersionAndUpdates();
     initUpdateOverlay();
+    // One `update-progress` listener for the session, so an update the companion started
+    // with the operator's approval is drawn and reported like one started from the button.
+    initUpdateProgressWatch();
     initModelHub();
     initSpriteMode();
     initStartupPerformance();

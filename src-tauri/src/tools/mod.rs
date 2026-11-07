@@ -22,6 +22,7 @@ mod notes;
 pub mod protocol;
 pub(crate) mod selfcheck;
 pub mod skills;
+pub(crate) mod update;
 
 use std::sync::LazyLock;
 
@@ -307,6 +308,11 @@ pub fn registry() -> &'static Registry {
             Box::new(selfcheck::RecentCrashes),
             Box::new(selfcheck::SelfCheck),
             Box::new(selfcheck::SelfRepair),
+            /* The program's own version. Read-only and in every persona's field for the
+            same reason `self_check` is: a companion that cannot say which build it is
+            running has to answer "are you up to date?" out of its training, and what that
+            produced is written up in `tools::update`. */
+            Box::new(update::UpdateStatus),
             // Everything below changes something, so everything below goes through the
             // consent path -- proposed to the operator, never run from a conversation.
             Box::new(mutating::WriteFile),
@@ -315,6 +321,9 @@ pub fn registry() -> &'static Registry {
             Box::new(notes::AppendNote),
             Box::new(notes::WriteNote),
             Box::new(notes::ArchiveNote),
+            // Replaces the running program and restarts it, so it is proposed every time
+            // and can never be pre-approved -- see its `always_allowable`.
+            Box::new(update::InstallUpdate),
         ] {
             registry
                 .register(tool)
@@ -693,6 +702,13 @@ mod tests {
             vec![
                 "append_note",
                 "archive_note",
+                /* It replaces the running program with a newer build of itself and
+                restarts it, which is the most far-reaching change in this list and the
+                only one whose side effect is that the conversation asking for it ends.
+                Proposed every time and never pre-approvable. The companion needed it
+                because without one it answered "are you up to date?" out of its training
+                -- see tools/update.rs. */
+                "install_update",
                 "run_command",
                 /* It starts the model server, downloads the configured model or voice, or
                 clears the stale proposals -- every one of them a change to the machine, so
