@@ -148,7 +148,7 @@ pub fn ensure(db: &MemoryDb) -> Result<PathBuf, String> {
             .map_err(|e| format!("could not create {}: {e}", path.display()))?;
     }
 
-    let agent_name = db.get_setting_string("agent_name", "AURORA1");
+    let agent_name = db.get_setting_string("agent_name", crate::persona_voice::DEFAULT_NAME);
     for (name, contents) in [
         ("INDEX.md", starter_index(&agent_name)),
         ("profile.md", STARTER_PROFILE.to_string()),
