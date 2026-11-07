@@ -867,7 +867,7 @@ impl LlmEngine {
                 "nexus" => "THE NEXUS".to_string(),
                 "red9000" | "red" => "R.E.D. 9000".to_string(),
                 "alt" | "cunningham" | "a1ter_nul" => "A1ter_nul".to_string(),
-                _ => agent_name,
+                _ => crate::persona_voice::default_name_for_voice(&voice_name).to_string(),
             };
         }
 
@@ -3026,6 +3026,23 @@ mod tests {
     fn the_nickname_comes_from_the_voice() {
         let _guard = env_guard();
         let engine = temp_engine("name_follows_voice");
+        engine
+            .db()
+            .set_setting("voice_name", &serde_json::json!("en-US-GuyNeural"))
+            .unwrap();
+        assert_eq!(engine.load_config().agent_name, "Rory");
+    }
+
+    /// A stored unchosen name is re-derived when the voice changes, so the backend
+    /// stays consistent with the frontend listener.
+    #[test]
+    fn a_stored_unchosen_name_follows_a_voice_change() {
+        let _guard = env_guard();
+        let engine = temp_engine("stored_unchosen_follows_voice");
+        engine
+            .db()
+            .set_setting("agent_name", &serde_json::json!("Aurora"))
+            .unwrap();
         engine
             .db()
             .set_setting("voice_name", &serde_json::json!("en-US-GuyNeural"))
