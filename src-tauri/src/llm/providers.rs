@@ -191,6 +191,10 @@ const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 /// whole stream would cut off exactly the slow replies streaming exists to make bearable.
 const STREAM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// Copy so that a caller can build a variant of one -- the same turn with its images
+/// taken out, which is what happens when the model cannot see them -- without restating
+/// every field it is not changing. Every field is a reference or a small Copy value.
+#[derive(Clone, Copy)]
 pub struct ChatContext<'a> {
     pub system_prompt: &'a str,
     pub history: &'a [Message],
@@ -1446,6 +1450,16 @@ pub struct LocalFacts {
     /// the same request to the same endpoint, and two readers of one fact are two answers
     /// waiting to disagree.
     pub thinking: Option<bool>,
+    /// Whether the model can see an image, off the same `capabilities` list and with the
+    /// same three answers.
+    ///
+    /// This one is read because of a desktop log of 2026-11-03: a message with a
+    /// screenshot attached went to a text-only model, Ollama answered
+    /// `400 {"error":"Multimodal data provided, but model does not support multimodal
+    /// requests."}`, and the whole turn fell through to the offline persona's canned line
+    /// about connecting a model -- on a machine with a model connected and answering. The
+    /// server knew the model was blind before the request was built, and nothing asked it.
+    pub vision: Option<bool>,
 }
 
 /// Probes cost a round trip, and the answer is a property of the model rather than of the
@@ -1486,6 +1500,7 @@ fn probe_ollama_facts(endpoint: &str, model: &str) -> Option<LocalFacts> {
         // entirely is no answer, and stays None rather than becoming a false.
         tools: capability_of(&body, "tools"),
         thinking: capability_of(&body, "thinking"),
+        vision: capability_of(&body, "vision"),
         context_tokens: context_length_of(&body),
         model: model_size_of(&body, model),
     })
@@ -1505,6 +1520,32 @@ fn capability_of(body: &serde_json::Value, name: &str) -> Option<bool> {
     body.get("capabilities")
         .and_then(|c| c.as_array())
         .map(|list| list.iter().any(|c| c.as_str() == Some(name)))
+}
+
+/// Whether this model is known to be unable to see an image, before a request carrying one
+/// is built.
+///
+/// Only Ollama answers this, and only for a server new enough to report capabilities. The
+/// honest reading of silence is "ask and find out": a model the server says nothing about
+/// may well be able to see, and refusing to send an image to it would break vision on
+/// every older install to avoid one error message. `refused_images` is the other half --
+/// what to do when the asking is what produced the answer.
+pub fn known_blind_to_images(provider: Provider, endpoint: &str, model: &str) -> bool {
+    provider == Provider::Ollama && ollama_facts(endpoint, model).vision == Some(false)
+}
+
+/// Whether a provider's refusal is it saying this model cannot take an image.
+///
+/// Deliberately narrow, in the same spirit as the `reasoning_effort` check: the body has to
+/// be about the image. A blanket "retry 400s with less in them" would hide a wrong model
+/// name behind a second, identical failure.
+pub fn refused_images(raw: &str) -> bool {
+    let lowered = raw.to_lowercase();
+    (lowered.contains("multimodal") || lowered.contains("image") || lowered.contains("vision"))
+        && (lowered.contains("does not support")
+            || lowered.contains("not support")
+            || lowered.contains("unsupported")
+            || lowered.contains("invalid"))
 }
 
 /// Clears the cache, for a settings change that could have changed the answer -- pulling a
@@ -4796,6 +4837,7 @@ mod failure_tests {
             tools: Some(true),
             context_tokens: Some(131_072),
             thinking: None,
+            vision: None,
             model: None,
         };
         assert_eq!(local_context_room(facts), None);

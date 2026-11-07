@@ -1200,10 +1200,34 @@ impl LlmEngine {
                         relay.answered(&completion.text);
                         Ok(completion)
                     }
-                    Err(call_error) => Err(StreamFailure {
-                        message: format!("{stream_error} (retry without streaming: {call_error})"),
-                        partial: String::new(),
-                    }),
+                    Err(call_error) => {
+                        /* The server refused the picture, and nothing here knew it would:
+                        only Ollama reports a model's vision capability, so an
+                        OpenAI-compatible server with a text-only model loaded gets this
+                        far. Dropping the image and asking again is strictly better than
+                        what used to happen, which was the whole turn failing and the
+                        offline persona answering a question it had never been given.
+
+                        Once, and only for a refusal that is actually about the image --
+                        `refused_images` is narrow on purpose. The operator is told, in the
+                        reply rather than beside it, because by this point nothing else is
+                        going to reach them. */
+                        let blind = !ctx.images.is_empty()
+                            && (providers::refused_images(&stream_error)
+                                || providers::refused_images(&call_error));
+                        if let Some(completion) = blind
+                            .then(|| self.without_images(config, ctx, relay))
+                            .flatten()
+                        {
+                            return Ok(completion);
+                        }
+                        Err(StreamFailure {
+                            message: format!(
+                                "{stream_error} (retry without streaming: {call_error})"
+                            ),
+                            partial: String::new(),
+                        })
+                    }
                 }
             }
             Err(stream_error) => Err(StreamFailure {
@@ -1211,6 +1235,67 @@ impl LlmEngine {
                 partial: relay.so_far().to_string(),
             }),
         }
+    }
+
+    /// The same turn again with its attachments taken out, for a server that refused them.
+    ///
+    /// Blocking rather than streamed: the stream has already failed once on this turn and
+    /// the relay has nothing on screen, so the quiet path is the right one -- and a second
+    /// streaming attempt would be a third request before anyone has been told anything.
+    ///
+    /// `None` when the retry fails too, which hands the caller back to its own error
+    /// reporting: two failures are one story, and the first one is the one worth telling.
+    fn without_images(
+        &self,
+        config: &Config,
+        ctx: &ChatContext,
+        relay: &mut providers::Relay,
+    ) -> Option<providers::Completion> {
+        let note = format!(
+            "\n\n[ATTACHMENT NOT SENT]\nThe operator attached {} to this message and {} refused it: the model you are running on cannot see images. Answer the words of their message, say in one short sentence that you could not see the attachment, and never guess at what it shows.",
+            if ctx.images.len() == 1 {
+                "an image".to_string()
+            } else {
+                format!("{} images", ctx.images.len())
+            },
+            config.provider.label(),
+        );
+        let system_prompt = format!("{}{note}", ctx.system_prompt);
+        let stripped = ChatContext {
+            system_prompt: &system_prompt,
+            images: &[],
+            ..*ctx
+        };
+        let mut completion = match config.provider {
+            Provider::Ollama => {
+                providers::call_ollama(&config.endpoint, &config.model_name, &stripped)
+            }
+            Provider::LmStudio | Provider::OpenAi | Provider::Groq | Provider::Gateway => {
+                providers::call_openai_compatible(
+                    config.provider,
+                    &config.endpoint,
+                    &config.api_key,
+                    &config.model_name,
+                    &stripped,
+                )
+            }
+            Provider::Gemini => {
+                providers::call_gemini(&config.api_key, &config.model_name, &stripped)
+            }
+            Provider::Anthropic => {
+                providers::call_anthropic(&config.api_key, &config.model_name, &stripped)
+            }
+            Provider::Offline => return None,
+        }
+        .ok()?;
+        let trace = crate::tools::protocol::trace_of(&format!(
+            "{} cannot see images, so the attachment was dropped and the question asked again -- pick a vision model under The Brain to have it looked at",
+            config.model_name
+        ));
+        completion.text = format!("{trace}{}", completion.text);
+        relay.thinking(&completion.reasoning);
+        relay.answered(&completion.text);
+        Some(completion)
     }
 
     /// Tries the given provider/model/endpoint/key with one trivial call, bypassing
@@ -1347,6 +1432,23 @@ impl LlmEngine {
              the operator can already see them. The notes were written without tools and \
              you have them: where they say something needs looking up, or say you cannot \
              know it, look it up now rather than reporting the limit."
+        )
+    }
+
+    /// What the model is told when an image it was sent could not be sent after all.
+    ///
+    /// The instruction is the point. A model told only "there was an image" writes about
+    /// the image: it guesses at a screenshot from the sentence next to it, and a guess
+    /// presented as a reading of an attachment is worse than saying nothing. A model told
+    /// nothing at all answers a question that is missing half its subject.
+    fn blind_to_images_note(count: usize) -> String {
+        let subject = if count == 1 {
+            "an image".to_string()
+        } else {
+            format!("{count} images")
+        };
+        format!(
+            "\n\n[ATTACHMENT NOT SENT]\nThe operator attached {subject} to this message. You are running on a model that cannot see images, so it was not sent to you and you have not seen it. The operator has already been told that.\n\nAnswer the words of their message, which usually stand on their own. Say in one short sentence that you could not see the attachment -- and never describe it, guess at what it shows, or write as though you had looked at it."
         )
     }
 
@@ -1558,7 +1660,7 @@ impl LlmEngine {
                 sink(&tail);
             }
 
-            let (raw, native_calls) = match outcome {
+            let (mut raw, native_calls) = match outcome {
                 Ok(completion) => {
                     carry(completion.usage);
                     (completion.text, completion.calls)
@@ -1601,6 +1703,56 @@ impl LlmEngine {
                     })
                     .collect()
             };
+
+            /* Nothing was called, which is not the same as nothing having been asked for.
+            A model that writes
+
+                {"name": "telemetry_detail", "parameters": {}}
+
+            into the chat has asked as plainly as it knows how, in the spelling its own
+            training uses rather than the one `instructions` asks for -- and until this was
+            here the operator got that object on screen where their answer should have been,
+            with nothing reporting that no tool ran. See `protocol::salvage_calls` for what
+            is read this way and what is deliberately not. */
+            let mut calls = calls;
+            if calls.is_empty() {
+                let found = crate::tools::protocol::salvage_calls(&raw, &|name: &str| {
+                    registry.get(name).is_some()
+                });
+                if !found.is_empty() {
+                    /* The JSON reached the screen already: there was no fence for
+                    FenceFilter to withhold, and the native path withholds nothing. So it
+                    comes back off the end -- the frontend re-renders from the returned
+                    text -- and a trace line goes where it was. The spans are offsets into
+                    `raw`, so the visible copy is edited by the text itself rather than by
+                    the offsets, which are not the same on the two paths. */
+                    let mut kept = visible[visible_before..].to_string();
+                    for salvaged in &found {
+                        kept = kept.replace(&raw[salvaged.at.clone()], "");
+                    }
+                    visible.truncate(visible_before);
+                    visible.push_str(kept.trim_end());
+                    raw = crate::tools::protocol::without_salvaged(&raw, &found);
+                    for salvaged in &found {
+                        let trace = crate::tools::protocol::salvaged_trace(&salvaged.call.tool);
+                        visible.push_str(&trace);
+                        sink(&trace);
+                    }
+                    /* A malformed `tool` block in the same round is no longer the story:
+                    something is going to run. Left in, it would send the round down the
+                    retry path below instead. */
+                    malformed.clear();
+                    calls = found
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, salvaged)| providers::NativeCall {
+                            id: format!("salvaged_{index}"),
+                            tool: salvaged.call.tool,
+                            arguments: salvaged.call.arguments,
+                        })
+                        .collect();
+                }
+            }
 
             /* A round that asked for a tool and got the syntax wrong used to end the turn
             here, silently: FenceFilter had already hidden the broken block, so the only
@@ -1838,9 +1990,42 @@ impl LlmEngine {
         let telem = Telemetry::snapshot();
         let mut system_prompt = self.system_prompt(&config, &telem);
 
+        /* An image on a turn going to a model that cannot see one. Settled here, before
+        anything is built or sent, because the alternative is what a desktop log of
+        2026-11-03 shows: Ollama refused the request outright
+        (`400 ... model does not support multimodal requests`), the refusal was reported as
+        a provider failure, and the turn fell through to the offline persona's canned line
+        about connecting a model -- on a machine with a model connected and answering.
+
+        The words are not thrown away with the picture. The operator asked something, and
+        the question is answerable without seeing the attachment far more often than not;
+        what must not happen is the model answering as though it had looked. So the image
+        is dropped, the model is told that it was and why, and the operator gets a trace
+        line saying the same -- the one thing the canned reply never said. */
+        let (images, image_trace) = match (
+            images.is_empty(),
+            providers::known_blind_to_images(config.provider, &config.endpoint, &config.model_name),
+        ) {
+            (false, true) => {
+                system_prompt.push_str(&Self::blind_to_images_note(images.len()));
+                (
+                    &[][..],
+                    crate::tools::protocol::trace_of(&format!(
+                        "{} cannot see images, so the attachment was not sent -- pick a vision model under The Brain to have it looked at",
+                        config.model_name
+                    )),
+                )
+            }
+            _ => (images, String::new()),
+        };
+
         // Inject Graft code graph context if a project is selected
         let graft_context = crate::graft::prime(&self.db, prompt);
         system_prompt.push_str(&graft_context);
+
+        /* Carried on the same line as the router's, so it reaches both answering branches
+        and the tool loop without a fourth copy of the "prepend a trace" dance. */
+        let auto_trace = format!("{auto_trace}{image_trace}");
 
         // Tools are off by default and the catalog can be empty, in which case the prompt
         // says nothing about tools and the turn is exactly what it was before they existed.

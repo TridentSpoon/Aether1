@@ -1368,17 +1368,23 @@ fn perform_update<R: tauri::Runtime>(
 /// so the frontend only ever observes this call either hang (app about to exit) or reject.
 #[tauri::command(async)]
 fn apply_update_rust(app: tauri::AppHandle) -> Result<(), String> {
-    perform_update_core(&app).map_err(|(stage, msg)| {
-        // Which step it died on, in front of the message. An operator reading "fatal:
-        // couldn't find remote ref" has no way of telling the fetch from the rebuild
-        // otherwise, and the two have nothing in common to try next.
-        let where_it_failed = match stage {
-            UpdateStage::Pull => "Pulling the latest changes failed",
-            UpdateStage::Build => "Rebuilding failed",
-            UpdateStage::Relaunch => "Restarting the new build failed",
-        };
-        format!("{where_it_failed}: {msg}")
-    })
+    perform_update_core(&app).map_err(|(stage, msg)| update_failure(stage, &msg))
+}
+
+/// Which step it died on, in front of the message. An operator reading "fatal: couldn't
+/// find remote ref" has no way of telling the fetch from the rebuild otherwise, and the two
+/// have nothing in common to try next.
+///
+/// Shared by the HUD's button and by the companion's `install_update` tool, which starts
+/// the same install from a conversation and has to report the same failure in the same
+/// words -- see `tools::update`.
+fn update_failure(stage: UpdateStage, msg: &str) -> String {
+    let where_it_failed = match stage {
+        UpdateStage::Pull => "Pulling the latest changes failed",
+        UpdateStage::Build => "Rebuilding failed",
+        UpdateStage::Relaunch => "Restarting the new build failed",
+    };
+    format!("{where_it_failed}: {msg}")
 }
 
 /// Is anything AETHER1 draws actually on a screen right now?
@@ -3677,6 +3683,55 @@ fn main() {
             // second one -- two concurrent `perform_update` calls would run two concurrent
             // `git pull`/`cargo build` and could both relaunch the app.
             let update_in_progress = Arc::new(AtomicBool::new(false));
+
+            /* The companion's way in to the same install. `install_update` is a tool call
+            and has no AppHandle, so the app hands it one of these at startup; outside the
+            desktop app nothing is installed and the tool says so rather than pretending.
+            See `tools::update` for the log that made the tool necessary.
+
+            It shares the tray's own debounce flag deliberately: two concurrent updates
+            would be two concurrent `git pull`s and two rebuilds racing to relaunch, and
+            the operator has two ways to start one. */
+            {
+                let app = app.handle().clone();
+                let in_progress = update_in_progress.clone();
+                tools::update::set_installer(Box::new(move || {
+                    if in_progress
+                        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        return Err("an update is already running -- its progress is in \
+                                    Settings > Updates"
+                            .to_string());
+                    }
+                    let app = app.clone();
+                    let in_progress = in_progress.clone();
+                    /* Started and reported, not waited for. A rebuild takes minutes and
+                    ends by relaunching the app, so a tool call that blocked on it would
+                    hold the turn open until the process it is running in exited -- the
+                    operator would approve the card and then watch a reply that never
+                    arrived. The five `update-progress` steps are already drawn in the HUD
+                    strip and the Updates panel, which is where this belongs. */
+                    std::thread::spawn(move || {
+                        if let Err((stage, msg)) = perform_update_core(&app) {
+                            let said = update_failure(stage, &msg);
+                            eprintln!("[AETHER1] Update failed: {said}");
+                            // The operator approved this from a conversation, so the
+                            // failure has to reach the same panel the progress did --
+                            // otherwise it fails in the terminal and nowhere else.
+                            emit_update_progress(&app, UPDATE_STEPS, "Update failed", &said, 100);
+                        }
+                        in_progress.store(false, Ordering::Relaxed);
+                    });
+                    Ok(
+                        "The update has started: it is fetching, rebuilding and will then \
+                        restart the app. Progress is in the header strip and under \
+                        Settings > Updates. Tell the operator that, and that the app will \
+                        restart itself when it is done."
+                            .to_string(),
+                    )
+                }));
+            }
 
             let tray = TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().unwrap().clone())
