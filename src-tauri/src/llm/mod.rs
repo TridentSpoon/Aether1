@@ -828,7 +828,14 @@ impl LlmEngine {
     /// A router that set `provider` on the way out would have to re-derive all of that,
     /// and a second copy of it is a second answer waiting to disagree.
     fn load_config_as(&self, provider: Option<Provider>, model: Option<&str>) -> Config {
-        let mut agent_name = self.db.get_setting_string("agent_name", "HALCY");
+        // The voice first, because the name hangs off it: Aurora's nickname is the one
+        // that matches the voice it speaks in, so there is no separate default to keep in
+        // step. See persona_voice::VOICE_NAMES.
+        let voice_name = self.db.get_setting_string("voice_name", DEFAULT_VOICE);
+        let mut agent_name = self.db.get_setting_string(
+            "agent_name",
+            crate::persona_voice::default_name_for_voice(&voice_name),
+        );
         let mut provider_key = match provider {
             Some(chosen) => chosen.key().to_string(),
             // Through `auto::stored_provider` rather than straight off the setting, because
@@ -848,14 +855,20 @@ impl LlmEngine {
         let operator_name = self.db.get_setting_string("operator_name", "");
         let machine = crate::profile::machine_description(&self.db);
 
-        if agent_name == "HALCY" {
+        // A name nobody typed gives way to the selected avatar's own, which is what makes
+        // picking an avatar in the HUD rename the companion to match. A typed name wins:
+        // `is_unchosen_name` is only ever true of an Aurora nickname or the old default.
+        if crate::persona_voice::is_unchosen_name(&agent_name) {
             agent_name = match persona_key.as_str() {
+                // hAlcy is no longer the default, so it needs naming here like the rest of
+                // them -- otherwise choosing that avatar leaves the companion called Aurora.
+                "halcy" => "HALCY".to_string(),
                 "arx-limes" => "A.R.X.LIMES".to_string(),
                 "arx-logos" => "A.R.X.LOGOS".to_string(),
                 "nexus" => "THE NEXUS".to_string(),
                 "red9000" | "red" => "R.E.D. 9000".to_string(),
                 "alt" | "cunningham" | "a1ter_nul" => "A1ter_nul".to_string(),
-                _ => agent_name,
+                _ => crate::persona_voice::default_name_for_voice(&voice_name).to_string(),
             };
         }
 
@@ -3193,6 +3206,69 @@ mod tests {
     /// A fresh install runs the diagnostic persona, not the conversational one -- the same
     /// answer `get_settings` and the tool layer give, so the persona generating the reply is
     /// the persona whose field decides what runs without asking.
+    /// The point of the whole change. The nickname is not a constant beside the voice, it
+    /// is read off it, so an operator who changes the voice is renaming the companion.
+    #[test]
+    fn the_nickname_comes_from_the_voice() {
+        let _guard = env_guard();
+        let engine = temp_engine("name_follows_voice");
+        engine
+            .db()
+            .set_setting("voice_name", &serde_json::json!("en-US-GuyNeural"))
+            .unwrap();
+        assert_eq!(engine.load_config().agent_name, "Rory");
+    }
+
+    /// A stored unchosen name is re-derived when the voice changes, so the backend
+    /// stays consistent with the frontend listener.
+    #[test]
+    fn a_stored_unchosen_name_follows_a_voice_change() {
+        let _guard = env_guard();
+        let engine = temp_engine("stored_unchosen_follows_voice");
+        engine
+            .db()
+            .set_setting("agent_name", &serde_json::json!("Aurora"))
+            .unwrap();
+        engine
+            .db()
+            .set_setting("voice_name", &serde_json::json!("en-US-GuyNeural"))
+            .unwrap();
+        assert_eq!(engine.load_config().agent_name, "Rory");
+    }
+
+    /// And a name the operator typed is never moved by either the voice or the avatar.
+    #[test]
+    fn a_typed_name_beats_the_voice_and_the_avatar() {
+        let _guard = env_guard();
+        let engine = temp_engine("typed_name_wins");
+        engine
+            .db()
+            .set_setting("agent_name", &serde_json::json!("Mnemosyne"))
+            .unwrap();
+        engine
+            .db()
+            .set_setting("voice_name", &serde_json::json!("en-US-GuyNeural"))
+            .unwrap();
+        engine
+            .db()
+            .set_setting("persona_type", &serde_json::json!("halcy"))
+            .unwrap();
+        assert_eq!(engine.load_config().agent_name, "Mnemosyne");
+    }
+
+    /// hAlcy stays available, and choosing it brings its own name with it -- which it only
+    /// does because `halcy` is named in the persona map now that it is not the default.
+    #[test]
+    fn choosing_the_halcy_avatar_still_answers_to_halcy() {
+        let _guard = env_guard();
+        let engine = temp_engine("halcy_still_there");
+        engine
+            .db()
+            .set_setting("persona_type", &serde_json::json!("halcy"))
+            .unwrap();
+        assert_eq!(engine.load_config().agent_name, "HALCY");
+    }
+
     #[test]
     fn default_config_is_offline_with_the_diagnostic_persona() {
         let _guard = env_guard();
@@ -3200,7 +3276,9 @@ mod tests {
         let config = engine.load_config();
         assert_eq!(config.provider, Provider::Offline);
         assert_eq!(config.persona, Persona::Default);
-        assert_eq!(config.agent_name, "HALCY");
+        // Aurora, because nothing has chosen a name and the default voice is Aria. hAlcy
+        // is still there to pick -- it is just not what a fresh install answers to.
+        assert_eq!(config.agent_name, "Aurora");
     }
 
     /// Every reply in these tests goes through the streaming path and asserts the
@@ -3248,7 +3326,7 @@ mod tests {
         let _guard = env_guard();
         let engine = temp_engine("who_are_you");
         let reply = generate(&engine, "who are you?", "test-session");
-        assert!(reply.contains("HALCY"), "reply was: {reply}");
+        assert!(reply.contains("Aurora"), "reply was: {reply}");
     }
 
     #[test]

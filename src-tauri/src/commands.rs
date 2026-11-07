@@ -957,8 +957,14 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         .db()
         .get_all_settings()
         .unwrap_or(serde_json::json!({}));
+    // The default name is the nickname for whichever voice is configured, so the pane
+    // shows the name the companion actually answers to rather than a second default that
+    // could disagree with the engine's. See persona_voice::VOICE_NAMES.
+    let configured_voice = engine
+        .db()
+        .get_setting_string("voice_name", llm::DEFAULT_VOICE);
     let mut defaults = serde_json::json!({
-        "agent_name": "HALCY",
+        "agent_name": crate::persona_voice::default_name_for_voice(&configured_voice),
         "llm_provider": "offline",
         "llm_model": "halcy-core",
         "llm_endpoint": "http://localhost:11434",
