@@ -25,6 +25,9 @@
          read any later and the panel grid paints before the studio replaces it. -->
     <script src="js/shell.js?v=4"></script>
     <script src="js/modules.js?v=1"></script>
+    <!-- The answer renderer, shared with the Answer window (frontend/answer.html) so the
+         two cannot drift. In the head with the rest of the pure-computation scripts. -->
+    <script src="js/markdown.js?v=1"></script>
     <!-- The theme, before anything is painted. These two are pure data and pure computation
          -- no DOM beyond <html>'s own attribute and custom properties -- so they belong in the
          head rather than with the engine at the foot of the body: loaded down there, the page
@@ -301,6 +304,12 @@
             <button type="button" class="studio-nav" data-studio-open="brain"><span class="studio-nav-icon" aria-hidden="true">&#129504;</span><span class="studio-nav-label">Model hub</span></button>
             <button type="button" class="studio-nav" data-studio-open="avatars"><span class="studio-nav-icon" aria-hidden="true">&#9728;</span><span class="studio-nav-label">Avatars</span></button>
             <button type="button" class="studio-nav" data-studio-open="agents"><span class="studio-nav-icon" aria-hidden="true">&#129302;</span><span class="studio-nav-label">Agent browser</span></button>
+            <!-- The settled answer in a window of its own (frontend/answer.html). Here as
+                 well as in the chat panel's header, because the studio hides that header
+                 (see studio.css) and the studio is the shell a new window opens in -- a
+                 button only the HUD can reach is a button most operators never see.
+                 Native app only; js/app.js removes it in a browser. -->
+            <button type="button" class="studio-nav" id="studio-nav-answer" data-studio-open="answer"><span class="studio-nav-icon" aria-hidden="true">&#10697;</span><span class="studio-nav-label">Answer window</span></button>
         </nav>
 
         <!-- The last few conversations, read from the same store the HISTORY tab reads, so
@@ -464,7 +473,19 @@
                     <svg class="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
                     <span id="chat-panel-title" class="font-orbitron text-xs font-bold text-cyan-300 tracking-wider">NEURAL DIALOGUE STREAM</span>
                 </div>
-                <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: AURORA</span>
+                <div class="flex items-center gap-2">
+                    <!-- The settled answer, in a window of its own (frontend/answer.html).
+                         In this panel's header rather than with the corner buttons because
+                         it is not another way to see *this* panel: it is the one part of
+                         what this panel shows, sent somewhere it can be read on its own.
+                         Native app only -- js/app.js removes it in a browser, where there
+                         is no second window to open. -->
+                    <button type="button" id="btn-answer-window"
+                            class="text-[10px] font-mono px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-300 hover:bg-cyan-950/40"
+                            title="Show the settled answer in its own window"
+                            aria-label="Show the settled answer in its own window">⧉ ANSWER</button>
+                    <span id="terminal-agent-label" class="text-[10px] font-mono text-slate-400">AGENT: AURORA</span>
+                </div>
             </div>
 
             <!-- Two conversations in one panel, because they are the same act -- typing a
@@ -1235,7 +1256,7 @@
                         <span class="settings-nav-icon">🎨</span>
                         <span class="settings-nav-text">Appearance &amp; Avatars</span>
                     </button>
-                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide desktop sprite float floating always on top hologram window" data-hint="where the avatar lives, and where the panels sit" title="where the avatar lives, and where the panels sit">
+                    <button type="button" id="settings-nav-layout" class="settings-nav-item" data-settings-section="layout" data-keywords="panels grid move resize reset show hide desktop sprite float floating always on top hologram window answer answer window separate window divert type typing paste text box handoff hand-off third party chord" data-hint="where the avatar lives, and where the panels sit" title="where the avatar lives, and where the panels sit">
                         <span class="settings-nav-icon">🧱</span>
                         <span class="settings-nav-text">Display</span>
                     </button>
@@ -1858,6 +1879,56 @@
                         <span class="a1-switch-text">Float the avatar on your desktop -- a live mirror of this HUD's hologram, drag it anywhere, click it to bring this window back</span>
                     </label>
                     <span class="text-[11px] font-mono text-slate-500 block">A small transparent, always-on-top window; closing the main HUD keeps it running. The hologram panel goes quiet while it's out there. The switch applies once you click Save Changes below.</span>
+                </div>
+
+                <!-- THE ANSWER WINDOW, and the one thing in this program that writes
+                     outside its own windows. Both halves of Trident's ask on 2026-11-07:
+                     the settled answer in a window of its own, and that answer typed into
+                     somebody else's text box. See frontend/answer.html, js/answer-window.js
+                     and src-tauri/src/handoff.rs.
+
+                     Native app only -- app.js hides this block in a browser, where there is
+                     no second window to open and no keyboard to synthesise. -->
+                <div id="answer-window-section" class="hidden bg-cyan-950/30 border border-cyan-500/40 p-4 rounded-md space-y-2 mb-3">
+                    <span class="text-[10px] font-mono text-cyan-400/80 block tracking-wider">&#10697; THE ANSWER WINDOW</span>
+                    <label class="a1-switch">
+                        <input id="setting-answer-window" type="checkbox" class="a1-switch-input">
+                        <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        <span class="a1-switch-text">Show the settled answer in a window of its own</span>
+                    </label>
+                    <span class="text-[11px] font-mono text-slate-500 block">The chat keeps the thinking, the tool calls and the activity trace. This window keeps the answer, in a size made for reading it.</span>
+
+                    <label class="a1-switch">
+                        <input id="setting-answer-divert" type="checkbox" class="a1-switch-input">
+                        <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        <span class="a1-switch-text">Keep the answer out of the chat as well</span>
+                    </label>
+                    <span class="text-[11px] font-mono text-slate-500 block">The chat bubble says where the answer went instead of repeating it, so the conversation reads as the working-out.</span>
+
+                    <label class="a1-switch">
+                        <input id="setting-handoff-enabled" type="checkbox" class="a1-switch-input">
+                        <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        <span class="a1-switch-text">Let it type answers into other applications</span>
+                    </label>
+                    <span id="answer-handoff-reach" class="text-[11px] font-mono text-slate-500 block">Focus any text box &mdash; a browser form, an editor, a chat client &mdash; and the chord below types the last answer into it. Nothing is ever typed unless you ask for it in that moment, and Return is never sent, so a command cannot run itself.</span>
+
+                    <div id="setting-handoff-hotkey-wrap" class="space-y-1 pt-1">
+                        <label for="setting-handoff-hotkey" class="text-xs font-mono text-cyan-300 block">KEYS THAT TYPE IT</label>
+                        <input id="setting-handoff-hotkey" type="text" placeholder="Super+Shift+V" class="w-full bg-slate-900 border border-cyan-500/40 rounded p-2 text-sm text-cyan-100 font-mono">
+                        <p class="text-[10px] font-mono text-slate-400 leading-snug">
+                            Registered only while the switch above is on. Leave empty to use the
+                            window&rsquo;s own button instead. On Wayland an app can&rsquo;t grab keys
+                            system-wide &mdash; bind your compositor to
+                            <span class="text-cyan-300">aether1 type-answer</span> instead.
+                        </p>
+                    </div>
+
+                    <label class="a1-switch">
+                        <input id="setting-handoff-flatten" type="checkbox" checked class="a1-switch-input">
+                        <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
+                        <span class="a1-switch-text">Send the answer as one line</span>
+                    </label>
+                    <span class="text-[11px] font-mono text-slate-500 block">On by default, because a line break is a Return: typed into a terminal, a three-paragraph answer runs every line but the last. Switch it off for a box that wants paragraphs &mdash; a document, an email &mdash; and nothing else.</span>
                 </div>
 
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">

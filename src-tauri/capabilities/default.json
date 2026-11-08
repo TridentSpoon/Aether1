@@ -1,8 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window, the floating desktop-sprite window and the undocked panel windows (`panel-*`, see PANEL_WINDOWS in main.rs) -- grants the core JS APIs the frontend actually uses via window.__TAURI__ (withGlobalTauri): invoking commands and listening for events such as telemetry-update and code-chat-delta. A window missing from this list gets no core API at all: the page loads, and the first listen fails with `plugin:event:listen not allowed by ACL` in front of the operator, which is what the AETHER CODE board did on its first run. Custom #[tauri::command]s (chat, TTS, scanner, updates, sprite window control) aren't gated by this file -- only Tauri's own built-in core APIs are.",
-  "windows": ["main", "sprite", "panel-*"],
+  "description": "Capability for the main window, the floating desktop-sprite window, the fullscreen face, the Answer window and the undocked panel windows (`panel-*`, see PANEL_WINDOWS in main.rs) -- grants the core JS APIs the frontend actually uses via window.__TAURI__ (withGlobalTauri): invoking commands and listening for events such as telemetry-update and code-chat-delta. A window missing from this list gets no core API at all: the page loads, and the first listen fails with `plugin:event:listen not allowed by ACL` in front of the operator, which is what the AETHER CODE board did on its first run -- and what the fullscreen face has been doing ever since, unnoticed, because the face is a window nobody looks at twice: js/face.js both listens for the avatar's state and invokes toggle_face_window_rust for its Esc key, and the ACL was refusing both. Custom #[tauri::command]s (chat, TTS, scanner, updates, sprite window control) aren't gated by this file -- only Tauri's own built-in core APIs are.",
+  "windows": [
+    "main",
+    "sprite",
+    "face",
+    "answer",
+    "panel-*"
+  ],
   "permissions": [
     "core:default",
     "core:event:default"

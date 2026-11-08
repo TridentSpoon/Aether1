@@ -42,6 +42,7 @@ USAGE:
     aether1 status                 Print a system diagnostic report
     aether1 say [TEXT]             Speak text in the companion's voice
     aether1 show | toggle          Summon (or dismiss) the HUD of a running instance
+    aether1 type-answer            Type the last answer into the focused text box
     aether1 face                   Put the avatar fullscreen on a spare screen -- just the
                                    face and what it is doing (Esc closes it)
     aether1 --serve                Run headless as an HTTP/WebSocket server, reachable
@@ -152,6 +153,10 @@ OPTIONS:
 
 TEXT may be omitted for `prompt` and `say` when it is piped in on stdin:
     echo \"what is eating my RAM\" | aether1 prompt
+
+`type-answer` needs \"Type answers into other applications\" switched on in Settings, and the
+display server's permission: X11 and Windows allow it, and on Wayland only the compositors
+with the virtual-keyboard protocol (Sway, Hyprland, river) do.
 
 The HUD toggle is also bound to a global hotkey (Super+Shift+A by default, changeable in
 Settings). On Wayland, where an application can't grab keys system-wide, bind your
@@ -385,6 +390,11 @@ pub enum Invocation {
     /// so there has to be a HUD for it to mirror. With no instance running, this launch
     /// becomes one and opens the face alongside it.
     Face,
+    /// `type-answer`: types the companion's last answer into whatever text box has the
+    /// focus, through the already-running instance (see handoff.rs). The verb exists for
+    /// Wayland, where an application cannot grab a chord of its own and the compositor's
+    /// keybinding has to call something instead -- the same arrangement `toggle` already has.
+    TypeAnswer,
     /// `lan` is the opt-in from `--serve --lan`: bind every interface instead of
     /// the loopback address, so other machines can reach the HUD.
     Serve {
@@ -1043,6 +1053,10 @@ pub fn parse(argv: &[String]) -> Invocation {
                 "revoke needs the id of a device, or `all` -- run `aether1 devices` to see them"
                     .to_string(),
             ),
+        }),
+        "type-answer" => free_text(rest.clone()).and_then(|extra| match extra {
+            Some(extra) => Err(format!("type-answer takes no arguments (got {extra:?})")),
+            None => Ok(Invocation::TypeAnswer),
         }),
         "face" => free_text(rest).and_then(|extra| match extra {
             Some(extra) => Err(format!("face takes no arguments (got {extra:?})")),
@@ -3283,14 +3297,15 @@ fn render_outcome(
     }
 }
 
-/// Runs a headless invocation and returns the process exit code. `App`, `Serve`, `Window`
-/// and `Face` are handled by main() and are a no-op here.
+/// Runs a headless invocation and returns the process exit code. `App`, `Serve`, `Window`,
+/// `Face` and `TypeAnswer` are handled by main() and are a no-op here.
 pub fn run(invocation: Invocation) -> i32 {
     let result = match invocation {
         Invocation::App
         | Invocation::Serve { .. }
         | Invocation::Window { .. }
-        | Invocation::Face => Ok(String::new()),
+        | Invocation::Face
+        | Invocation::TypeAnswer => Ok(String::new()),
         Invocation::Help => Ok(usage()),
         Invocation::Version => Ok(format!(
             "{} ({})",
@@ -3686,6 +3701,15 @@ mod tests {
     fn code_rejects_a_word_it_does_not_know() {
         assert!(matches!(
             parse_args(&["code", "rules"]),
+            Invocation::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn type_answer_is_recognized_and_takes_no_arguments() {
+        assert_eq!(parse_args(&["type-answer"]), Invocation::TypeAnswer);
+        assert!(matches!(
+            parse_args(&["type-answer", "please"]),
             Invocation::Invalid(_)
         ));
     }

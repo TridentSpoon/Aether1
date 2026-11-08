@@ -1062,6 +1062,24 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         // as it did -- unlike tools_enabled, which is the switch #245 found off by default
         // with nothing saying so.
         defaults_obj.insert("web_search_enabled".to_string(), Value::Bool(true));
+        // The Answer window and what it is allowed to do. All three off, and the first two
+        // are off for different reasons: the window is a second window and nobody asked for
+        // one on a fresh install, and the hand-off writes keystrokes into applications that
+        // are not this one, which is the sort of thing an operator opts into deliberately
+        // rather than discovers. See handoff.rs and build_answer_window in main.rs.
+        defaults_obj.insert("answer_window".to_string(), Value::Bool(false));
+        defaults_obj.insert("answer_divert".to_string(), Value::Bool(false));
+        defaults_obj.insert(crate::handoff::SETTING.to_string(), Value::Bool(false));
+        // On, unlike the other two: see the note on handoff::FLATTEN_SETTING. A multi-line
+        // answer typed into a shell runs every line but the last.
+        defaults_obj.insert(
+            crate::handoff::FLATTEN_SETTING.to_string(),
+            Value::Bool(true),
+        );
+        defaults_obj.insert(
+            crate::hotkey::HANDOFF_SETTING.to_string(),
+            Value::String(crate::hotkey::DEFAULT_HANDOFF.to_string()),
+        );
     }
     if let (Some(settings_obj), Some(defaults_obj)) =
         (settings.as_object_mut(), defaults.as_object())

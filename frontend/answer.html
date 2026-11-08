@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AURORA1 Answer</title>
+    <!-- Tailwind first, because the answer renderer emits its utilities (see
+         js/markdown.js), then the theme, then this window's own rules -- which have to be
+         able to override both. Local copies, like every other page here: a window that
+         needed a network to draw itself would be the one thing in this program that does. -->
+    <link rel="stylesheet" href="vendor/tailwind.css?v=1">
+    <link rel="stylesheet" href="vendor/fonts.css?v=2">
+    <link rel="stylesheet" href="css/A1theme.css?v=32">
+    <link rel="stylesheet" href="css/answer.css?v=1">
+    <!-- The theme, before anything is painted -- see sprite.html for the full note. This
+         window is often the one left open on a second screen, so a frame of the fallback
+         palette here is a dark flash on a light desktop. -->
+    <script src="js/hologram/palettes.js?v=19"></script>
+    <script src="js/theme.js?v=7"></script>
+    <script src="js/theme-apply.js?v=1"></script>
+    <script src="js/markdown.js?v=1"></script>
+</head>
+<body class="answer-shell">
+    <!-- Who said it, with what, and when. The same three facts the chat bubble's own header
+         carries, because an answer read out of context needs them more, not less. -->
+    <header class="answer-head">
+        <span class="answer-who" id="answer-who">AURORA</span>
+        <span class="answer-meta" id="answer-model"></span>
+        <span class="answer-meta answer-when" id="answer-when"></span>
+    </header>
+
+    <!-- aria-live so a screen reader is told the answer arrived. `polite`, not `assertive`:
+         it is an answer to a question that was just asked, not an alarm. -->
+    <main class="answer-body" id="answer-body" aria-live="polite">
+        <p class="answer-idle" id="answer-idle">The next answer appears here.</p>
+        <div class="answer-text" id="answer-text"></div>
+    </main>
+
+    <!-- What can be done with the answer, in the order it gets done: put it somewhere, keep
+         a copy, and the two standing choices about how. -->
+    <footer class="answer-foot">
+        <div class="answer-actions">
+            <button type="button" class="answer-btn answer-btn-primary" id="answer-type"
+                    title="Click into the text box you want it in; it is typed there when the countdown ends.">
+                Type into a text box
+            </button>
+            <button type="button" class="answer-btn" id="answer-copy">Copy</button>
+        </div>
+        <div class="answer-switches">
+            <label class="answer-switch" title="On, the answer arrives as one line with nothing submitted. Off, each line break is a Return -- which in a terminal runs the line.">
+                <input type="checkbox" id="answer-flatten" checked>
+                <span>One line</span>
+            </label>
+            <label class="answer-switch" title="The chat keeps the thinking, the tool calls and the activity; the answer itself only appears here.">
+                <input type="checkbox" id="answer-divert">
+                <span>Keep it out of the chat</span>
+            </label>
+        </div>
+        <!-- One line, and the only place this window says anything about itself: the
+             countdown, what was typed, or why it cannot be. -->
+        <p class="answer-note" id="answer-note" aria-live="polite"></p>
+    </footer>
+
+    <script src="js/answer-window.js?v=1"></script>
+</body>
+</html>
