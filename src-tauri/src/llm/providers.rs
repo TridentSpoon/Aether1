@@ -3452,6 +3452,114 @@ fn judge_ollama(
 /// How many tokens a router's verdict may take. Three or four short fields.
 pub const VERDICT_TOKENS: u32 = 120;
 
+/// How many tokens a description of an attachment may take. A paragraph or two, or a
+/// transcription of a sign or a table -- enough for the answering model to work from, and
+/// short enough that it cannot crowd out the conversation it is being added to.
+pub const LOOK_TOKENS: u32 = 400;
+
+/// Ollama's shape for one look at an attachment: the images on the user message, where
+/// `/api/chat` wants them, and nothing else different from a judgment.
+#[derive(Serialize)]
+struct OllamaLookRequest<'a> {
+    model: &'a str,
+    messages: Vec<OllamaMessage>,
+    stream: bool,
+    /// Same rule as the judge's, for the same reason: a vision model that thinks would
+    /// spend the description budget reasoning about a picture nobody asked it to reason
+    /// about, and Ollama refuses the field outright for a model without the capability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
+    options: OllamaJudgeOptions,
+}
+
+/// Asks one model that can see to describe what is attached, so that a model that cannot
+/// see has something to answer from.
+///
+/// Not a chat turn and deliberately not shaped like one. No history, no tools, no persona,
+/// no memory: this model is not having the conversation, it is answering one question about
+/// some pixels, and anything else handed to it is context it would be tempted to answer
+/// from instead. The operator's own question goes in, because "describe this" and "is the
+/// serial number on this label readable" want different descriptions of the same photo.
+///
+/// Ollama only, matching `known_blind_to_images` -- the capability list is what makes this
+/// decidable, and no other local server answers it.
+///
+/// `pace` carries the same `num_ctx` rule as the judge: named only when this model is being
+/// loaded anyway, because naming it for a resident model loads a second copy and that is
+/// the server-wide cliff #249 walked into.
+pub fn look(
+    endpoint: &str,
+    model: &str,
+    question: &str,
+    images: &[MediaAttachment],
+    pace: Pace,
+) -> Result<String, String> {
+    if model.trim().is_empty() {
+        return Err("no model to look with".to_string());
+    }
+    if images.is_empty() {
+        return Err("nothing was attached to look at".to_string());
+    }
+    let asked = question.trim();
+    let user = if asked.is_empty() {
+        "Describe what is attached.".to_string()
+    } else {
+        format!("The person asked: {asked}")
+    };
+    let request = OllamaLookRequest {
+        model,
+        messages: vec![
+            OllamaMessage::plain("system", LOOK_PROMPT.to_string()),
+            OllamaMessage {
+                role: "user".to_string(),
+                content: user,
+                images: images
+                    .iter()
+                    .map(|image| image.data_base64.clone())
+                    .collect(),
+                tool_calls: None,
+                tool_name: None,
+            },
+        ],
+        stream: false,
+        think: ollama_facts(endpoint, model)
+            .thinking
+            .unwrap_or(false)
+            .then_some(false),
+        options: OllamaJudgeOptions {
+            /* Liquid's own recommended setting for LFM3-VL, and the right end of the range
+            for any model doing this job: a description is a reading of what is there, and
+            an inventive one is worse than a dull one. */
+            temperature: 0.1,
+            num_ctx: (pace != Pace::Warm).then_some(LOCAL_CTX_FLOOR),
+            num_predict: LOOK_TOKENS,
+        },
+    };
+    let response: OllamaResponse = checked(
+        crate::net::post(&ollama_url(endpoint), "the attachment was not looked at")?
+            .config()
+            .timeout_global(Some(pace.timeout()))
+            .http_status_as_error(false)
+            .build()
+            .send_json(request),
+    )?
+    .body_mut()
+    .read_json()
+    .map_err(|e| e.to_string())?;
+    let seen = response.text().trim().to_string();
+    if seen.is_empty() {
+        return Err("the model that can see answered with nothing".to_string());
+    }
+    Ok(seen)
+}
+
+/// What the model that can see is told it is doing.
+///
+/// The three refusals in it are the whole of why this is safe to feed to another model: a
+/// description that guesses is worse than no description, because the model that receives
+/// it cannot tell the difference and the operator reading the answer certainly cannot.
+const LOOK_PROMPT: &str = "You are looking at an attachment on behalf of another model that cannot see it. Describe what is actually there, in plain prose, so that the other model can answer the person's question from your words alone. Transcribe any text, numbers, labels or code exactly as they appear. Say what you cannot make out rather than filling it in, never guess at anything the image does not show, and do not answer the person's question yourself -- describing what is there is the whole job.";
+
 /// The OpenAI-compatible spelling of the same thing, for LM Studio. `json_schema` rather
 /// than `json_object`: the looser mode constrains the answer to *some* object, which for a
 /// router means a verdict with the wrong field names in it.
