@@ -82,6 +82,30 @@ pub struct Availability {
     pub display: String,
     /// One sentence, written to be shown as-is.
     pub why: String,
+    /// Why the chord will not fire, and what to bind instead -- or empty where it will.
+    ///
+    /// Separate from `why` because the two come apart, and only on Wayland: on Hyprland or
+    /// Sway typing into another window works perfectly (`ok` is true) while
+    /// `Super+Shift+V` registered by this application never arrives, because Wayland has no
+    /// way for a client to claim a key combination. An operator told only that typing works
+    /// would press the chord and conclude the feature is broken.
+    pub chord: String,
+}
+
+/// What to say about the chord on a Wayland session, where the application cannot register
+/// one at all. Empty everywhere else, because there the chord is registered and works.
+///
+/// The Hyprland line is spelled out rather than described: it is the compositor Trident
+/// runs, and a line that can be pasted is worth more than a pointer to a manual.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn chord_note(on_wayland: bool) -> String {
+    if !on_wayland {
+        return String::new();
+    }
+    "Wayland does not let an application claim a key combination, so the Super+Shift+V chord \
+     will not fire. Bind your compositor's own keybinding to `aether1 type-answer` instead -- \
+     in hyprland.conf, that is: bind = SUPER SHIFT, V, exec, aether1 type-answer"
+        .into()
 }
 
 /// `availability`, from an already-read environment, so the decision is testable without a
@@ -110,6 +134,7 @@ pub fn availability_from(
                 "unknown".into()
             },
             why: "Typing into another window goes through X11, which allows it.".into(),
+            chord: chord_note(false),
         };
     }
 
@@ -126,12 +151,17 @@ pub fn availability_from(
             ok: true,
             display: "wayland".into(),
             why: "Your compositor supports the virtual-keyboard protocol, so typing into another window works.".into(),
+            chord: chord_note(true),
         }
     } else {
         Availability {
             ok: false,
             display: "wayland".into(),
             why: "Wayland does not let one application type into another, and this desktop has no virtual-keyboard protocol. Copy the answer and paste it yourself.".into(),
+            // No chord note here, and not because the chord works: nothing about the
+            // hand-off works on this desktop, and a second sentence about a key
+            // combination would only bury the one that matters.
+            chord: String::new(),
         }
     }
 }
@@ -156,6 +186,7 @@ pub fn availability() -> Availability {
         ok: true,
         display: "windows".into(),
         why: "Typing into another window goes through SendInput, which Windows allows.".into(),
+        chord: String::new(),
     }
 }
 
@@ -173,6 +204,7 @@ pub fn availability() -> Availability {
         why:
             "macOS will ask for Accessibility permission the first time, under Privacy & Security."
                 .into(),
+        chord: String::new(),
     }
 }
 
@@ -337,5 +369,25 @@ mod tests {
         // how a compositor started from a TTY presents itself.
         assert!(!availability_from(None, Some("wayland-1"), Some("GNOME")).ok);
         assert!(availability_from(None, None, None).ok);
+    }
+
+    /// The fault this field exists for: on Hyprland typing works, so the feature is offered,
+    /// and the chord the UI shows beside it can never arrive. Both halves are asserted
+    /// together because it is the combination that is the trap.
+    #[test]
+    fn wayland_says_the_chord_will_not_fire_even_where_typing_works() {
+        let reach = availability_from(Some("wayland"), Some("wayland-0"), Some("Hyprland"));
+        assert!(reach.ok, "typing works on Hyprland");
+        assert!(
+            reach.chord.contains("aether1 type-answer"),
+            "the way out is to bind the compositor: {}",
+            reach.chord
+        );
+        assert!(!reach.chord.contains('\n'), "one line for the UI");
+
+        // X11 registers the chord itself, so there is nothing to say.
+        assert!(availability_from(Some("x11"), None, Some("KDE"))
+            .chord
+            .is_empty());
     }
 }

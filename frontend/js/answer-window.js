@@ -267,8 +267,12 @@ document.addEventListener('DOMContentLoaded', () => {
             refreshButtons();
             /* Said once, at the top, only when it is bad news. On a machine where this
                works there is nothing to report and the line stays empty for the countdown
-               to use. */
-            if (reach && !reach.ok) note(reach.why, 'refused');
+               to use. Wayland is the case where both can be true: the button below works
+               and the chord cannot, because no Wayland client may claim a key combination,
+               so that is worth the line as much as an outright refusal is. */
+            if (!reach) return;
+            if (!reach.ok) note(reach.why, 'refused');
+            else if (reach.chord) note(reach.chord, 'refused');
         })
         .catch((e) => console.warn('Could not ask whether typing into other windows works', e));
 

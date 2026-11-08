@@ -13256,9 +13256,19 @@ document.addEventListener('DOMContentLoaded', () => {
            nothing to report and the paragraph already explains the feature. */
         tauriInvoke('handoff_reach_rust')
             .then((reach) => {
-                if (!reach || reach.ok) return;
+                if (!reach) return;
                 const note = document.getElementById('answer-handoff-reach');
-                if (note) note.textContent = reach.why;
+                if (!note) return;
+                /* Two different pieces of bad news, and on Wayland they are both true at
+                   once: typing may work while the chord below can never fire, because no
+                   Wayland client can claim a key combination. Saying only the first would
+                   leave the operator pressing a chord that is not registered and reporting
+                   the feature as broken. */
+                if (!reach.ok) {
+                    note.textContent = reach.why;
+                } else if (reach.chord) {
+                    note.textContent = reach.chord;
+                }
             })
             .catch((e) => console.warn('Could not ask whether typing into other windows works', e));
 
