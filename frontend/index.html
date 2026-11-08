@@ -304,6 +304,12 @@
             <button type="button" class="studio-nav" data-studio-open="brain"><span class="studio-nav-icon" aria-hidden="true">&#129504;</span><span class="studio-nav-label">Model hub</span></button>
             <button type="button" class="studio-nav" data-studio-open="avatars"><span class="studio-nav-icon" aria-hidden="true">&#9728;</span><span class="studio-nav-label">Avatars</span></button>
             <button type="button" class="studio-nav" data-studio-open="agents"><span class="studio-nav-icon" aria-hidden="true">&#129302;</span><span class="studio-nav-label">Agent browser</span></button>
+            <!-- The settled answer in a window of its own (frontend/answer.html). Here as
+                 well as in the chat panel's header, because the studio hides that header
+                 (see studio.css) and the studio is the shell a new window opens in -- a
+                 button only the HUD can reach is a button most operators never see.
+                 Native app only; js/app.js removes it in a browser. -->
+            <button type="button" class="studio-nav" id="studio-nav-answer" data-studio-open="answer"><span class="studio-nav-icon" aria-hidden="true">&#10697;</span><span class="studio-nav-label">Answer window</span></button>
         </nav>
 
         <!-- The last few conversations, read from the same store the HISTORY tab reads, so
@@ -1918,11 +1924,11 @@
                     </div>
 
                     <label class="a1-switch">
-                        <input id="setting-handoff-flatten" type="checkbox" class="a1-switch-input">
+                        <input id="setting-handoff-flatten" type="checkbox" checked class="a1-switch-input">
                         <span class="a1-switch-track" aria-hidden="true"><span class="a1-switch-knob"></span></span>
-                        <span class="a1-switch-text">Send line breaks as spaces</span>
+                        <span class="a1-switch-text">Send the answer as one line</span>
                     </label>
-                    <span class="text-[11px] font-mono text-slate-500 block">For a box that sends on Return: a chat client, a search field, most web forms. Off, the answer is typed as it was written.</span>
+                    <span class="text-[11px] font-mono text-slate-500 block">On by default, because a line break is a Return: typed into a terminal, a three-paragraph answer runs every line but the last. Switch it off for a box that wants paragraphs &mdash; a document, an email &mdash; and nothing else.</span>
                 </div>
 
                 <div class="bg-cyan-950/20 border border-cyan-500/40 p-4 rounded-md space-y-2">

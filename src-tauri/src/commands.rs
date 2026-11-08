@@ -1070,9 +1070,11 @@ pub fn get_settings(engine: &LlmEngine) -> Value {
         defaults_obj.insert("answer_window".to_string(), Value::Bool(false));
         defaults_obj.insert("answer_divert".to_string(), Value::Bool(false));
         defaults_obj.insert(crate::handoff::SETTING.to_string(), Value::Bool(false));
+        // On, unlike the other two: see the note on handoff::FLATTEN_SETTING. A multi-line
+        // answer typed into a shell runs every line but the last.
         defaults_obj.insert(
             crate::handoff::FLATTEN_SETTING.to_string(),
-            Value::Bool(false),
+            Value::Bool(true),
         );
         defaults_obj.insert(
             crate::hotkey::HANDOFF_SETTING.to_string(),

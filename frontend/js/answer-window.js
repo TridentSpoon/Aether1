@@ -174,8 +174,9 @@ document.addEventListener('DOMContentLoaded', () => {
         remember({ flatten: flattenBox.checked });
         note(
             flattenBox.checked
-                ? 'Line breaks will be sent as spaces.'
-                : 'Line breaks will be sent as they are written.'
+                ? 'The answer will arrive as one line, with nothing submitted.'
+                : 'Line breaks will be sent as Return \u2014 in a terminal, that runs each line.',
+            flattenBox.checked ? '' : 'refused'
         );
     });
 
@@ -187,6 +188,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 : 'The chat shows the answer as well.'
         );
     });
+
+    /* The theme, after the first paint.
+       js/theme-apply.js resolved it from storage before anything was drawn, which covers
+       everything except two cases: the desktop's own accent colour, which has to be asked
+       for over the bridge and so cannot be ready for the first frame, and a theme the
+       operator changes while this window is open. The sprite and the fullscreen face
+       already answer both the same way -- see followDesktop and 'color-theme-changed' in
+       js/sprite.js -- and a window that kept the palette it opened in was exactly what this
+       one did on its first run, sitting in Daylight while the HUD went to Midnight. */
+    if (window.Aether1Theme && Aether1Theme.followDesktop) {
+        Aether1Theme.followDesktop((theme) => {
+            Aether1Theme.paint(document, theme.mode, theme.colours);
+        });
+    }
+    if (events) {
+        events.listen('color-theme-changed', (event) => {
+            const theme = event.payload;
+            if (!theme || !theme.colours) return;
+            Aether1Theme.paint(document, theme.mode, theme.colours);
+        }).catch((e) => console.warn('Could not listen for colour theme changes', e));
+    }
 
     if (!events || !core) {
         // The window exists but has no way to be fed. Said plainly rather than left looking

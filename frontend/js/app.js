@@ -10521,12 +10521,23 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('studio-nav-terminal')?.remove();
         }
 
+        // Same rule, same reason: there is no second native window to open from a browser
+        // tab, and a sidebar entry that does nothing is worse than no entry.
+        if (!IS_TAURI) {
+            document.getElementById('studio-nav-answer')?.remove();
+        }
+
         document.querySelectorAll('[data-studio-open]').forEach((btn) => {
             btn.addEventListener('click', async () => {
                 voiceEngine.playSFX('click');
                 const what = btn.getAttribute('data-studio-open');
                 if (what === 'agents') {
                     document.getElementById('btn-agent-browser')?.click();
+                    return;
+                }
+                // Opens a window rather than a pane of Settings, so it returns here too.
+                if (what === 'answer') {
+                    openAnswerWindow(true);
                     return;
                 }
                 await loadSettings();
@@ -13072,11 +13083,28 @@ document.addEventListener('DOMContentLoaded', () => {
     let answerDivert = false;
     let handoffEnabled = false;
 
-    /** Which model is answering, as the picker names it -- for the other window's header. */
+    /* Which model is answering, for the other window's header.
+       The studio trigger rather than the Settings picker: the trigger is kept on what is
+       actually answering (see brainTriggerLabel, which says "Auto" where Auto is deciding),
+       while the picker in Settings is a list that may never have been opened -- reading it
+       put the words "-- models on the selected server --" in the header, which is the text
+       of its own placeholder row. */
     function currentModelLabel() {
-        const picker = document.getElementById('setting-model-picker');
-        const chosen = picker && picker.selectedOptions && picker.selectedOptions[0];
-        return (chosen && chosen.textContent.trim()) || '';
+        const trigger = document.getElementById('studio-model-name');
+        const name = trigger && trigger.textContent.trim();
+        if (name && name !== 'Select model') return name;
+        return '';
+    }
+
+    /* The answer, without the machine narrating its own plumbing.
+       A turn's stream opens with trace lines -- `\u2299 vault notes loaded: INDEX.md` -- which
+       the chat panel draws as what they are and the speech path already strips (see
+       withoutTraceLines). They are not part of the answer, so they are not part of what
+       this window shows, and above all not part of what gets typed into somebody's text
+       box: the point of the hand-off is the answer, not a note about which files were
+       read on the way to it. */
+    function answerBody(text) {
+        return withoutTraceLines(text || '');
     }
 
     /** Pushes an event to the Answer window, if this is the native app at all. */
@@ -13095,13 +13123,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /** The answer so far, as it streams. */
     function answerProgressed(text) {
-        toAnswerWindow('answer-progress', { text });
+        toAnswerWindow('answer-progress', { text: answerBody(text) });
     }
 
     /** The authoritative answer, once the turn is over. */
     function answerSettled(text) {
         lastAnswer = {
-            text: text || '',
+            text: answerBody(text),
             who: currentAgentName,
             model: currentModelLabel(),
             at: new Date().toLocaleTimeString()
@@ -13485,7 +13513,10 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-answer-window').checked = !!s.answer_window;
             document.getElementById('setting-answer-divert').checked = !!s.answer_divert;
             document.getElementById('setting-handoff-enabled').checked = !!s.handoff_enabled;
-            document.getElementById('setting-handoff-flatten').checked = !!s.handoff_flatten;
+            /* `?? true` rather than `!!`: this one defaults *on* (see
+               handoff::FLATTEN_SETTING), so an install that has never saved it must show
+               the switch on, not off. */
+            document.getElementById('setting-handoff-flatten').checked = s.handoff_flatten ?? true;
             document.getElementById('setting-handoff-hotkey').value = s.hotkey_handoff ?? 'Super+Shift+V';
             answerDivert = !!s.answer_divert;
             handoffEnabled = !!s.handoff_enabled;

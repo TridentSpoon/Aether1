@@ -44,6 +44,15 @@ pub const SETTING: &str = "handoff_enabled";
 
 /// Whether line breaks are flattened to spaces before typing. Remembered because the answer
 /// depends on where the operator usually sends text, not on the answer being sent.
+///
+/// **It defaults to on, and that was learned the hard way.** The first live run of this
+/// typed a three-paragraph answer into a terminal, and a terminal acts on Return: every
+/// line but the last ran as a command. Stripping the *trailing* newline -- property 2 at the
+/// top of this file -- only ever protected the last line, which is the one line that was
+/// never the problem. Flattened, the whole answer arrives as one line sitting at the prompt
+/// with nothing submitted, which is the behaviour somebody expects from "put the answer in
+/// this box". Turning it off is a deliberate choice for a box that wants paragraphs, and the
+/// switch says what it costs.
 pub const FLATTEN_SETTING: &str = "handoff_flatten";
 
 /// The longest answer that will be typed in one go.
@@ -253,6 +262,25 @@ mod tests {
         assert_eq!(prepare("one\ntwo", true), "one two");
         // Windows line endings are one Return, not two.
         assert_eq!(prepare("one\r\ntwo", false), "one\ntwo");
+    }
+
+    #[test]
+    fn flattened_text_carries_no_newline_at_all() {
+        /* The property the default rests on: with flattening on there is no Return
+        anywhere in what gets typed, so nothing in the middle of an answer can submit
+        itself. Driving this for real typed a three-paragraph answer into a terminal and
+        ran every line but the last; this is the test that was owed to that. */
+        let answer = "Here is the plan.\n\n1. Pull the branch.\n2. Run the tests.\n\nThat is all.";
+        let typed = prepare(answer, true);
+        assert!(
+            !typed.contains('\n'),
+            "{typed:?} still has a line break in it"
+        );
+        assert!(!typed.contains('\r'));
+        assert_eq!(
+            typed,
+            "Here is the plan. 1. Pull the branch. 2. Run the tests. That is all."
+        );
     }
 
     #[test]

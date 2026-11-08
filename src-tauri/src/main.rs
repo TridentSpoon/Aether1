@@ -2856,7 +2856,12 @@ fn answer_handoff_rust(
                 .into(),
         );
     }
-    handoff::type_text(&text, flatten.unwrap_or(false))
+    /* The caller usually says, but when it does not the stored answer decides -- and that
+    default is "one line". See the note on FLATTEN_SETTING: a multi-line answer typed
+    into a shell runs every line but the last, which was found by doing it. */
+    let flatten =
+        flatten.unwrap_or_else(|| engine.db().get_setting_bool(handoff::FLATTEN_SETTING, true));
+    handoff::type_text(&text, flatten)
 }
 
 /// Opens the avatar workbench (frontend/avatar-lab.html) in its own window: the avatar
