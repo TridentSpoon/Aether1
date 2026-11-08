@@ -1,0 +1,202 @@
+/* The Answer window: the settled reply on its own, and nothing else.
+ *
+ * Hand-written rather than Tailwind utilities on the markup, for the reason css/face.css and
+ * css/sprite.css are: frontend/vendor/tailwind.css is a static build of the classes a
+ * scanner found, so every new utility in a new page is a stylesheet rebuild (see
+ * scripts/build_vendor_css.sh) and a diff in a vendored file. The answer *body* is the
+ * exception and has to stay Tailwind -- it is rendered by js/markdown.js, which the chat
+ * panel uses too, and its classes are already in that build.
+ *
+ * Every colour here is a theme variable from css/A1theme.css, never a fixed one. This window
+ * is a candidate for being left open on a second screen all day, in whichever of the three
+ * modes the operator runs, and a hard-coded grey that reads on Cyberpunk's near-black is
+ * 2:1 on Solar's near-white. See scripts/check_theme_remap.sh for the same rule applied to
+ * the HUD's own markup.
+ *
+ * The layout is three rows -- who said it, what it said, what to do with it -- with only the
+ * middle one scrolling. The answer is the thing being read; the header and the buttons must
+ * not slide away from it. */
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+}
+
+.answer-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg-core);
+    color: var(--text-main);
+    font-family: 'Noto Sans', system-ui, 'Segoe UI', sans-serif;
+    /* The chat panel's own bubbles are 14px. This window exists to be read rather than
+       skimmed, and it has the width the chat column never had, so it is a step up. */
+    font-size: 15px;
+    line-height: 1.6;
+    overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- who said it */
+
+.answer-head {
+    flex: none;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid var(--border-neon);
+    background: var(--bg-panel-solid);
+}
+
+.answer-who {
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+    color: var(--text-accent);
+}
+
+.answer-meta {
+    font-family: 'Noto Sans Mono', ui-monospace, monospace;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+}
+
+/* Pushed to the right edge: the time is the one thing here nobody is looking for. */
+.answer-when {
+    margin-left: auto;
+}
+
+/* ---------------------------------------------------------------- what it said */
+
+.answer-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 1rem 1.15rem 1.5rem;
+    /* A measure rather than the window's full width. A 1200px-wide window of prose set edge
+       to edge is a line the eye loses its place on halfway across. */
+    max-width: 46rem;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.answer-idle {
+    margin: 0;
+    color: var(--text-dim);
+    font-style: italic;
+}
+
+/* The streaming cursor, so a window that is filling does not look like a window that has
+   stopped. Dropped the moment the answer settles -- see settle() in js/answer-window.js. */
+.answer-text.is-streaming::after {
+    content: '\258b';
+    color: var(--text-accent);
+    animation: answer-blink 1s steps(2, start) infinite;
+}
+
+@keyframes answer-blink {
+    to {
+        visibility: hidden;
+    }
+}
+
+/* ---------------------------------------------------------------- what to do with it */
+
+.answer-foot {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.9rem;
+    padding: 0.6rem 1rem;
+    border-top: 1px solid var(--border-neon);
+    background: var(--bg-panel-solid);
+}
+
+.answer-actions,
+.answer-switches {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem 0.9rem;
+    flex-wrap: wrap;
+}
+
+.answer-btn {
+    font-family: 'Noto Sans Mono', ui-monospace, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--border-neon);
+    border-radius: 0.25rem;
+    background: var(--bg-panel);
+    color: var(--text-main);
+    cursor: pointer;
+}
+
+.answer-btn:hover:not(:disabled) {
+    background: var(--bg-panel-hover);
+    border-color: var(--border-neon-bright);
+}
+
+/* Disabled rather than hidden, with the reason in the note line below: a button that
+   vanishes when the display server will not allow synthetic input teaches nothing, and the
+   operator goes looking for a feature they were told about. */
+.answer-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.answer-btn-primary {
+    color: var(--text-accent);
+    border-color: var(--border-neon-bright);
+}
+
+/* Mid-countdown, so it is obvious that the next click is a cancel and not a second send. */
+.answer-btn-primary.is-counting {
+    color: var(--neon-amber);
+    border-color: var(--neon-amber);
+}
+
+.answer-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-family: 'Noto Sans Mono', ui-monospace, monospace;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.answer-switch input {
+    accent-color: var(--neon-cyan);
+    cursor: pointer;
+}
+
+.answer-note {
+    flex-basis: 100%;
+    margin: 0;
+    min-height: 1.1em;
+    font-family: 'Noto Sans Mono', ui-monospace, monospace;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+}
+
+.answer-note.is-refused {
+    color: var(--neon-amber);
+}
+
+.answer-note.is-done {
+    color: var(--neon-green);
+}
+
+/* Narrow: the switches go under the buttons rather than squeezing both rows onto one line
+   and clipping the second label. A window this narrow is one somebody has docked to the
+   side of a screen, which is a legitimate thing to do with it. */
+@media (max-width: 30rem) {
+    .answer-foot {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

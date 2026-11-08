@@ -53,6 +53,14 @@ axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 getrandom = "0.3"
 minisign-verify = "0.3"
 keyring = "4"
+# Typing the companion's answer into somebody else's text box: the one thing in this
+# program that reaches outside its own windows. Cross-platform synthetic keyboard input --
+# SendInput on Windows, CGEvent on macOS, and on Linux the X11 protocol (`x11rb`, in Rust,
+# so this adds no system library to the build) plus the wlroots virtual-keyboard protocol
+# (`wayland`) for Sway and Hyprland. GNOME and KDE under Wayland support neither and refuse
+# synthetic input by design; handoff::availability says so in those words rather than
+# letting the chord look broken. See src-tauri/src/handoff.rs.
+enigo = { version = "0.6.1", features = ["wayland"] }
 
 [profile.release]
 panic = "abort"

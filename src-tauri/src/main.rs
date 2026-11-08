@@ -46,6 +46,7 @@ mod github_auth;
 mod gpu;
 mod graft;
 mod graft_install;
+mod handoff;
 mod hf;
 mod hotkey;
 mod installs;
@@ -106,6 +107,8 @@ const MAIN_LABEL: &str = "main";
 const SPRITE_LABEL: &str = "sprite";
 const AVATAR_LAB_LABEL: &str = "avatar-lab";
 const FACE_LABEL: &str = "face";
+/// The window that shows nothing but the settled answer -- see frontend/answer.html.
+const ANSWER_LABEL: &str = "answer";
 /// Remembers that the operator has been told once that closing the HUD leaves AETHER1
 /// running in the tray. Same shape as `installs::NOTICE_SETTING`: a thing said once, not a
 /// preference.
@@ -2727,6 +2730,135 @@ fn toggle_face_window_rust(app: tauri::AppHandle, enabled: bool) -> Result<(), S
     }
 }
 
+/// Builds the Answer window: the settled reply on its own, with nothing else in it.
+///
+/// Trident, 2026-11-07, on the chat panel: *"Would it be possible to divert the final
+/// decided output to a separate window?"* The chat panel shows everything a turn did --
+/// the thinking, the tool calls, the hand-offs between models, the memory it touched -- and
+/// the answer is one paragraph somewhere in the middle of it. This window is the answer.
+///
+/// A page of its own (frontend/answer.html) rather than a `?panel=` solo window like the
+/// chat and the board, because those run the whole of app.js a second time: a second
+/// telemetry poll, a second voice engine, a second chat socket. This window renders text
+/// that the HUD hands it and does nothing else, which is also why it is a mirror -- there
+/// is no asking from in here, exactly as with the sprite and the fullscreen face.
+///
+/// Decorated, unlike the face: this one sits beside other windows and gets moved, resized
+/// and closed like them.
+fn build_answer_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(
+        app,
+        ANSWER_LABEL,
+        tauri::WebviewUrl::App("answer.html".into()),
+    )
+    .title("AURORA1 -- Answer")
+    .inner_size(560.0, 720.0)
+    .min_inner_size(320.0, 240.0)
+    .resizable(true)
+    .build()
+}
+
+/// Opens or closes the Answer window, and reports which it now is.
+///
+/// One command for the menu item, the window's own close button and `get_settings`'s
+/// remembered state, for the reason toggle_face_window_rust is one command: three places
+/// that each decide whether it is open is three answers to one question.
+#[tauri::command]
+fn toggle_answer_window_rust(
+    app: tauri::AppHandle,
+    engine: tauri::State<LlmEngine>,
+    enabled: bool,
+) -> Result<bool, String> {
+    if enabled {
+        match app.get_webview_window(ANSWER_LABEL) {
+            Some(window) => {
+                window.show().map_err(|e| e.to_string())?;
+                window.set_focus().map_err(|e| e.to_string())?;
+            }
+            None => {
+                build_answer_window(&app).map_err(|e| e.to_string())?;
+            }
+        }
+    } else if let Some(window) = app.get_webview_window(ANSWER_LABEL) {
+        window.close().map_err(|e| e.to_string())?;
+    }
+    // Remembered only once the window actually opened or closed. A window that failed to
+    // build must not leave a setting behind saying it is open, or every launch after this
+    // one repeats the same failure at startup.
+    let _ = engine
+        .db()
+        .set_setting("answer_window", &serde_json::json!(enabled));
+    Ok(enabled)
+}
+
+/// Whether the Answer window is open, asked by the HUD on load so the menu item and the
+/// "keep it in the chat too" switch start in the right state after a restart.
+#[tauri::command]
+fn answer_window_open_rust(app: tauri::AppHandle) -> bool {
+    app.get_webview_window(ANSWER_LABEL)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// The two switches that live in the Answer window itself rather than in Settings.
+///
+/// A command of its own rather than a call to save_settings, which takes the whole pane's
+/// payload and has provider rules attached to it -- handing that a two-key object from
+/// another window is how a setting nobody touched gets rewritten.
+#[tauri::command(async)]
+fn answer_prefs_rust(
+    engine: tauri::State<LlmEngine>,
+    divert: Option<bool>,
+    flatten: Option<bool>,
+) -> Result<(), String> {
+    if let Some(divert) = divert {
+        engine
+            .db()
+            .set_setting("answer_divert", &serde_json::json!(divert))
+            .map_err(|e| format!("could not remember that: {e}"))?;
+    }
+    if let Some(flatten) = flatten {
+        engine
+            .db()
+            .set_setting(handoff::FLATTEN_SETTING, &serde_json::json!(flatten))
+            .map_err(|e| format!("could not remember that: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Whether this machine will let AURORA1 type into another application's text box, and what
+/// to say when it will not. See handoff.rs -- the answer is a property of the display
+/// server, not of this program.
+#[tauri::command(async)]
+fn handoff_reach_rust() -> handoff::Availability {
+    handoff::availability()
+}
+
+/// Types an answer into whatever window has the focus right now.
+///
+/// `async` for the same reason the chat commands are: it holds the thread for as long as the
+/// text takes to enter, which on a long answer is seconds, and a blocking command would hold
+/// the window's IPC thread for all of it.
+///
+/// Refused outright unless the operator has turned the setting on. That check is here rather
+/// than only in the page because this is the one command in this program that writes outside
+/// its own windows: the page could be reloaded, driven over the LAN server, or simply wrong,
+/// and the setting is the operator's standing answer either way.
+#[tauri::command(async)]
+fn answer_handoff_rust(
+    engine: tauri::State<LlmEngine>,
+    text: String,
+    flatten: Option<bool>,
+) -> Result<usize, String> {
+    if !engine.db().get_setting_bool(handoff::SETTING, false) {
+        return Err(
+            "Typing into other applications is switched off. Settings -> Display turns it on."
+                .into(),
+        );
+    }
+    handoff::type_text(&text, flatten.unwrap_or(false))
+}
+
 /// Opens the avatar workbench (frontend/avatar-lab.html) in its own window: the avatar
 /// engine with nothing else running, plus the builder that writes the custom avatar's
 /// recipe. A separate window rather than a route inside the HUD, because the workbench
@@ -3328,7 +3460,10 @@ fn main() {
         // `show`/`toggle`/`face` continue into the app path: the single-instance plugin
         // below hands their argv to the already-running instance, and if there isn't one,
         // this launch becomes it.
-        cli::Invocation::App | cli::Invocation::Window { .. } | cli::Invocation::Face => {}
+        cli::Invocation::App
+        | cli::Invocation::Window { .. }
+        | cli::Invocation::Face
+        | cli::Invocation::TypeAnswer => {}
         // Headless HTTP mode.
         cli::Invocation::Serve { lan } => {
             let engine = build_llm_engine();
@@ -3368,6 +3503,12 @@ fn main() {
                         eprintln!("[AETHER1] Could not open the fullscreen face: {e}");
                     }
                 }
+                // `aether1 type-answer`, which is how a Wayland compositor's own keybinding
+                // reaches the hand-off -- the application-registered chord does not fire
+                // there (see hotkey::warn_if_wayland). The HUD is deliberately *not*
+                // summoned: this command exists to type into the window the operator is
+                // already in, and raising ours would take the focus it is aiming at.
+                cli::Invocation::TypeAnswer => hotkey::request_handoff(app),
                 _ => hotkey::show_window(app),
             },
         ))
@@ -3528,6 +3669,11 @@ fn main() {
             reveal_update_download_rust,
             toggle_sprite_window_rust,
             toggle_face_window_rust,
+            toggle_answer_window_rust,
+            answer_window_open_rust,
+            handoff_reach_rust,
+            answer_prefs_rust,
+            answer_handoff_rust,
             open_avatar_lab_rust,
             open_panel_window_rust,
             set_window_always_on_top_rust,
@@ -3957,6 +4103,20 @@ fn main() {
                 }
             }
 
+            // The Answer window comes back the way the sprite does rather than the way the
+            // face does: it is a window you put beside the HUD and read all day, so an
+            // install that left it open means to find it open. Written by
+            // toggle_answer_window_rust, which is also what the menu item calls.
+            let answer_was_open = app
+                .state::<LlmEngine>()
+                .db()
+                .get_setting_bool("answer_window", false);
+            if answer_was_open {
+                if let Err(e) = build_answer_window(app.handle()) {
+                    eprintln!("[AETHER1] Could not reopen the Answer window: {e}");
+                }
+            }
+
             // Live telemetry push, replacing the Python backend's /ws/telemetry loop: an
             // event instead of a websocket message, but the same ~1s cadence and the same
             // payload shape (see Telemetry::to_wire_json / UsageSnapshot), so the frontend's
@@ -4203,6 +4363,11 @@ mod ipc_thread_tests {
     const MAIN_THREAD_ONLY: &[&str] = &[
         "toggle_sprite_window_rust",
         "toggle_face_window_rust",
+        // Building, showing and closing a window is main-thread work on every platform
+        // this runs on, which is why these two sit beside the sprite and the face rather
+        // than being made async.
+        "toggle_answer_window_rust",
+        "answer_window_open_rust",
         "open_avatar_lab_rust",
         "open_panel_window_rust",
         "set_window_always_on_top_rust",

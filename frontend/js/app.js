@@ -2506,20 +2506,14 @@ document.addEventListener('DOMContentLoaded', () => {
             .replace(/'/g, '&#039;');
     }
 
+    /* The answer renderer, which now lives in js/markdown.js because the Answer window
+       (frontend/answer.html) draws the same answers from the same text. Kept as a function
+       of this name because fourteen call sites in this file read better for it, and because
+       the fallback matters: a page that somehow loaded without the renderer must still show
+       the answer as text rather than nothing at all. */
     function formatMarkdown(text) {
-        if (!text) return '';
-        let escaped = text
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-
-        escaped = escaped.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, '<pre class="bg-black/50 p-2.5 rounded border border-cyan-500/30 my-2 overflow-x-auto text-xs font-mono text-cyan-200"><code>$2</code></pre>');
-        escaped = escaped.replace(/`([^`]+)`/g, '<code class="bg-cyan-950/80 px-1 py-0.5 rounded text-cyan-300 font-mono text-xs border border-cyan-500/20">$1</code>');
-        escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong class="text-cyan-300 font-bold">$1</strong>');
-        escaped = escaped.replace(/^### (.*$)/gim, '<h3 class="text-md font-bold text-cyan-400 mt-2 mb-1">$1</h3>');
-        escaped = escaped.replace(/^## (.*$)/gim, '<h2 class="text-lg font-bold text-cyan-300 mt-2 mb-1">$1</h2>');
-        escaped = escaped.replace(/\n/g, '<br/>');
-        return escaped;
+        if (window.Aether1Markdown) return window.Aether1Markdown.render(text);
+        return escapeHtml(text).replace(/\n/g, '<br/>');
     }
 
     /* A line from AURORA1 the program, not from the persona.
@@ -3344,11 +3338,13 @@ document.addEventListener('DOMContentLoaded', () => {
     /// and the chunked speech chain is the send path's complication, not this one's.
     async function resumeAfterAction(actionId) {
         const replyDiv = appendMessage(currentAgentName, '');
+        answerBegan();
         let rendered = '';
         const onDelta = (delta) => {
             if (!delta) return;
             rendered += delta;
-            replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+            paintReply(replyDiv, rendered);
+            answerProgressed(rendered);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         };
 
@@ -3383,7 +3379,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const reply = (data && data.reply) || rendered;
-        replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+        paintReply(replyDiv, reply);
+        answerSettled(reply);
         if (data && data.reasoning) {
             appendReasoning(replyDiv, data.reasoning);
             replyDiv.reasoningBody.textContent = data.reasoning;
@@ -3577,6 +3574,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // The reply's own message node, created empty and filled in as deltas arrive --
         // the cursor class marks it as still being written.
         const replyDiv = appendMessage(currentAgentName, '');
+        /* The Answer window is told now rather than when the first word lands, so it clears
+           the previous answer at the moment the question is asked. A window still showing
+           the last answer while a new one is being worked on is a window that cannot be
+           trusted to be showing the current one. */
+        answerBegan();
         /* No typing cursor yet. It means "words are arriving", and while the wait note is
            up no words are arriving -- two different claims about the same moment, one of
            them false. The cursor goes on when the first real text does, below. */
@@ -3643,7 +3645,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 replyDiv.classList.add('typing-cursor');
                 setAvatarState('IDLE');
             }
-            replyDiv.bodyDiv.innerHTML = formatMarkdown(rendered);
+            paintReply(replyDiv, rendered);
+            answerProgressed(rendered);
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
             pending += delta;
@@ -3693,8 +3696,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (agentName) updateAgentNameDisplay(agentName);
             // The return value is authoritative: render it in place of the accumulated
-            // deltas, which also repairs the display if any delta was dropped.
-            replyDiv.bodyDiv.innerHTML = formatMarkdown(reply);
+            // deltas, which also repairs the display if any delta was dropped. The Answer
+            // window is told the same text for the same reason -- it has been shown the
+            // deltas, and this is the version that is actually the answer.
+            paintReply(replyDiv, reply);
+            answerSettled(reply);
             replyDiv.classList.remove('typing-cursor');
             sealReasoning(replyDiv);
             /* Authoritative, exactly as the reply is: a dropped reasoning delta is repaired
@@ -13039,6 +13045,214 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+
+    /* ------------------------------------------------------------------ the Answer window
+
+       The settled reply, sent to a window of its own (frontend/answer.html), and from there
+       into somebody else's text box.
+
+       Trident, 2026-11-07: *"Would it be possible to divert the final decided output to a
+       separate window?"* The chat panel shows everything a turn did -- the thinking, the
+       tool calls, the hand-offs, the memory it touched -- and the answer is one paragraph in
+       the middle of all of it. The Answer window is the answer.
+
+       This file stays the one place that knows what the answer was. The other window draws
+       what it is sent and does nothing else, which is why everything below is a push rather
+       than a second page fetching the same reply and rendering it independently. */
+
+    /* The last settled answer, kept for two things that both arrive after it: a window
+       opened mid-session, which asks for it on load, and the hand-off chord, which types
+       it. One string rather than a history -- "the answer" is the last one, and a window
+       that showed an older one on a chord press would type an older one too. */
+    let lastAnswer = { text: '', who: '', model: '', at: '' };
+
+    /* The two standing choices the Answer window owns, mirrored here because the chat is
+       what has to act on the first of them. Loaded from the settings table on startup (see
+       loadSettings) and updated when the other window changes one. */
+    let answerDivert = false;
+    let handoffEnabled = false;
+
+    /** Which model is answering, as the picker names it -- for the other window's header. */
+    function currentModelLabel() {
+        const picker = document.getElementById('setting-model-picker');
+        const chosen = picker && picker.selectedOptions && picker.selectedOptions[0];
+        return (chosen && chosen.textContent.trim()) || '';
+    }
+
+    /** Pushes an event to the Answer window, if this is the native app at all. */
+    function toAnswerWindow(event, payload) {
+        if (!IS_TAURI || !window.__TAURI__ || !window.__TAURI__.event) return;
+        window.__TAURI__.event.emit(event, payload).catch(() => {
+            /* The window may simply not be open. Emitting to nobody is not a failure and
+               there is nothing for the operator to do about it. */
+        });
+    }
+
+    /** A new answer is starting. */
+    function answerBegan() {
+        toAnswerWindow('answer-begin', { who: currentAgentName, model: currentModelLabel() });
+    }
+
+    /** The answer so far, as it streams. */
+    function answerProgressed(text) {
+        toAnswerWindow('answer-progress', { text });
+    }
+
+    /** The authoritative answer, once the turn is over. */
+    function answerSettled(text) {
+        lastAnswer = {
+            text: text || '',
+            who: currentAgentName,
+            model: currentModelLabel(),
+            at: new Date().toLocaleTimeString()
+        };
+        toAnswerWindow('answer-settled', lastAnswer);
+    }
+
+    /* Draws a reply into the chat, or doesn't.
+       With "keep it out of the chat" on, the bubble says where the answer went instead of
+       repeating it -- the thinking, the tool calls and the memory chips stay exactly where
+       they were, because those are the parts this window is for. The stub is a sentence
+       rather than an empty bubble: an answer that silently failed to render and an answer
+       deliberately sent elsewhere must not look the same. */
+    function paintReply(replyDiv, text) {
+        if (!replyDiv || !replyDiv.bodyDiv) return;
+        if (answerDivert) {
+            replyDiv.bodyDiv.textContent = '→ Answered in the Answer window.';
+            replyDiv.bodyDiv.classList.add('opacity-60', 'italic');
+            return;
+        }
+        replyDiv.bodyDiv.classList.remove('opacity-60', 'italic');
+        replyDiv.bodyDiv.innerHTML = formatMarkdown(text);
+    }
+
+    /* Types the last answer into whatever window has the focus.
+       Asked for by the chord (hotkey.rs registers it; Rust emits the request because only
+       Rust hears the chord) and by `aether1 type-answer`, which is how a Wayland compositor
+       reaches the same thing. The refusals are reported in the chat rather than swallowed:
+       a chord that does nothing and says nothing is indistinguishable from a broken one. */
+    async function typeLastAnswer() {
+        if (!lastAnswer.text.trim()) {
+            appendSystemNotice('There is no answer to type yet.');
+            return;
+        }
+        try {
+            const box = document.getElementById('setting-handoff-flatten');
+            await tauriInvoke('answer_handoff_rust', {
+                text: lastAnswer.text,
+                flatten: !!(box && box.checked)
+            });
+        } catch (e) {
+            appendSystemNotice(String((e && e.message) || e));
+        }
+    }
+
+    /* Opens or closes the Answer window, keeping the Settings switch in step with what
+       actually happened -- the command is the one that knows, since it reports the state it
+       ended in rather than the state it was asked for. */
+    function openAnswerWindow(wanted) {
+        return tauriInvoke('toggle_answer_window_rust', { enabled: !!wanted })
+            .then((open) => {
+                const box = document.getElementById('setting-answer-window');
+                if (box) box.checked = !!open;
+                /* A window that has just opened has missed every event so far. It asks for
+                   the last answer itself on load, and this is the same push for the case
+                   where it was already open and merely re-focused. */
+                if (open && lastAnswer.text) toAnswerWindow('answer-settled', lastAnswer);
+            })
+            .catch((e) => {
+                appendSystemNotice(`The Answer window could not be opened: ${(e && e.message) || e}`);
+                const box = document.getElementById('setting-answer-window');
+                if (box) box.checked = false;
+            });
+    }
+
+    /* The Answer window's own wiring: the button that opens it, the handshake that fills
+       it, and the chord that types out of it. */
+    function initAnswerWindow() {
+        const btn = document.getElementById('btn-answer-window');
+        if (!IS_TAURI) {
+            // No second native window to open from a browser tab, and a button that cannot
+            // do anything is worse than no button -- the same call initAvatarFullscreen
+            // makes about the fullscreen face.
+            if (btn) btn.remove();
+            return;
+        }
+        if (btn) {
+            btn.addEventListener('click', () => {
+                openAnswerWindow(true);
+            });
+        }
+
+        /* The section in Settings, and the switch at the top of it. The switch acts at once
+           rather than on Save: it opens or closes a window, and a window that appears some
+           time after you asked for it is a window you ask for twice. The command is also
+           what remembers the choice, which is why answer_window is left out of the Save
+           payload entirely. */
+        const section = document.getElementById('answer-window-section');
+        if (section) section.classList.remove('hidden');
+        const openSwitch = document.getElementById('setting-answer-window');
+        if (openSwitch) {
+            openSwitch.addEventListener('change', () => openAnswerWindow(openSwitch.checked));
+        }
+        const divertSwitch = document.getElementById('setting-answer-divert');
+        if (divertSwitch) {
+            divertSwitch.addEventListener('change', () => {
+                answerDivert = divertSwitch.checked;
+                toAnswerWindow('answer-prefs', { divert: answerDivert });
+            });
+        }
+        const handoffSwitch = document.getElementById('setting-handoff-enabled');
+        if (handoffSwitch) {
+            handoffSwitch.addEventListener('change', () => {
+                handoffEnabled = handoffSwitch.checked;
+                toAnswerWindow('answer-prefs', { handoff: handoffEnabled });
+            });
+        }
+
+        /* What this machine will actually allow, said where the switch is rather than only
+           in the other window -- an operator who turns it on and finds nothing happens is
+           owed the reason at the switch. Only on the bad news: where it works there is
+           nothing to report and the paragraph already explains the feature. */
+        tauriInvoke('handoff_reach_rust')
+            .then((reach) => {
+                if (!reach || reach.ok) return;
+                const note = document.getElementById('answer-handoff-reach');
+                if (note) note.textContent = reach.why;
+            })
+            .catch((e) => console.warn('Could not ask whether typing into other windows works', e));
+
+        const events = window.__TAURI__ && window.__TAURI__.event;
+        if (!events) return;
+
+        /* The window saying it is open. It gets the last answer and both switches, so a
+           window opened in the middle of a session is not blank until the next question. */
+        events.listen('answer-window-ready', () => {
+            toAnswerWindow('answer-prefs', {
+                divert: answerDivert,
+                flatten: !!(document.getElementById('setting-handoff-flatten') || {}).checked,
+                handoff: handoffEnabled
+            });
+            if (lastAnswer.text) toAnswerWindow('answer-settled', lastAnswer);
+        }).catch((e) => console.warn('Could not listen for the Answer window', e));
+
+        /* A switch flipped over there. The database write is the other window's own (see
+           answer_prefs_rust); this is the chat being told to stop showing the answer now
+           rather than after the next restart. */
+        events.listen('answer-prefs-changed', (event) => {
+            const payload = event.payload || {};
+            if (typeof payload.divert === 'boolean') answerDivert = payload.divert;
+            if (typeof payload.flatten === 'boolean') {
+                const box = document.getElementById('setting-handoff-flatten');
+                if (box) box.checked = payload.flatten;
+            }
+        }).catch((e) => console.warn('Could not listen for the answer preferences', e));
+
+        events.listen('answer-handoff-requested', () => {
+            typeLastAnswer();
+        }).catch((e) => console.warn('Could not listen for the hand-off chord', e));
+    }
+
     /* The avatar's other exit: fullscreen on a spare screen (see frontend/face.html and
        build_face_window in main.rs). Unlike the sprite this does not take the avatar out of
        this panel -- the face is a mirror, and the HUD keeps its own hologram -- so there is
@@ -13264,6 +13478,17 @@ document.addEventListener('DOMContentLoaded', () => {
             showPersonaSpeciality();
             document.getElementById('setting-voice').value = s.voice_name || 'en-US-AriaNeural';
             document.getElementById('setting-hotkey').value = s.hotkey_toggle ?? 'Super+Shift+A';
+            /* The Answer window's own settings. `answerDivert` and `handoffEnabled` are
+               mirrored into this file's own state as well as onto the switches, because the
+               chat acts on the first of them on every reply and the Answer window is told
+               the second whenever it opens. */
+            document.getElementById('setting-answer-window').checked = !!s.answer_window;
+            document.getElementById('setting-answer-divert').checked = !!s.answer_divert;
+            document.getElementById('setting-handoff-enabled').checked = !!s.handoff_enabled;
+            document.getElementById('setting-handoff-flatten').checked = !!s.handoff_flatten;
+            document.getElementById('setting-handoff-hotkey').value = s.hotkey_handoff ?? 'Super+Shift+V';
+            answerDivert = !!s.answer_divert;
+            handoffEnabled = !!s.handoff_enabled;
             document.getElementById('setting-tts-engine').value = s.tts_engine || 'os';
             document.getElementById('setting-tts-system-voice').value = s.tts_system_voice || '';
             // Empty is the normal, working value for these two: it means "find Piper and
@@ -13498,6 +13723,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 // OS to summon, and saving a chord there would promise something that can't
                 // happen. See setting-hotkey-wrap, hidden on that path.
                 ...(IS_TAURI ? { hotkey_toggle: document.getElementById('setting-hotkey').value.trim() } : {}),
+                /* The Answer window and the hand-off, native only for the same reason the
+                   chord above is: a browser tab has no second window to open and no
+                   keyboard to synthesise. `answer_window` is not sent from here -- the
+                   switch opens or closes the window on the spot through
+                   toggle_answer_window_rust, which is also what writes the setting, and
+                   sending it again from the payload would reopen a window the operator had
+                   just closed from the window's own title bar. */
+                ...(IS_TAURI
+                    ? {
+                        answer_divert: document.getElementById('setting-answer-divert').checked,
+                        handoff_enabled: document.getElementById('setting-handoff-enabled').checked,
+                        handoff_flatten: document.getElementById('setting-handoff-flatten').checked,
+                        hotkey_handoff: document.getElementById('setting-handoff-hotkey').value.trim()
+                    }
+                    : {}),
                 tools_enabled: document.getElementById('setting-tools').checked,
                 code_perm_system: document.getElementById('setting-code-perm-system').checked,
                 code_perm_github: document.getElementById('setting-code-perm-github').checked,
@@ -15665,6 +15905,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initCodeWorkspaceBrowse();
     initPanelUndock();
     initAvatarFullscreen();
+    initAnswerWindow();
     initHologramFloatingNotice();
     initAvatarTapIntroduction();
     initSpecialityModel();
