@@ -374,6 +374,10 @@ mod tests {
     /// The fault this field exists for: on Hyprland typing works, so the feature is offered,
     /// and the chord the UI shows beside it can never arrive. Both halves are asserted
     /// together because it is the combination that is the trap.
+    ///
+    /// Gated like its two neighbours: `availability_from` is the Linux decision and does not
+    /// exist on the other platforms, where `availability` has nothing to decide.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn wayland_says_the_chord_will_not_fire_even_where_typing_works() {
         let reach = availability_from(Some("wayland"), Some("wayland-0"), Some("Hyprland"));
