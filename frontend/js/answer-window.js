@@ -250,6 +250,17 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshButtons();
     }).catch((e) => console.warn('Could not listen for the answer preferences', e));
 
+    /* The chord, when this window is open.
+       Rust broadcasts the request and the HUD stands aside while this window exists (see
+       initAnswerWindow in js/app.js), because the answer on screen here is the one the
+       operator means -- whichever window produced it. No countdown: with the chord, they
+       are already in the box they are aiming at. */
+    events.listen('answer-handoff-requested', () => {
+        if (explainIfDisabled() !== false) return;
+        stopCountdown();
+        typeItNow();
+    }).catch((e) => console.warn('Could not listen for the hand-off chord', e));
+
     core.invoke('handoff_reach_rust')
         .then((value) => {
             reach = value;

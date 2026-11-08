@@ -13175,6 +13175,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    /* The current switches, to the Answer window. Sent on its handshake and again when the
+       settings have actually loaded -- the two are not ordered, and whichever lands last is
+       the one that is right. */
+    function publishAnswerPrefs() {
+        const flatten = document.getElementById('setting-handoff-flatten');
+        toAnswerWindow('answer-prefs', {
+            divert: answerDivert,
+            flatten: flatten ? flatten.checked : true,
+            handoff: handoffEnabled
+        });
+    }
+
     /* Opens or closes the Answer window, keeping the Settings switch in step with what
        actually happened -- the command is the one that knows, since it reports the state it
        ended in rather than the state it was asked for. */
@@ -13256,11 +13268,7 @@ document.addEventListener('DOMContentLoaded', () => {
         /* The window saying it is open. It gets the last answer and both switches, so a
            window opened in the middle of a session is not blank until the next question. */
         events.listen('answer-window-ready', () => {
-            toAnswerWindow('answer-prefs', {
-                divert: answerDivert,
-                flatten: !!(document.getElementById('setting-handoff-flatten') || {}).checked,
-                handoff: handoffEnabled
-            });
+            publishAnswerPrefs();
             if (lastAnswer.text) toAnswerWindow('answer-settled', lastAnswer);
         }).catch((e) => console.warn('Could not listen for the Answer window', e));
 
@@ -13269,14 +13277,40 @@ document.addEventListener('DOMContentLoaded', () => {
            rather than after the next restart. */
         events.listen('answer-prefs-changed', (event) => {
             const payload = event.payload || {};
-            if (typeof payload.divert === 'boolean') answerDivert = payload.divert;
+            if (typeof payload.divert === 'boolean') {
+                answerDivert = payload.divert;
+                /* The checkbox as well as the variable. Save writes every field of the
+                   pane, so a Settings screen left open with the old value on it would
+                   undo this preference the next time any unrelated setting was saved. */
+                const box = document.getElementById('setting-answer-divert');
+                if (box) box.checked = payload.divert;
+            }
             if (typeof payload.flatten === 'boolean') {
                 const box = document.getElementById('setting-handoff-flatten');
                 if (box) box.checked = payload.flatten;
             }
         }).catch((e) => console.warn('Could not listen for the answer preferences', e));
 
-        events.listen('answer-handoff-requested', () => {
+        /* The chord, and the one rule that keeps it from typing twice.
+
+           Rust broadcasts the request, because it cannot know which page should answer it.
+           Three kinds of page hear it: this HUD, the Answer window, and any undocked panel
+           window -- which loads this same index.html with `?panel=` on the URL and so runs
+           this same function (see open_panel_window_rust). Each holds its own `lastAnswer`,
+           so two of them answering means two answers typed into one text box, interleaved
+           character by character. So:
+
+             - an undocked panel never answers. It is a second view of this window, and this
+               window is already listening. It still *publishes* its answers, so one asked
+               there still reaches the Answer window.
+             - with the Answer window open, that window answers, because it holds exactly
+               the text on screen -- which is what "type this answer" means, whichever
+               window produced it.
+             - with it closed, this one does. */
+        if (document.documentElement.hasAttribute('data-solo-panel')) return;
+        events.listen('answer-handoff-requested', async () => {
+            const windowHasIt = await tauriInvoke('answer_window_open_rust').catch(() => false);
+            if (windowHasIt) return;
             typeLastAnswer();
         }).catch((e) => console.warn('Could not listen for the hand-off chord', e));
     }
@@ -13520,6 +13554,12 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('setting-handoff-hotkey').value = s.hotkey_handoff ?? 'Super+Shift+V';
             answerDivert = !!s.answer_divert;
             handoffEnabled = !!s.handoff_enabled;
+            /* And tell the Answer window, rather than only answering when it asks. A
+               window remembered open is built at startup and can say it is ready before
+               this call has come back -- or before the listener above exists at all -- and
+               the handshake would then hand it the pre-load defaults: hand-off off, so its
+               Type button stays dead for the session. */
+            publishAnswerPrefs();
             document.getElementById('setting-tts-engine').value = s.tts_engine || 'os';
             document.getElementById('setting-tts-system-voice').value = s.tts_system_voice || '';
             // Empty is the normal, working value for these two: it means "find Piper and
