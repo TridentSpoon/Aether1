@@ -2510,6 +2510,30 @@ pub struct AgentAnalysis {
     pub text: String,
 }
 
+/// One profile's prompt with what the profiles before it said appended, or unchanged when
+/// it is the first.
+///
+/// This is a function of its own because of where it has to be *called*, which is the bug
+/// it fixes. The jobs are all assembled before the first model is asked -- deliberately, so
+/// that a model nobody has installed is refused up front rather than after two minutes of
+/// answering -- and the hand-off was being assembled in that same loop, where it is
+/// necessarily empty, because the profile whose answer it carries has not run yet. Every
+/// sequential prompt therefore went out without it, while the picker said "Sequential
+/// hand-off" and the status line promised each profile received the last one's analysis.
+/// Sequential mode was parallel mode run slowly.
+///
+/// So the hand-off is built at dispatch, where the answers exist. `handoff` already begins
+/// with its own blank line, so the heading is joined to it directly.
+fn with_handoff(prompt: &str, handoff: &str) -> String {
+    if handoff.is_empty() {
+        return prompt.to_string();
+    }
+    format!(
+        "{prompt}\n\nHandoff from earlier selected profiles (treat as analysis, verify \
+         against the repository):{handoff}"
+    )
+}
+
 /// Run selected, backend-defined analysis profiles over one task. The model, GitHub access,
 /// workspace boundary, edit grant, and run sandbox are exactly the same as ordinary AETHER
 /// CODE; profiles only specialize the analysis instructions.
@@ -2569,15 +2593,14 @@ pub fn code_agents_ask(
             .ok_or_else(|| {
                 format!("{model} is not currently installed on a local model server.")
             })?;
+        /* The profile's own prompt, without the hand-off. Every job is built here, before
+        any model is called, so that an unavailable model is refused up front rather than
+        after the first profile has already spent two minutes answering. The hand-off
+        cannot be added here for exactly the same reason: it is the *previous* profile's
+        answer, and nothing has been asked yet. It is appended at dispatch below. */
         let prompt = format!(
-            "[Agent Browser profile: {} | model: {}]\n{instructions}\n\nOperator task:\n{task}{}",
-            agent.name,
-            model,
-            if parallel || handoff.is_empty() {
-                String::new()
-            } else {
-                format!("\n\nHandoff from earlier selected profiles (treat as analysis, verify against the repository):\n{handoff}")
-            },
+            "[Agent Browser profile: {} | model: {}]\n{instructions}\n\nOperator task:\n{task}",
+            agent.name, model,
         );
         jobs.push((
             agent.id.clone(),
@@ -2634,6 +2657,8 @@ pub fn code_agents_ask(
     } else {
         for (id, name, model, endpoint, api, prompt) in jobs {
             let session = format!("aether-agent-{id}");
+            // What the profiles before this one said. See `with_handoff`.
+            let prompt = with_handoff(&prompt, &handoff);
             let reply = crate::code_chat::ask_in_session(
                 engine.db(),
                 &endpoint,
@@ -3800,5 +3825,36 @@ mod provider_account_tests {
     fn there_is_no_account_to_forget_for_offline() {
         let engine = engine("offline");
         assert!(forget_provider_account(&engine, "offline").is_err());
+    }
+
+    /// The first profile of a sequential run has nothing to be handed, and its prompt must
+    /// not grow an empty heading saying so.
+    #[test]
+    fn the_first_profile_gets_its_prompt_unchanged() {
+        assert_eq!(
+            with_handoff("Operator task:\nReview this", ""),
+            "Operator task:\nReview this"
+        );
+    }
+
+    /// The fault this fixes: every sequential prompt was built before any profile had
+    /// answered, so the hand-off was always empty and never reached the model, while the
+    /// picker said "Sequential hand-off".
+    #[test]
+    fn a_later_profile_is_handed_what_the_earlier_ones_said() {
+        let handoff = "\n\nCode Reviewer (qwen2.5-coder:7b):\nadd() subtracts.";
+        let prompt = with_handoff("Operator task:\nReview this", handoff);
+        assert!(
+            prompt.contains("Handoff from earlier selected profiles"),
+            "the heading has to be there or the text below it reads as the operator: {prompt}"
+        );
+        assert!(prompt.contains("Code Reviewer (qwen2.5-coder:7b):"));
+        assert!(prompt.contains("add() subtracts."));
+        assert!(
+            prompt.starts_with("Operator task:\nReview this"),
+            "the profile's own prompt still comes first: {prompt}"
+        );
+        // `handoff` carries its own blank line, so the heading must not add a second.
+        assert!(!prompt.contains("repository):\n\n\n"), "{prompt}");
     }
 }

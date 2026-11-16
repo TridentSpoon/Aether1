@@ -186,8 +186,16 @@ pub fn call(db: &MemoryDb, name: &str, args: &Value) -> Result<String, String> {
     }
 
     match name {
-        "read_file" => run_builtin(db, &crate::tools::builtin::ReadFile, args),
-        "list_dir" => run_builtin(db, &crate::tools::builtin::ListDir, args),
+        "read_file" => run_builtin(
+            db,
+            &crate::tools::builtin::ReadFile,
+            &against_workspace(db, args),
+        ),
+        "list_dir" => run_builtin(
+            db,
+            &crate::tools::builtin::ListDir,
+            &against_workspace(db, args),
+        ),
         "machine" => Ok(machine_summary()),
         "gh" => gh(db, args),
         "github_search" => github_search(db, args),
@@ -248,6 +256,47 @@ fn checkpoint_if_due(db: &MemoryDb) {
 /// belong to the companion's turn, and this panel has neither. What `Tool::call` still
 /// carries is the part that matters -- `fs_guard` is checked inside the tool, so the
 /// denied paths are denied here too.
+/// A relative `path` argument, read as relative to the project folder.
+///
+/// `read_file` and `list_dir` are the companion's own machine-wide readers, and they
+/// resolve a relative path against the *process's* working directory -- which is wherever
+/// AETHER1 happened to be started, and never what a coding model means by `src/main.rs`.
+/// `edit_file`, `create_file` and `run` resolve against the workspace root
+/// (`code_workspace::resolve`), so until this existed the panel could **edit a file it
+/// could not read by the same path**: `read_file main.py` returned "No such file or
+/// directory" while `edit_file` on that same `main.py` found it and wrote the change.
+///
+/// That asymmetry is worse than it reads. The first move of any coding model is to read
+/// the file by its repo-relative path, `MAX_TOOL_ROUNDS` is three, and a model that spends
+/// them failing to find a file it was just asked about looks exactly like a model too
+/// small for the job.
+///
+/// Only a **relative** path is rewritten, and only when a workspace is set. An absolute
+/// path is left alone, so the machine-wide read the System grant describes is unchanged --
+/// this widens nothing and narrows nothing, it only gives a relative path the meaning the
+/// model intended. With no workspace set there is nothing to resolve against and the
+/// argument goes through untouched.
+fn against_workspace(db: &MemoryDb, args: &Value) -> Value {
+    let Some(path) = args.get("path").and_then(Value::as_str) else {
+        return args.clone();
+    };
+    let raw = path.trim();
+    if raw.is_empty() || crate::paths::expand_home(raw).is_absolute() {
+        return args.clone();
+    }
+    let Ok(root) = crate::code_workspace::root(db) else {
+        return args.clone();
+    };
+    let mut rewritten = args.clone();
+    if let Some(object) = rewritten.as_object_mut() {
+        object.insert(
+            "path".to_string(),
+            Value::String(root.join(raw).to_string_lossy().into_owned()),
+        );
+    }
+    rewritten
+}
+
 fn run_builtin(db: &MemoryDb, tool: &dyn Tool, args: &Value) -> Result<String, String> {
     debug_assert!(
         !tool.mutating(),
@@ -818,6 +867,50 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         MemoryDb::open(&path).expect("open test db")
+    }
+
+    /// The fault this fixes: `read_file src/main.rs` resolved against the process's
+    /// working directory while `edit_file src/main.rs` resolved against the workspace, so
+    /// the panel could edit a file it could not read by the same path.
+    #[test]
+    fn a_relative_read_is_taken_against_the_project_folder() {
+        let db = db();
+        let root = std::env::temp_dir().join(format!(
+            "aether1_relative_read_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("make the project folder");
+        db.set_setting(
+            crate::code_workspace::ROOT_SETTING,
+            &json!(root.to_string_lossy()),
+        )
+        .expect("set the workspace");
+
+        let rewritten = against_workspace(&db, &json!({"path": "src/main.rs"}));
+        assert_eq!(
+            rewritten["path"].as_str().unwrap(),
+            root.join("src/main.rs").to_string_lossy(),
+            "a relative path means a path in the project, the same as it does to edit_file"
+        );
+
+        // An absolute path is the machine-wide read the System grant describes, untouched.
+        let absolute = against_workspace(&db, &json!({"path": "/etc/hostname"}));
+        assert_eq!(absolute["path"].as_str().unwrap(), "/etc/hostname");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// With no project folder there is nothing to resolve against, and the argument has to
+    /// reach the reader exactly as it was written rather than being mangled on the way.
+    #[test]
+    fn with_no_project_folder_the_path_is_left_alone() {
+        let db = db();
+        let untouched = against_workspace(&db, &json!({"path": "src/main.rs"}));
+        assert_eq!(untouched["path"].as_str().unwrap(), "src/main.rs");
+        // And a call with no path at all is passed straight through.
+        assert_eq!(against_workspace(&db, &json!({})), json!({}));
     }
 
     #[test]
