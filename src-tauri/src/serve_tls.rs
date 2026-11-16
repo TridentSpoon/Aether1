@@ -94,15 +94,8 @@ fn generate_at(cert_file: &Path, key_file: &Path) -> Result<(String, String), St
     }
     std::fs::write(cert_file, &cert_pem)
         .map_err(|e| format!("could not save {}: {e}", cert_file.display()))?;
-    std::fs::write(key_file, &key_pem)
+    crate::paths::write_private(key_file, &key_pem)
         .map_err(|e| format!("could not save {}: {e}", key_file.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Best-effort, as with the pairing token: a filesystem that refuses permission
-        // changes still gets a working key, just not one this can lock down further.
-        let _ = std::fs::set_permissions(key_file, std::fs::Permissions::from_mode(0o600));
-    }
     Ok((cert_pem, key_pem))
 }
 

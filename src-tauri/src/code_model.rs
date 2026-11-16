@@ -285,15 +285,7 @@ pub fn start(db: &MemoryDb) -> Result<Brain, String> {
 #[cfg(unix)]
 fn spawn(db_path: &Path, endpoint: Endpoint) -> Result<Brain, String> {
     let address = dial_address(&endpoint)?;
-    let dir = db_path
-        .parent()
-        .ok_or_else(|| "there is nowhere to put the model socket".to_string())?
-        .to_path_buf();
-    let _ = std::fs::create_dir_all(&dir);
-    let socket = dir.join("model.sock");
-    // A stale socket from a crash would refuse to bind; it names this process's own path
-    // and nothing else uses it.
-    let _ = std::fs::remove_file(&socket);
+    let socket = crate::code_proxy::private_socket(db_path, "model")?;
 
     let listen_on = socket.clone();
     std::thread::Builder::new()

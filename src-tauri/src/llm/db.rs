@@ -454,12 +454,20 @@ impl MemoryDb {
         // "9000". get_setting's fallback-to-raw-string still covers old rows written by the
         // previous raw-string scheme, so this doesn't need a data migration.
         let val_str = value.to_string();
-        self.connect()?.execute(
-            "INSERT INTO settings (key, value) VALUES (?1, ?2) \
-             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            params![key, val_str],
-        )?;
-        Ok(())
+        let saved = self.connect().and_then(|conn| {
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                params![key, val_str],
+            )
+        });
+        // Said here because most callers are best-effort and drop the error: a setting that
+        // silently did not save is a switch that reads as flipped and is not. The key only,
+        // never the value -- some of these are API keys.
+        if let Err(e) = &saved {
+            eprintln!("[settings] {key} was not saved: {e}");
+        }
+        saved.map(|_| ())
     }
 
     pub fn get_setting(&self, key: &str) -> rusqlite::Result<Option<JsonValue>> {

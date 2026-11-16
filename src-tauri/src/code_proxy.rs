@@ -727,19 +727,59 @@ fn reopen(db_path: &Path) -> Option<MemoryDb> {
     MemoryDb::open(db_path).ok()
 }
 
+/// Where this process puts a socket of its own, beside the database.
+///
+/// Two things the old fixed name beside the database got wrong. It was one name for every
+/// process on that database, and each one deleted and re-bound it on starting -- so the
+/// desktop app and a `--serve` took the door away from each other, and a sandbox was left
+/// holding a socket nobody was listening on. And it sat in a directory other accounts can
+/// reach, with the permissions a socket gets by default, so another user of the machine
+/// could use it as a way to the allowed domains or to the operator's model.
+///
+/// So: a name with this process's id in it, inside a directory only this account can open.
+/// Sockets left by processes that are gone are cleared on the way past.
+#[cfg(unix)]
+pub(crate) fn private_socket(db_path: &Path, stem: &str) -> Result<PathBuf, String> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let dir = db_path
+        .parent()
+        .ok_or_else(|| format!("there is nowhere to put the {stem} socket"))?
+        .join("run");
+    let _ = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir);
+    // It may have been there already, made by something with other ideas.
+    let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+
+    let prefix = format!("{stem}-");
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let owner = name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(".sock"))
+            .and_then(|pid| pid.parse::<libc::pid_t>().ok());
+        // Signal 0 delivers nothing and only asks whether the process is there.
+        // SAFETY: kill with signal 0 has no effect on any process.
+        if owner.is_some_and(|pid| pid > 0 && unsafe { libc::kill(pid, 0) } == -1)
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+
+    let socket = dir.join(format!("{stem}-{}.sock", std::process::id()));
+    // One of this process's own from before a restart under the same id.
+    let _ = std::fs::remove_file(&socket);
+    Ok(socket)
+}
+
 /// The listener thread, with a runtime of its own so this works whether or not the rest of
 /// the program happens to be running one.
 #[cfg(unix)]
 fn spawn(db_path: PathBuf) -> Result<Proxy, String> {
-    let dir = db_path
-        .parent()
-        .ok_or_else(|| "there is nowhere to put the proxy socket".to_string())?
-        .to_path_buf();
-    let _ = std::fs::create_dir_all(&dir);
-    let socket = dir.join("net-proxy.sock");
-    // A stale socket from a crash would refuse to bind; it names this process's own path
-    // and nothing else uses it.
-    let _ = std::fs::remove_file(&socket);
+    let socket = private_socket(&db_path, "net-proxy")?;
 
     let listen_on = socket.clone();
     std::thread::Builder::new()
@@ -797,7 +837,14 @@ async fn serve(socket: PathBuf, db_path: PathBuf) {
     let Ok(listener) = tokio::net::UnixListener::bind(&socket) else {
         return;
     };
+    // A cap rather than a task per connection without end: a build gone wrong, or something
+    // in the box that means it, can otherwise open connections until this process has no
+    // file descriptors left for anything else.
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     loop {
+        let Ok(slot) = slots.clone().acquire_owned().await else {
+            return;
+        };
         let Ok((stream, _)) = listener.accept().await else {
             continue;
         };
@@ -806,8 +853,88 @@ async fn serve(socket: PathBuf, db_path: PathBuf) {
         };
         tokio::spawn(async move {
             let _ = handle(stream, db).await;
+            drop(slot);
         });
     }
+}
+
+/// How many connections the proxy carries at once. A parallel package install opens a few
+/// dozen; the ones past this wait their turn in the listen queue.
+#[cfg(unix)]
+const MAX_CONNECTIONS: usize = 256;
+
+/// How long a client has to send its request line and headers.
+#[cfg(unix)]
+const HEAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How long the destination has to accept the connection.
+#[cfg(unix)]
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// How long a connection may carry nothing in either direction before it is closed. Long,
+/// because a registry can go quiet for minutes while it prepares a large download, and a
+/// connection kept alive between requests is ordinary.
+#[cfg(unix)]
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// Carries bytes both ways until both sides are done, or until `idle` has passed with
+/// nothing moving in either direction.
+///
+/// The idle clock is shared: a download is one direction talking for a long time, and the
+/// silent direction must not be what ends it.
+#[cfg(unix)]
+async fn pipe<A, B>(a: A, b: B, idle: std::time::Duration)
+where
+    A: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+    B: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+{
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+    async fn one_way<R, W>(
+        mut from: R,
+        mut to: W,
+        started: tokio::time::Instant,
+        last: &AtomicU64,
+        idle: std::time::Duration,
+    ) where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let mut buffer = vec![0u8; 16 * 1024];
+        loop {
+            match tokio::time::timeout(idle, from.read(&mut buffer)).await {
+                // Quiet on this side. Over only if the other side has been quiet as long.
+                Err(_) => {
+                    let quiet_since =
+                        started + std::time::Duration::from_millis(last.load(Ordering::Relaxed));
+                    if quiet_since.elapsed() >= idle {
+                        let _ = to.shutdown().await;
+                        return;
+                    }
+                }
+                Ok(Ok(0)) | Ok(Err(_)) => {
+                    let _ = to.shutdown().await;
+                    return;
+                }
+                Ok(Ok(read)) => {
+                    last.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    if to.write_all(&buffer[..read]).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    let started = tokio::time::Instant::now();
+    let last = AtomicU64::new(0);
+    let (a_read, a_write) = tokio::io::split(a);
+    let (b_read, b_write) = tokio::io::split(b);
+    tokio::join!(
+        one_way(a_read, b_write, started, &last, idle),
+        one_way(b_read, a_write, started, &last, idle),
+    );
 }
 
 /// One connection: read the request line, decide, then either tunnel or refuse.
@@ -819,13 +946,23 @@ async fn handle(mut inbound: tokio::net::UnixStream, db: MemoryDb) -> std::io::R
     // blank line is not a build tool, and the read stops at the headers either way.
     let mut head = Vec::with_capacity(8 * 1024);
     let mut byte = [0u8; 1];
-    while !head.ends_with(b"\r\n\r\n") && head.len() < 16 * 1024 {
-        match inbound.read(&mut byte).await {
-            Ok(0) => break,
-            Ok(_) => head.push(byte[0]),
-            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
+    // A byte at a time so nothing past the blank line is taken off the socket: after a
+    // CONNECT that is the client's TLS, and it belongs to the tunnel. Against a deadline,
+    // so a client that connects and says nothing does not hold a slot for ever.
+    let read_head = async {
+        while !head.ends_with(b"\r\n\r\n") && head.len() < 16 * 1024 {
+            match inbound.read(&mut byte).await {
+                Ok(0) => break,
+                Ok(_) => head.push(byte[0]),
+                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
         }
+        Ok(())
+    };
+    match tokio::time::timeout(HEAD_TIMEOUT, read_head).await {
+        Ok(read) => read?,
+        Err(_) => return Ok(()),
     }
     let text = String::from_utf8_lossy(&head).to_string();
     let first = text.lines().next().unwrap_or_default().to_string();
@@ -877,24 +1014,34 @@ async fn handle(mut inbound: tokio::net::UnixStream, db: MemoryDb) -> std::io::R
         }
     }
 
-    let mut outbound =
-        match tokio::net::TcpStream::connect((target.host.as_str(), target.port)).await {
-            Ok(stream) => stream,
-            Err(e) => {
-                let body = format!("{} could not be reached: {e}\n", target.host);
-                let _ = inbound
-                    .write_all(
-                        format!(
-                            "HTTP/1.1 502 Bad Gateway\r\nContent-Length: {}\r\n\
+    let connecting = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        tokio::net::TcpStream::connect((target.host.as_str(), target.port)),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        Err(std::io::Error::new(
+            ErrorKind::TimedOut,
+            format!("no answer in {} seconds", CONNECT_TIMEOUT.as_secs()),
+        ))
+    });
+    let mut outbound = match connecting {
+        Ok(stream) => stream,
+        Err(e) => {
+            let body = format!("{} could not be reached: {e}\n", target.host);
+            let _ = inbound
+                .write_all(
+                    format!(
+                        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: {}\r\n\
                              Connection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                        .as_bytes(),
+                        body.len()
                     )
-                    .await;
-                return Ok(());
-            }
-        };
+                    .as_bytes(),
+                )
+                .await;
+            return Ok(());
+        }
+    };
 
     if target.tunnel {
         // From here Aether1 is a pipe. It never sees inside the TLS it is carrying, which
@@ -910,7 +1057,7 @@ async fn handle(mut inbound: tokio::net::UnixStream, db: MemoryDb) -> std::io::R
         // wrong than it is worth.
         outbound.write_all(&head).await?;
     }
-    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+    pipe(inbound, outbound, IDLE_TIMEOUT).await;
     Ok(())
 }
 
@@ -1057,6 +1204,78 @@ async fn bridge(listener: std::net::TcpListener, socket: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_socket_is_this_processes_own_and_closed_to_other_accounts() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aether1_sock_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("run")).unwrap();
+        // Left by a process that is gone, and by one that is not (this one's parent).
+        // No process has an id this high: the kernel's ceiling is 4194304.
+        let gone = dir.join("run").join("net-proxy-2000000000.sock");
+        let alive = dir.join("run").join(format!(
+            "net-proxy-{}.sock",
+            std::os::unix::process::parent_id()
+        ));
+        let other = dir.join("run").join("model-2000000000.sock");
+        for file in [&gone, &alive, &other] {
+            std::fs::write(file, "").unwrap();
+        }
+
+        let socket = private_socket(&dir.join("aether1_memory.db"), "net-proxy").unwrap();
+
+        assert_eq!(
+            socket,
+            dir.join("run")
+                .join(format!("net-proxy-{}.sock", std::process::id()))
+        );
+        let mode = std::fs::metadata(dir.join("run"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+        assert!(!gone.exists(), "a dead process's socket is cleared");
+        assert!(alive.exists(), "a running process keeps its socket");
+        assert!(
+            other.exists(),
+            "the other door's sockets are not this one's to clear"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_connection_ends_when_both_directions_have_gone_quiet_and_not_before() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let idle = std::time::Duration::from_millis(300);
+            let (mut client, proxy_client_side) = tokio::io::duplex(1024);
+            let (proxy_server_side, mut server) = tokio::io::duplex(1024);
+            let piping = tokio::spawn(pipe(proxy_client_side, proxy_server_side, idle));
+
+            // One direction talks for three times the idle window; the silent direction
+            // must not be what ends it.
+            let mut got = [0u8; 4];
+            for _ in 0..6 {
+                tokio::time::sleep(idle / 2).await;
+                server.write_all(b"data").await.unwrap();
+                client.read_exact(&mut got).await.unwrap();
+                assert_eq!(&got, b"data");
+            }
+            assert!(!piping.is_finished());
+
+            // Then nothing from either side, and it is closed.
+            tokio::time::sleep(idle * 3).await;
+            piping.await.unwrap();
+            assert_eq!(client.read(&mut got).await.unwrap(), 0);
+        });
+    }
 
     fn domains(list: &[&str]) -> BTreeSet<String> {
         list.iter().map(|d| d.to_string()).collect()

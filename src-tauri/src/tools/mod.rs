@@ -65,6 +65,17 @@ pub trait Tool: Send + Sync {
         true
     }
 
+    /// Why this particular call is put to the operator even though the tool is on their
+    /// always-allow list, or None when the list decides.
+    ///
+    /// Always-allow is an answer about a tool, given once with its ordinary use in mind.
+    /// A few calls are a different act under the same name -- `write_file` on a shell
+    /// start-up file, `set_aether_setting` on where every later prompt is sent -- and for
+    /// those the earlier answer was not about this.
+    fn asks_every_time(&self, _args: &Value) -> Option<&'static str> {
+        None
+    }
+
     /// Runs the tool. `args` has been checked against `parameters` for required keys and
     /// their primitive types -- anything beyond that a tool validates itself. The returned
     /// string goes back to the model as the tool's result, so it should be terse and
@@ -456,8 +467,15 @@ pub fn run(
         // The trait is asked first, and the operator's list second: a tool that refuses
         // to be pre-approved stays proposed even if its name is somehow on that list --
         // from an older database, or a tool that used to allow it and no longer does.
-        if !tool.always_allowable() || !consent::is_always_allowed(ctx.db, name) {
-            let id = consent::propose(ctx.db, name, args, true, None, ctx.session_id.as_deref())?;
+        let every_time = tool.asks_every_time(args);
+        if !tool.always_allowable()
+            || every_time.is_some()
+            || !consent::is_always_allowed(ctx.db, name)
+        {
+            // The reason is only worth showing when it is why the card is there at all:
+            // without always-allow on, this call would have been asked about anyway.
+            let reason = every_time.filter(|_| consent::is_always_allowed(ctx.db, name));
+            let id = consent::propose(ctx.db, name, args, true, reason, ctx.session_id.as_deref())?;
             return Ok(format!(
                 "PROPOSED (id {id}): {} is waiting for the operator to approve it. Do not \
                  assume it happened, and do not propose it again -- tell them what you want \
@@ -822,6 +840,32 @@ mod tests {
             waiting[0].result.is_none(),
             "a proposal has not run, so it has no result"
         );
+    }
+
+    /// Always-allow answers for the tool's ordinary use. Pointing every later prompt at
+    /// another server is the same tool and a different act, and is still shown.
+    #[test]
+    fn always_allow_does_not_cover_the_calls_a_tool_asks_about_every_time() {
+        let db = temp_db("run_asks_every_time");
+        let ctx = ToolContext::new(&db);
+        let mut registry = Registry::new();
+        registry.register(Box::new(mutating::SetSetting)).unwrap();
+        consent::set_always_allowed(&db, &registry, "set_aether_setting", true).unwrap();
+
+        let theme = json!({"key": "color_theme", "value": "borealis"});
+        let reply = run(&registry, &ctx, "set_aether_setting", &theme).unwrap();
+        assert!(!reply.starts_with("PROPOSED"), "{reply}");
+
+        let endpoint = json!({"key": "llm_endpoint", "value": "https://elsewhere.example/v1"});
+        let reply = run(&registry, &ctx, "set_aether_setting", &endpoint).unwrap();
+        assert!(reply.starts_with("PROPOSED"), "{reply}");
+        assert_eq!(db.get_setting_string("llm_endpoint", "unset"), "unset");
+        let pending = consent::pending(&db, &registry);
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0]
+            .reason
+            .as_deref()
+            .is_some_and(|why| why.contains("every time")));
     }
 
     #[test]

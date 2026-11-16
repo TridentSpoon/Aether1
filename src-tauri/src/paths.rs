@@ -258,6 +258,34 @@ pub fn open_in_file_manager(path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("could not open {}: {e}", path.display()))
 }
 
+/// Writes a file that holds a secret, readable by this account and nobody else.
+///
+/// The file is created with mode 0600 rather than written and then locked down: between a
+/// plain write and the chmod after it, a token sits on disk readable by every account on
+/// the machine. An existing file keeps whatever mode it had when opened, so it is set
+/// again afterwards -- best-effort, since a filesystem that refuses permission changes
+/// still has a working secret on it. Windows has no mode bits and relies on the profile
+/// directory being private.
+pub fn write_private(path: &std::path::Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        file.write_all(contents.as_ref())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
+}
+
 /// A path as a lowercase, forward-slashed string, for comparing against the deny lists.
 ///
 /// Windows paths arrive with backslashes and arbitrary case, so `"/.ssh/"` would never
@@ -270,6 +298,32 @@ pub fn comparable(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_file_is_never_readable_by_anyone_else() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aether1_private_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fresh = dir.join("fresh");
+        let _ = std::fs::remove_file(&fresh);
+        write_private(&fresh, "secret").unwrap();
+        assert_eq!(
+            std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // One that was already there and open to everyone is closed, and replaced whole.
+        let loose = dir.join("loose");
+        std::fs::write(&loose, "a longer secret than the next one").unwrap();
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&loose, "short").unwrap();
+        assert_eq!(
+            std::fs::metadata(&loose).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read_to_string(&loose).unwrap(), "short");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Env vars are process-global, so these tests serialise and restore what they touch.
     fn with_env<T>(vars: &[(&str, Option<&str>)], body: impl FnOnce() -> T) -> T {
