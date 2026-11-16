@@ -40,7 +40,10 @@ pub(super) fn new_host_needs_asking(
         .and_then(|session| ctx.db.last_user_message(session).ok().flatten());
     let reads = ctx
         .db
-        .web_reads_since(asked.as_ref().map(|m| m.timestamp.as_str()))
+        .web_reads_since(
+            asked.as_ref().map(|m| m.timestamp.as_str()),
+            ctx.session_id.as_deref(),
+        )
         .ok()?;
     if reads.is_empty() {
         return None;
@@ -132,7 +135,7 @@ mod tests {
 
     fn ran(db: &MemoryDb, tool: &str, args: Value, result: &str) {
         let id = db
-            .log_action(tool, &args, false, ActionStatus::Proposed, None, None)
+            .log_action(tool, &args, false, ActionStatus::Proposed, None, Some("s"))
             .unwrap();
         db.set_action_outcome(
             id,
@@ -215,6 +218,28 @@ mod tests {
         ran(&db, "search_web", json!({"query": "y"}), &search_results());
         assert!(!asks(&db, "https://docs.example.org/guide"));
         assert!(asks(&db, "https://collector.example/"));
+    }
+
+    #[test]
+    fn another_conversations_reading_vouches_for_nothing_here() {
+        let db = temp_db("other_session");
+        db.add_message("s", "user", "find the release notes")
+            .unwrap();
+        ran(&db, "search_web", json!({"query": "x"}), &search_results());
+        // A second conversation read a page from the host in the same minute.
+        let id = db
+            .log_action(
+                "fetch_url",
+                &json!({"url": "https://collector.example/"}),
+                false,
+                ActionStatus::Proposed,
+                None,
+                Some("elsewhere"),
+            )
+            .unwrap();
+        db.set_action_outcome(id, ActionStatus::Executed, Some("[PAGE]"), None, None)
+            .unwrap();
+        assert!(asks(&db, "https://collector.example/x"));
     }
 
     #[test]

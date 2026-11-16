@@ -776,8 +776,13 @@ impl MemoryDb {
 
     /// The web searches and page reads that have actually run since `since` (a timestamp
     /// as this table writes them), or in the last ten minutes when there is none to give.
-    /// Oldest first.
-    pub fn web_reads_since(&self, since: Option<&str>) -> rusqlite::Result<Vec<ActionRecord>> {
+    /// Oldest first. With a conversation named, only that conversation's: another one
+    /// running at the same time has its own hosts, and they vouch for nothing here.
+    pub fn web_reads_since(
+        &self,
+        since: Option<&str>,
+        session_id: Option<&str>,
+    ) -> rusqlite::Result<Vec<ActionRecord>> {
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
             "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
@@ -785,9 +790,10 @@ impl MemoryDb {
              FROM action_log \
              WHERE tool IN ('search_web', 'fetch_url') AND status = 'executed' \
                AND ts >= COALESCE(?1, datetime('now', '-10 minutes')) \
+               AND (?2 IS NULL OR session_id = ?2) \
              ORDER BY id",
         )?;
-        let rows = stmt.query_map(params![since], action_from_row)?;
+        let rows = stmt.query_map(params![since, session_id], action_from_row)?;
         rows.collect()
     }
 

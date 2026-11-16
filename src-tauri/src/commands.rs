@@ -295,15 +295,7 @@ pub fn brains(engine: &LlmEngine) -> Value {
             // The one online provider Auto may send a hard question to, and the setting
             // that names it. Null means it stays on this machine -- having a key saved for
             // a provider is not the operator choosing it.
-            "cloud": llm::auto::cloud_choice(db)
-                .or_else(|| {
-                    let stored = llm::auto::stored_provider(db);
-                    available
-                        .online
-                        .iter()
-                        .any(|entry| entry.provider == stored)
-                        .then_some(stored)
-                })
+            "cloud": llm::auto::cloud_provider(db, llm::auto::stored_provider(db))
                 .map(|provider| provider.key()),
             "cloud_setting": llm::auto::CLOUD_SETTING,
         },

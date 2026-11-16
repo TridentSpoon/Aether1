@@ -105,14 +105,39 @@ pub const LOCAL_SHAPE_SETTING: &str = "llm_provider_local";
 /// loaded notes, went there. Which company reads a conversation is the operator's to say.
 pub const CLOUD_SETTING: &str = "auto_router_cloud";
 
-/// The provider `CLOUD_SETTING` names, if it names an online one.
-pub fn cloud_choice(db: &MemoryDb) -> Option<Provider> {
-    let key = db.get_setting_string(CLOUD_SETTING, "");
-    let key = key.trim();
-    if key.is_empty() {
-        return None;
+/// What the operator has said about where Auto may go online.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudChoice {
+    /// Never asked. An install from before the setting existed, where the brain that was
+    /// selected when Auto was turned on is still the best record of what they meant.
+    Unset,
+    /// Asked, and the answer was nowhere. Not the same as never asked: somebody who picks
+    /// "stay on this computer" with a cloud brain still selected underneath has said no,
+    /// and reading that as "no opinion" would send the conversation out anyway.
+    StayLocal,
+    Use(Provider),
+}
+
+/// What `CLOUD_SETTING` says. A name that is not an online provider is read as nowhere
+/// rather than as unset, because whatever it was, it was not permission.
+pub fn cloud_choice(db: &MemoryDb) -> CloudChoice {
+    let Some(value) = db.get_setting(CLOUD_SETTING).ok().flatten() else {
+        return CloudChoice::Unset;
+    };
+    let key = value.as_str().unwrap_or_default().trim();
+    ONLINE
+        .into_iter()
+        .find(|provider| provider.key() == key)
+        .map_or(CloudChoice::StayLocal, CloudChoice::Use)
+}
+
+/// The one online provider Auto may use, given the brain that is selected underneath it.
+pub fn cloud_provider(db: &MemoryDb, configured: Provider) -> Option<Provider> {
+    match cloud_choice(db) {
+        CloudChoice::Use(provider) => Some(provider),
+        CloudChoice::StayLocal => None,
+        CloudChoice::Unset => is_online(configured).then_some(configured),
     }
-    ONLINE.into_iter().find(|provider| provider.key() == key)
 }
 
 /// Whether a routed turn to this provider leaves the machine.
@@ -688,7 +713,13 @@ pub fn route(
     if prompt.trim().is_empty() {
         return Err("nothing to judge".to_string());
     }
-    let available = candidates(db);
+    let mut available = candidates(db);
+    // Nowhere chosen means nothing to choose from, which is how `decide` is told: it then
+    // keeps a hard question local and says that no provider has been chosen.
+    let chosen = cloud_provider(db, configured);
+    if chosen.is_none() {
+        available.online.clear();
+    }
     // The endpoint the turn is already using, not the one in the settings, for the one case
     // where they differ: a gateway rewrites `endpoint`, and judging at a gateway's address
     // would send the question to the cloud to decide whether to send it to the cloud.
@@ -796,7 +827,7 @@ pub fn route(
         &available,
         // The one named for Auto, and failing that the brain that was selected when Auto
         // was turned on. Never a provider that merely has a key.
-        cloud_choice(db).unwrap_or(configured),
+        chosen.unwrap_or(configured),
         reach,
         local_base.as_deref(),
     )
@@ -926,6 +957,37 @@ mod tests {
             "the operator's own cloud provider, not the first in the list"
         );
         assert!(routed.why.contains("code"));
+    }
+
+    #[test]
+    fn staying_local_is_an_answer_and_not_the_absence_of_one() {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_auto_cloud_choice_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = MemoryDb::open(path).unwrap();
+        // Never asked: the brain selected underneath Auto is what they meant.
+        assert_eq!(
+            cloud_provider(&db, Provider::OpenAi),
+            Some(Provider::OpenAi)
+        );
+        assert_eq!(cloud_provider(&db, Provider::Ollama), None);
+        // Asked, and the answer was nowhere -- with a cloud brain still selected.
+        db.set_setting(CLOUD_SETTING, &serde_json::json!(""))
+            .unwrap();
+        assert_eq!(cloud_provider(&db, Provider::OpenAi), None);
+        // Asked, and named.
+        db.set_setting(CLOUD_SETTING, &serde_json::json!("anthropic"))
+            .unwrap();
+        assert_eq!(
+            cloud_provider(&db, Provider::OpenAi),
+            Some(Provider::Anthropic)
+        );
+        // Something that is not a provider is not permission.
+        db.set_setting(CLOUD_SETTING, &serde_json::json!("whoever"))
+            .unwrap();
+        assert_eq!(cloud_provider(&db, Provider::OpenAi), None);
     }
 
     #[test]

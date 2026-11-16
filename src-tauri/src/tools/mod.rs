@@ -488,7 +488,9 @@ fn run_now(
             tool.mutating(),
             ActionStatus::Proposed,
             None,
-            None,
+            // Which conversation asked, so that what one has read is not counted as
+            // another's -- see `web_guard`.
+            ctx.session_id.as_deref(),
         )
         .ok();
 
