@@ -582,24 +582,42 @@ pub fn command(
 /// Aether1's own binary, which is what runs inside the box as the relay.
 ///
 /// `current_exe` almost always answers this. The exception is a test run, where the running
-/// executable is the test harness in `target/debug/deps/` -- and a test that could not
-/// start the relay would be a test of everything except the part that matters, so the
-/// binary beside it is used instead.
+/// executable is the test harness -- and a test that could not start the relay would be a
+/// test of everything except the part that matters, so the built binary is used instead.
 fn aether1_binary() -> PathBuf {
     let Ok(exe) = std::env::current_exe() else {
         return PathBuf::from("aether1");
     };
-    if exe.parent().and_then(Path::file_name) == Some(std::ffi::OsStr::new("deps")) {
-        if let Some(beside) = exe
-            .parent()
-            .and_then(Path::parent)
-            .map(|dir| dir.join("aether1"))
-            .filter(|path| path.is_file())
-        {
-            return beside;
-        }
+    built_binary_for_harness(&exe).unwrap_or(exe)
+}
+
+/// The built `aether1` that belongs to a test harness at `exe`, if `exe` is one.
+///
+/// Recognised by the harness's own name, `aether1-<hash>`, rather than by the directory it
+/// is in, because the directory moved: cargo used to put it in `target/debug/deps/`, one
+/// below the binary, and newer cargo puts it in `target/debug/build/aether1/<hash>/out/`,
+/// four below. A check for `deps` found nothing there, handed the harness its own path, and
+/// the two tests that start the relay failed on `Unrecognized option: 'net-relay'` while
+/// others that look the same way skipped without a word. So: walk up from the harness to
+/// the first directory that holds the binary.
+pub(crate) fn built_binary_for_harness(exe: &Path) -> Option<PathBuf> {
+    let name = exe.file_name()?.to_str()?;
+    let hash = name.strip_prefix("aether1-")?;
+    let hash = hash.strip_suffix(".exe").unwrap_or(hash);
+    if hash.len() != 16 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
     }
-    exe
+    exe.ancestors()
+        .skip(1)
+        .take(6)
+        .map(|dir| {
+            dir.join(if cfg!(windows) {
+                "aether1.exe"
+            } else {
+                "aether1"
+            })
+        })
+        .find(|path| path.is_file())
 }
 
 /// The environment the child is given: the passthrough list, as this process has it.
@@ -763,6 +781,39 @@ pub fn bwrap_args(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_built_binary_is_found_from_a_harness_in_either_cargo_layout() {
+        let target = std::env::temp_dir().join(format!(
+            "aether1_harness_layout_{}/target/debug",
+            std::process::id()
+        ));
+        let old = target.join("deps");
+        let new = target.join("build/aether1/a204add1e32060f6/out");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        let name = if cfg!(windows) {
+            "aether1.exe"
+        } else {
+            "aether1"
+        };
+        std::fs::write(target.join(name), b"").unwrap();
+
+        for dir in [&old, &new] {
+            assert_eq!(
+                built_binary_for_harness(&dir.join("aether1-a204add1e32060f6")),
+                Some(target.join(name)),
+                "from {}",
+                dir.display()
+            );
+        }
+        // `build/aether1` is a directory with the binary's name on the way up, and is not it.
+        assert!(target.join("build/aether1").is_dir());
+        // The program itself, and anything else that is not a harness, is left alone.
+        assert_eq!(built_binary_for_harness(&old.join("aether1")), None);
+        assert_eq!(built_binary_for_harness(&old.join("aether1-old")), None);
+        assert_eq!(built_binary_for_harness(&old.join("aurora1")), None);
+    }
 
     fn test_db() -> MemoryDb {
         let path = std::env::temp_dir().join(format!(
