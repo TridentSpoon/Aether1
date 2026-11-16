@@ -368,9 +368,18 @@ pub fn prime(db: &MemoryDb) -> String {
             continue;
         };
         let contents = if contents.len() > MAX_PRIMED_BYTES {
+            /* Stepped back to a character boundary rather than sliced at the limit. A
+            slice at a fixed byte panics when that byte is inside a multi-byte character,
+            and these notes are full of them -- the companion writes its own dashes and
+            quotes. Release builds abort on a panic, and this runs on every turn, so one
+            unlucky note was a crash on every message until somebody edited the file. */
+            let mut end = MAX_PRIMED_BYTES;
+            while end > 0 && !contents.is_char_boundary(end) {
+                end -= 1;
+            }
             format!(
                 "{}\n[note truncated -- it has grown too large to load every turn]",
-                &contents[..MAX_PRIMED_BYTES]
+                &contents[..end]
             )
         } else {
             contents
@@ -990,6 +999,25 @@ mod tests {
             "an enormous note must not be pasted whole"
         );
         assert!(block.len() < MAX_PRIMED_BYTES * 2);
+    }
+
+    #[test]
+    fn the_cut_never_lands_inside_a_character() {
+        // A two-byte character sitting across the limit: slicing at the byte would panic,
+        // and in a release build a panic ends the program on every turn until the note is
+        // edited by hand.
+        let (db, root) = fixture("oversize_multibyte");
+        ensure(&db).unwrap();
+        let note = format!(
+            "{}{}",
+            "x".repeat(MAX_PRIMED_BYTES - 1),
+            "\u{00e9}".repeat(64)
+        );
+        assert!(!note.is_char_boundary(MAX_PRIMED_BYTES));
+        std::fs::write(root.join("profile.md"), note).unwrap();
+
+        let block = prime(&db);
+        assert!(block.contains("note truncated"));
     }
 
     #[test]

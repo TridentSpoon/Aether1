@@ -148,6 +148,17 @@ pub fn approve(
             record.status.as_str()
         ));
     }
+    // Claimed before anything runs, in one statement: the read above is only good for the
+    // error message, and a second approval that passed it at the same moment stops here.
+    if !ctx
+        .db
+        .claim_proposal(id, ActionStatus::Running)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!(
+            "action {id} was answered a moment ago, so there is nothing to approve"
+        ));
+    }
 
     let Some(tool) = registry.get(&record.tool) else {
         let message = format!("{} is no longer available", record.tool);
@@ -235,6 +246,14 @@ pub fn reject(db: &MemoryDb, id: i64) -> Result<(), String> {
 
     if record.status != ActionStatus::Proposed {
         return Err(format!("action {id} is already {}", record.status.as_str()));
+    }
+    // The same one-statement claim `approve` makes, so a decline cannot land on a proposal
+    // that has just started running and relabel it as never having run.
+    if !db
+        .claim_proposal(id, ActionStatus::Rejected)
+        .map_err(|e| e.to_string())?
+    {
+        return Err(format!("action {id} was answered a moment ago"));
     }
 
     db.set_action_outcome(
@@ -389,6 +408,31 @@ mod tests {
         approve(&registry, &ctx, id, "operator").unwrap();
         let err = approve(&registry, &ctx, id, "operator").unwrap_err();
         assert!(err.contains("already executed"), "{err}");
+    }
+
+    #[test]
+    fn only_one_answer_can_claim_a_proposal() {
+        // What two approvals arriving together come down to: both read "proposed", and the
+        // claim is the one statement only one of them can win.
+        let (db, _registry) = fixture("claim");
+        let id = propose(
+            &db,
+            "probe_writer",
+            &json!({"path": "/tmp/x"}),
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(db.claim_proposal(id, ActionStatus::Running).unwrap());
+        assert!(!db.claim_proposal(id, ActionStatus::Running).unwrap());
+        assert!(!db.claim_proposal(id, ActionStatus::Rejected).unwrap());
+        // And a decline that lost the race says so instead of relabelling a running action.
+        assert!(reject(&db, id).is_err());
+        assert_eq!(
+            db.get_action(id).unwrap().unwrap().status,
+            ActionStatus::Running
+        );
     }
 
     #[test]

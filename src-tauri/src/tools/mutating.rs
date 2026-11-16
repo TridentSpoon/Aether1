@@ -419,14 +419,51 @@ impl Tool for RunCommand {
             .spawn()
             .map_err(|e| format!("cannot start {program}: {e}"))?;
 
+        /* Both pipes are drained on their own threads while the child runs. Reading them
+        only after it exited meant a program that printed more than a pipe holds -- about
+        64 KB, which `ps -ef` on a desktop exceeds -- blocked on its own output, never
+        exited, and was killed at the timeout for being slow. `graft_install` already
+        reads its child this way and says why. */
+        /* Everything is read but only the start is kept: a little over what will be shown,
+        so `truncate` below still sees that there was more. Keeping all of it would let a
+        program that prints without end grow this process until the timeout. */
+        const KEPT: usize = MAX_OUTPUT_BYTES + 1024;
+        fn drain<R: std::io::Read + Send + 'static>(
+            pipe: Option<R>,
+        ) -> std::thread::JoinHandle<Vec<u8>> {
+            std::thread::spawn(move || {
+                let mut collected = Vec::new();
+                let Some(mut pipe) = pipe else {
+                    return collected;
+                };
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let room = KEPT.saturating_sub(collected.len());
+                            collected.extend_from_slice(&chunk[..n.min(room)]);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
+                }
+                collected
+            })
+        }
+        let out_reader = drain(child.stdout.take());
+        let err_reader = drain(child.stderr.take());
+
         // No wait-with-timeout in std, so poll. A command that outlives the timeout is
         // killed rather than left running unattended.
         let started = Instant::now();
-        loop {
+        let status = loop {
             match child.try_wait() {
-                Ok(Some(_)) => break,
+                Ok(Some(status)) => break status,
                 Ok(None) if started.elapsed() > COMMAND_TIMEOUT => {
                     let _ = child.kill();
+                    // Reaped, so a stopped command does not stay behind as a zombie.
+                    let _ = child.wait();
                     return Err(format!(
                         "{program} was still running after {}s and was stopped",
                         COMMAND_TIMEOUT.as_secs()
@@ -435,16 +472,14 @@ impl Tool for RunCommand {
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
                 Err(e) => return Err(format!("cannot wait for {program}: {e}")),
             }
-        }
+        };
 
-        let output = child
-            .wait_with_output()
-            .map_err(|e| format!("cannot collect output from {program}: {e}"))?;
+        let stdout_bytes = out_reader.join().unwrap_or_default();
+        let stderr_bytes = err_reader.join().unwrap_or_default();
 
-        let stdout = truncate(&String::from_utf8_lossy(&output.stdout), MAX_OUTPUT_BYTES);
-        let stderr = truncate(&String::from_utf8_lossy(&output.stderr), MAX_OUTPUT_BYTES);
-        let code = output
-            .status
+        let stdout = truncate(&String::from_utf8_lossy(&stdout_bytes), MAX_OUTPUT_BYTES);
+        let stderr = truncate(&String::from_utf8_lossy(&stderr_bytes), MAX_OUTPUT_BYTES);
+        let code = status
             .code()
             .map(|c| c.to_string())
             .unwrap_or_else(|| "killed by signal".to_string());
@@ -711,6 +746,25 @@ mod tests {
         assert!(
             outcome.undo.is_none(),
             "running a program is not reversible and must not claim to be"
+        );
+    }
+
+    #[test]
+    fn a_command_that_prints_more_than_a_pipe_holds_still_finishes() {
+        // Well over the 64 KB a pipe buffers. Unread, the program blocks on its own output
+        // and looks hung until the timeout kills it.
+        let (db, _dir) = fixture("cmd_loud");
+        let ctx = ToolContext::new(&db);
+        db.set_setting(ALLOWLIST_SETTING, &json!(["seq"])).unwrap();
+
+        let started = std::time::Instant::now();
+        let outcome = RunCommand
+            .call(&json!({"program": "seq", "args": ["1", "200000"]}), &ctx)
+            .unwrap();
+        assert!(outcome.result.contains("exited 0"), "{}", outcome.result);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "it should end when the program does, not at the timeout"
         );
     }
 

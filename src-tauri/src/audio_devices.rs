@@ -93,7 +93,13 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     }
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     if text.len() > MAX_OUTPUT_BYTES {
-        text.truncate(MAX_OUTPUT_BYTES);
+        // `String::truncate` panics off a character boundary, and a device can be named
+        // in any script, so the cut is stepped back to one.
+        let mut end = MAX_OUTPUT_BYTES;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
     }
     Some(text)
 }

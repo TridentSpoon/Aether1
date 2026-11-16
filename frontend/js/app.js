@@ -2547,7 +2547,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const header = document.createElement('div');
         header.className = 'flex items-center justify-between mb-1 pb-1 border-b border-cyan-500/20 text-xs font-mono text-cyan-400/80';
         const who = document.createElement('span');
-        who.innerHTML = `🌐 <strong>${(fromName || '').toUpperCase()}</strong>`;
+        who.innerHTML = `🌐 <strong>${escapeHtml((fromName || '').toUpperCase())}</strong>`;
         header.appendChild(who);
         const when = document.createElement('span');
         when.textContent = new Date().toLocaleTimeString();
@@ -2577,7 +2577,7 @@ document.addEventListener('DOMContentLoaded', () => {
         headerDiv.className = 'flex items-center justify-between mb-1 pb-1 border-b border-cyan-500/20 text-xs font-mono text-cyan-400/80';
         
         const senderSpan = document.createElement('span');
-        const label = isUser ? '👤 <strong>OPERATOR</strong>' : `🌐 <strong>${currentAgentName.toUpperCase()}</strong>`;
+        const label = isUser ? '👤 <strong>OPERATOR</strong>' : `🌐 <strong>${escapeHtml(currentAgentName.toUpperCase())}</strong>`;
         senderSpan.innerHTML = label;
         headerDiv.appendChild(senderSpan);
 
@@ -3674,7 +3674,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (personaField) personaField.value = handover.to_key;
             refreshFlowMode();
             const senderSpan = replyDiv.querySelector('span');
-            if (senderSpan) senderSpan.innerHTML = `🌐 <strong>${handover.to.toUpperCase()}</strong>`;
+            if (senderSpan) senderSpan.innerHTML = `🌐 <strong>${escapeHtml(handover.to.toUpperCase())}</strong>`;
         };
 
         /* Reasoning is feedback too, and better feedback than a spinner: the operator can
@@ -13165,11 +13165,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         try {
+            /* No checkbox on this page means no opinion, not "keep the line breaks": leaving
+               flatten out lets Rust use the stored setting, whose default is one line. */
             const box = document.getElementById('setting-handoff-flatten');
-            await tauriInvoke('answer_handoff_rust', {
-                text: lastAnswer.text,
-                flatten: !!(box && box.checked)
-            });
+            const args = { text: lastAnswer.text };
+            if (box) args.flatten = !!box.checked;
+            await tauriInvoke('answer_handoff_rust', args);
         } catch (e) {
             appendSystemNotice(String((e && e.message) || e));
         }

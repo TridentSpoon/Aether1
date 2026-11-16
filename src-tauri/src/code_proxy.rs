@@ -1330,18 +1330,9 @@ mod tests {
         }
         // The relay is Aether1 itself; under `cargo test` the running binary is the test
         // harness, so the real one has to be found beside it.
-        // Under `cargo test` the harness lives in `target/debug/deps/`, so the binary is
-        // one directory up from it; under a release layout it sits beside it.
-        let here = std::env::current_exe().ok();
-        let Some(binary) = here
-            .iter()
-            .flat_map(|exe| {
-                exe.parent()
-                    .into_iter()
-                    .chain(exe.parent().and_then(Path::parent))
-            })
-            .map(|dir| dir.join("aether1"))
-            .find(|p| p.is_file())
+        let Some(binary) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| crate::code_sandbox::built_binary_for_harness(&exe))
         else {
             return;
         };
@@ -1838,15 +1829,10 @@ mod tests {
             ));
             return;
         }
-        let here = std::env::current_exe().ok();
-        if !here
-            .iter()
-            .flat_map(|exe| {
-                exe.parent()
-                    .into_iter()
-                    .chain(exe.parent().and_then(Path::parent))
-            })
-            .any(|dir| dir.join("aether1").is_file())
+        if std::env::current_exe()
+            .ok()
+            .and_then(|exe| crate::code_sandbox::built_binary_for_harness(&exe))
+            .is_none()
         {
             skip("no built aether1 binary beside the harness to act as the relay");
             return;

@@ -2849,7 +2849,7 @@ fn answer_handoff_rust(
     engine: tauri::State<LlmEngine>,
     text: String,
     flatten: Option<bool>,
-) -> Result<usize, String> {
+) -> Result<handoff::Typed, String> {
     if !engine.db().get_setting_bool(handoff::SETTING, false) {
         return Err(
             "Typing into other applications is switched off. Settings -> Display turns it on."
