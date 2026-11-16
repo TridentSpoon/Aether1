@@ -104,11 +104,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function typeItNow() {
         try {
-            const typed = await core.invoke('answer_handoff_rust', {
+            const result = await core.invoke('answer_handoff_rust', {
                 text: answerText,
                 flatten: !!flattenBox.checked
             });
-            const short = typed < answerText.length;
+            /* Rust says whether it cut the answer short. Comparing lengths here cannot:
+               trimming and flattening shorten it too, and .length counts UTF-16 units. */
+            const typed = result.typed;
+            const short = !!result.truncated;
             note(
                 short
                     ? `Typed the first ${typed} characters — the rest was too long to send this way.`

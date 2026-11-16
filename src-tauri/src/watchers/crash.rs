@@ -322,13 +322,13 @@ impl CrashReader for WindowsCrashReader {
         // simpler and the only version that works on a machine that is not in English.
         let script = format!(
             "$epoch = Get-Date '1970-01-01T00:00:00Z'; \
-             Get-WinEvent -FilterHashtable @{{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$epoch.ToUniversalTime().AddSeconds({since})}} \
+             $events = @(Get-WinEvent -FilterHashtable @{{LogName='Application'; ProviderName='Application Error'; Id=1000; StartTime=$epoch.ToUniversalTime().AddSeconds({since})}} \
              -ErrorAction SilentlyContinue | Select-Object -First 50 | \
              ForEach-Object {{ $p = $_.Properties; [pscustomobject]@{{ \
                time = [int64](New-TimeSpan -Start $epoch -End $_.TimeCreated.ToUniversalTime()).TotalSeconds; \
                program = $p[0].Value; module = $p[3].Value; code = $p[6].Value; \
-               process_id = $p[8].Value; message = $_.Message }} }} | \
-             ConvertTo-Json -Compress -AsArray"
+               process_id = $p[8].Value; message = $_.Message }} }}); \
+             if ($events.Count -gt 0) {{ ConvertTo-Json -Compress -InputObject $events }}"
         );
         let output = crate::paths::quiet_command("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])

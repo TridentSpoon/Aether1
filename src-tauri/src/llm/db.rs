@@ -45,6 +45,11 @@ pub struct SessionSummary {
 pub enum ActionStatus {
     /// A mutating call waiting for the operator to approve it.
     Proposed,
+    /// Approved and running now. A proposal is moved here in one statement before its tool
+    /// is called, so two approvals arriving together cannot both run it -- see
+    /// `MemoryDb::claim_proposal`. A row left here was started and never finished, which
+    /// is what a crash in the middle of a tool looks like.
+    Running,
     /// Ran, and the result is recorded.
     Executed,
     /// Ran and failed; `result` carries the error.
@@ -59,6 +64,7 @@ impl ActionStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             ActionStatus::Proposed => "proposed",
+            ActionStatus::Running => "running",
             ActionStatus::Executed => "executed",
             ActionStatus::Failed => "failed",
             ActionStatus::Rejected => "rejected",
@@ -68,6 +74,7 @@ impl ActionStatus {
 
     fn from_str(raw: &str) -> ActionStatus {
         match raw {
+            "running" => ActionStatus::Running,
             "executed" => ActionStatus::Executed,
             "failed" => ActionStatus::Failed,
             "rejected" => ActionStatus::Rejected,
@@ -733,6 +740,20 @@ impl MemoryDb {
             params![format!("-{minutes} minutes")],
         )?;
         Ok(changed)
+    }
+
+    /// Moves a proposal to `to`, and says whether this call was the one that did.
+    ///
+    /// The check and the change are one statement on purpose. Reading the status and then
+    /// acting on it left a gap two approvals could both pass through -- a double click, the
+    /// HUD and an undocked panel, the HUD and a browser -- and each then ran the tool. Only
+    /// one caller can ever see `true` for a given row.
+    pub fn claim_proposal(&self, id: i64, to: ActionStatus) -> rusqlite::Result<bool> {
+        let changed = self.connect()?.execute(
+            "UPDATE action_log SET status = ?2 WHERE id = ?1 AND status = 'proposed'",
+            params![id, to.as_str()],
+        )?;
+        Ok(changed == 1)
     }
 
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {

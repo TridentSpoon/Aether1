@@ -218,9 +218,27 @@ pub fn availability() -> Availability {
 ///   treat Return as send -- a chat client, a search field, most of a web form. It is a
 ///   choice in the Answer window rather than a guess here, because nothing in this process
 ///   can see what kind of box has the focus.
+/// * The other line separators (NEL, LINE SEPARATOR, PARAGRAPH SEPARATOR) become LF, so they
+///   are flattened and trimmed like any line break rather than slipping past as one.
+/// * A tab becomes a space and every other control character goes. Typed, they are key
+///   presses: Tab moves the focus out of the box, Escape closes a dialog, and Ctrl+C or
+///   Ctrl+D in a terminal are commands. An answer is text, and nothing in it should be able
+///   to press a key that is not a character.
 /// * The result is truncated at `MAX_CHARS` on a character boundary.
-pub fn prepare(text: &str, flatten: bool) -> String {
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+///
+/// Returned with whether `MAX_CHARS` cut anything off.
+fn prepare_reporting(text: &str, flatten: bool) -> (String, bool) {
+    let text = text.replace("\r\n", "\n");
+    let text: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\n' => Some('\n'),
+            '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}' => Some('\n'),
+            '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect();
     let text = text.trim_end();
     let text = if flatten {
         text.split('\n')
@@ -231,7 +249,22 @@ pub fn prepare(text: &str, flatten: bool) -> String {
     } else {
         text.to_string()
     };
-    text.chars().take(MAX_CHARS).collect()
+    let mut chars = text.chars();
+    let body: String = chars.by_ref().take(MAX_CHARS).collect();
+    let truncated = chars.next().is_some();
+    (body, truncated)
+}
+
+/// What a hand-off did, for the page to tell the operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Typed {
+    /// How many characters were typed.
+    pub typed: usize,
+    /// Whether the answer was over `MAX_CHARS` and the rest was left out. Reported rather
+    /// than left for the page to work out by comparing lengths: trimming and flattening
+    /// shorten the text as well, and the page counts UTF-16 units where this counts
+    /// characters, so the comparison called most ordinary answers cut short.
+    pub truncated: bool,
 }
 
 /// Lets go of every modifier the operator might be holding.
@@ -247,11 +280,10 @@ fn release_modifiers(enigo: &mut Enigo) {
 
 /// Types `text` into whatever window currently has the focus.
 ///
-/// Returns how many characters were typed, which is less than what came in when the answer
-/// was over `MAX_CHARS` -- the caller says so to the operator rather than pretending the
-/// whole thing arrived.
-pub fn type_text(text: &str, flatten: bool) -> Result<usize, String> {
-    let body = prepare(text, flatten);
+/// Returns how many characters were typed and whether the answer was over `MAX_CHARS` --
+/// the caller says so to the operator rather than pretending the whole thing arrived.
+pub fn type_text(text: &str, flatten: bool) -> Result<Typed, String> {
+    let (body, truncated) = prepare_reporting(text, flatten);
     if body.is_empty() {
         return Err("There is nothing in that answer to type.".into());
     }
@@ -272,12 +304,45 @@ pub fn type_text(text: &str, flatten: bool) -> Result<usize, String> {
         .text(&body)
         .map_err(|e| format!("The text could not be typed: {e}"))?;
 
-    Ok(body.chars().count())
+    Ok(Typed {
+        typed: body.chars().count(),
+        truncated,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Just the text, for the tests that are about what gets typed.
+    fn prepare(text: &str, flatten: bool) -> String {
+        prepare_reporting(text, flatten).0
+    }
+
+    #[test]
+    fn nothing_in_an_answer_can_press_a_key_that_is_not_a_character() {
+        // Escape, Ctrl+C, Ctrl+D, backspace and delete are dropped; a tab is a space.
+        assert_eq!(
+            prepare("a\u{1b}b\u{03}c\u{04}d\u{08}e\u{7f}f", false),
+            "abcdef"
+        );
+        assert_eq!(prepare("name\tvalue", false), "name value");
+        // The Unicode line separators are line breaks, so flattening removes them too.
+        assert_eq!(
+            prepare("one\u{2028}two\u{2029}three\u{85}four", true),
+            "one two three four"
+        );
+        assert_eq!(prepare("one\u{2028}two", false), "one\ntwo");
+        assert_eq!(prepare("ends in one\u{2028}", false), "ends in one");
+    }
+
+    #[test]
+    fn only_the_length_limit_counts_as_cut_short() {
+        // Trimming and flattening shorten the text without losing any of the answer.
+        assert!(!prepare_reporting("short answer\n\n", true).1);
+        assert!(!prepare_reporting(&"x".repeat(MAX_CHARS), false).1);
+        assert!(prepare_reporting(&"x".repeat(MAX_CHARS + 1), false).1);
+    }
 
     #[test]
     fn the_last_line_is_never_submitted() {

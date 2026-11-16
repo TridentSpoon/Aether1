@@ -61,20 +61,46 @@ impl Tool for ReadFile {
             ));
         }
 
-        let bytes =
-            std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        /* Only a regular file, and only as much of it as will be kept. Reading the whole
+        file first meant a twenty-gigabyte model blob was loaded into memory to return its
+        first 64 KB, and a named pipe was read until somebody wrote to it -- which is
+        never. */
+        let meta =
+            std::fs::metadata(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        if !meta.is_file() {
+            return Err(format!(
+                "{} is not a regular file, so there is nothing to read from it",
+                path.display()
+            ));
+        }
+        let total = meta.len();
+        let mut bytes = Vec::new();
+        {
+            use std::io::Read;
+            std::fs::File::open(&path)
+                .and_then(|file| file.take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes))
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        }
         let truncated = bytes.len() > MAX_FILE_BYTES;
         let slice = &bytes[..bytes.len().min(MAX_FILE_BYTES)];
+        // What `total` reports for the files under /proc is zero, so the larger of the
+        // two is what was actually there.
+        let total = total.max(bytes.len() as u64);
 
         // Binary content in a prompt is noise the model can't use and can't be trusted to
         // ignore, so say what it is instead of pasting it.
         let text = match std::str::from_utf8(slice) {
             Ok(text) => text,
+            /* A cut that lands inside a multi-byte character is not binary data: it is
+            text whose last character did not fit. Everything before it is kept. Only an
+            error anywhere else means the file is not text. */
+            Err(e) if truncated && e.error_len().is_none() => {
+                std::str::from_utf8(&slice[..e.valid_up_to()]).unwrap_or_default()
+            }
             Err(_) => {
                 return Ok(Outcome::text(format!(
-                    "{} is not a text file ({} bytes of binary data)",
+                    "{} is not a text file ({total} bytes of binary data)",
                     path.display(),
-                    bytes.len()
                 )))
             }
         };
@@ -88,9 +114,8 @@ impl Tool for ReadFile {
 
         Ok(Outcome::text(if truncated {
             format!(
-                "{} (first {MAX_FILE_BYTES} bytes of {}):\n{text}\n[truncated]",
+                "{} (first {MAX_FILE_BYTES} bytes of {total}):\n{text}\n[truncated]",
                 path.display(),
-                bytes.len()
             )
         } else {
             format!("{}:\n{text}", path.display())

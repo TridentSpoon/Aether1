@@ -216,6 +216,23 @@ pub fn system_voices() -> Result<Vec<(String, String)>, String> {
         .collect())
 }
 
+/// Escapes text for the inside of a single-quoted PowerShell string.
+///
+/// PowerShell closes a single-quoted string on the typographic quotes as well as the plain
+/// one, and a model's prose is full of those, so all of them are doubled. Doubling just the
+/// ASCII quote leaves "it\u{2019}s" ending the string early and the rest run as script.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn powershell_single_quoted(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for c in text.chars() {
+        out.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Speaks through the platform speech engine: SAPI on Windows, `say` on macOS, and the
 /// open-source eSpeak NG package on Linux.
 #[cfg(target_os = "windows")]
@@ -223,11 +240,11 @@ fn synthesize_os(text: &str, output_path: &Path, voice: Option<&str>) -> Result<
     // Single-quoted PowerShell string: the only character that needs escaping is the
     // quote itself, doubled. Building the whole SpeechSynthesizer pipeline in one
     // -Command string (rather than a temp .ps1 script) keeps this to one process spawn.
-    let escaped_text = text.replace('\'', "''");
-    let escaped_path = output_path.to_string_lossy().replace('\'', "''");
+    let escaped_text = powershell_single_quoted(text);
+    let escaped_path = powershell_single_quoted(&output_path.to_string_lossy());
     let select_voice = voice
         .filter(|v| !v.trim().is_empty())
-        .map(|v| format!("$s.SelectVoice('{}'); ", v.replace('\'', "''")))
+        .map(|v| format!("$s.SelectVoice('{}'); ", powershell_single_quoted(v)))
         .unwrap_or_default();
     let script = format!(
         "Add-Type -AssemblyName System.Speech; \
@@ -816,6 +833,22 @@ pub fn generate_speech_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every character PowerShell treats as a closing single quote is doubled, so none of
+    /// them can end the string the text is placed in.
+    #[test]
+    fn powershell_quoting_doubles_every_quote_powershell_honours() {
+        assert_eq!(powershell_single_quoted("it's"), "it''s");
+        assert_eq!(
+            powershell_single_quoted("it\u{2019}s \u{2018}fine\u{2019}"),
+            "it\u{2019}\u{2019}s \u{2018}\u{2018}fine\u{2019}\u{2019}"
+        );
+        assert_eq!(
+            powershell_single_quoted("\u{201A}a\u{201B}"),
+            "\u{201A}\u{201A}a\u{201B}\u{201B}"
+        );
+        assert_eq!(powershell_single_quoted("plain"), "plain");
+    }
 
     /// No pronunciation list: these tests are about the engines, and a respelling would be
     /// one more thing between the text and what came back.

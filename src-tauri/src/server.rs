@@ -140,6 +140,92 @@ async fn with_content_security_policy(request: Request, next: Next) -> Response 
     response
 }
 
+/// Origins the desktop shell's own webview reports, which differ by platform.
+const SHELL_ORIGINS: [&str; 3] = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
+/// The `host[:port]` part of an Origin header, or None when it is not `scheme://authority`.
+fn origin_authority(origin: &str) -> Option<&str> {
+    let (_, rest) = origin.split_once("://")?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    (!authority.is_empty()).then_some(authority)
+}
+
+/// Whether a Host header names this machine by one of its loopback names.
+fn is_loopback_host(host: &str) -> bool {
+    let name = if let Some(rest) = host.strip_prefix('[') {
+        // Bracketed IPv6, with or without a port after the bracket.
+        match rest.split_once(']') {
+            Some((inner, _)) => inner,
+            None => return false,
+        }
+    } else {
+        host.rsplit_once(':').map_or(host, |(name, _port)| name)
+    };
+    name.eq_ignore_ascii_case("localhost") || name == "127.0.0.1" || name == "::1"
+}
+
+/// Why a request to the loopback server should be refused as coming from somebody else's
+/// page, or None when it is fine.
+///
+/// Loopback has no token because nothing off this machine can reach it -- but a web page
+/// open in this machine's browser is *on* this machine, and can be made to send requests
+/// here. Two things tell such a page from the HUD:
+///
+/// - **Host.** A page that reaches this port by pointing its own domain at 127.0.0.1 (DNS
+///   rebinding) still sends its own name in Host. The HUD is only ever opened by a loopback
+///   name.
+/// - **Origin.** A browser attaches the calling page's origin to every cross-origin request,
+///   every POST and every WebSocket upgrade. When it is present it has to be this server (the
+///   same authority as Host) or the desktop shell. A request with no Origin at all is not a
+///   cross-site browser request -- it is curl, a script, or a same-origin GET -- and passes.
+///
+/// `--lan` is left alone: its Host is whatever name the operator's network gives the machine,
+/// and every route there is already behind the pairing token.
+fn foreign_page(lan: bool, host: Option<&str>, origin: Option<&str>) -> Option<&'static str> {
+    if lan {
+        return None;
+    }
+    if let Some(host) = host {
+        if !is_loopback_host(host) {
+            return Some("this server only answers to localhost");
+        }
+    }
+    let origin = origin?;
+    if SHELL_ORIGINS
+        .iter()
+        .any(|shell| origin.eq_ignore_ascii_case(shell))
+    {
+        return None;
+    }
+    match (origin_authority(origin), host) {
+        (Some(authority), Some(host)) if authority.eq_ignore_ascii_case(host) => None,
+        _ => Some("requests from other sites are not accepted"),
+    }
+}
+
+/// Turns away requests that another site's page sent. See foreign_page.
+async fn refuse_foreign_pages(State(lan): State<bool>, request: Request, next: Next) -> Response {
+    let refusal = {
+        // A header that is not text is not one of ours either: it reads as a name that
+        // matches nothing.
+        let text = |name: header::HeaderName| {
+            request
+                .headers()
+                .get(name)
+                .map(|value| value.to_str().unwrap_or("\u{0}"))
+        };
+        foreign_page(lan, text(header::HOST), text(header::ORIGIN))
+    };
+    if let Some(reason) = refusal {
+        return (StatusCode::FORBIDDEN, reason).into_response();
+    }
+    next.run(request).await
+}
+
 /// How long the headless telemetry loop waits between looks while no browser is attached.
 /// A subscribing client wakes it immediately; this is only the fallback, and a look is one
 /// integer read.
@@ -404,7 +490,10 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .fallback_service(static_service)
         // After the fallback, so the static files -- the HTML, which is the only response
         // where the policy does anything -- are covered as well as the routes.
-        .layer(middleware::from_fn(with_content_security_policy));
+        .layer(middleware::from_fn(with_content_security_policy))
+        // Outermost, so a request from somebody else's page is refused before any route,
+        // the WebSocket upgrades included, gets to look at it.
+        .layer(middleware::from_fn_with_state(lan, refuse_foreign_pages));
 
     // Bound before serving either way, so "that port is taken" is still reported the moment
     // it happens rather than somewhere inside the TLS handshake machinery.
@@ -2482,6 +2571,74 @@ async fn telemetry_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<Val
             Err(broadcast::error::RecvError::Lagged(_)) => continue,
             Err(broadcast::error::RecvError::Closed) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod foreign_page_tests {
+    use super::foreign_page;
+
+    #[test]
+    fn the_hud_and_command_line_clients_pass() {
+        // A same-origin GET and curl send no Origin.
+        assert_eq!(foreign_page(false, Some("localhost:8378"), None), None);
+        assert_eq!(foreign_page(false, Some("127.0.0.1:8378"), None), None);
+        assert_eq!(foreign_page(false, Some("[::1]:8378"), None), None);
+        // The HUD's own POSTs and WebSocket upgrades carry its origin, which is this server.
+        assert_eq!(
+            foreign_page(false, Some("localhost:8378"), Some("http://localhost:8378")),
+            None
+        );
+        assert_eq!(
+            foreign_page(false, Some("127.0.0.1:8378"), Some("http://127.0.0.1:8378")),
+            None
+        );
+        assert_eq!(
+            foreign_page(false, Some("localhost:8378"), Some("tauri://localhost")),
+            None
+        );
+    }
+
+    #[test]
+    fn another_sites_page_is_refused() {
+        assert!(
+            foreign_page(false, Some("localhost:8378"), Some("https://evil.example")).is_some()
+        );
+        // A sandboxed frame or a file:// page.
+        assert!(foreign_page(false, Some("localhost:8378"), Some("null")).is_some());
+        // The same name on another port is another origin.
+        assert!(
+            foreign_page(false, Some("localhost:8378"), Some("http://localhost:3000")).is_some()
+        );
+        // localhost and 127.0.0.1 are different origins to a browser too.
+        assert!(
+            foreign_page(false, Some("localhost:8378"), Some("http://127.0.0.1:8378")).is_some()
+        );
+    }
+
+    #[test]
+    fn a_rebound_domain_is_refused_by_its_host() {
+        assert!(foreign_page(false, Some("evil.example:8378"), None).is_some());
+        // Same-origin as far as the browser can tell, which is the whole trick.
+        assert!(foreign_page(
+            false,
+            Some("evil.example:8378"),
+            Some("http://evil.example:8378")
+        )
+        .is_some());
+        assert!(foreign_page(false, Some("localhost.evil.example"), None).is_some());
+    }
+
+    #[test]
+    fn lan_mode_is_left_to_the_pairing_token() {
+        assert_eq!(
+            foreign_page(
+                true,
+                Some("desk.local:8378"),
+                Some("https://desk.local:8378")
+            ),
+            None
+        );
     }
 }
 
