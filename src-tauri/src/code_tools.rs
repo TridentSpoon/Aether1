@@ -895,9 +895,22 @@ mod tests {
             "a relative path means a path in the project, the same as it does to edit_file"
         );
 
-        // An absolute path is the machine-wide read the System grant describes, untouched.
-        let absolute = against_workspace(&db, &json!({"path": "/etc/hostname"}));
-        assert_eq!(absolute["path"].as_str().unwrap(), "/etc/hostname");
+        /* An absolute path is the machine-wide read the System grant describes, untouched.
+        Built from the temporary directory rather than written as "/etc/hostname", because
+        a leading slash is absolute on Unix and merely *rooted* on Windows -- there it has
+        no drive prefix, `is_absolute` is false, and this assertion would fail on a
+        platform where the helper is behaving exactly as designed. Nothing is read through
+        it, so it does not need to exist. */
+        let elsewhere = std::env::temp_dir().join("aether1_not_in_the_project.txt");
+        assert!(
+            elsewhere.is_absolute(),
+            "the temporary directory is absolute on every platform this builds for"
+        );
+        let absolute = against_workspace(&db, &json!({"path": elsewhere.to_string_lossy()}));
+        assert_eq!(
+            absolute["path"].as_str().unwrap(),
+            elsewhere.to_string_lossy()
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
