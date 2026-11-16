@@ -756,6 +756,47 @@ impl MemoryDb {
         Ok(changed == 1)
     }
 
+    /// What the operator last typed in a conversation, and when.
+    pub fn last_user_message(&self, session_id: &str) -> rusqlite::Result<Option<Message>> {
+        self.connect()?
+            .query_row(
+                "SELECT sender, text, timestamp FROM messages \
+                 WHERE session_id = ?1 AND sender = 'user' ORDER BY id DESC LIMIT 1",
+                params![session_id],
+                |row| {
+                    Ok(Message {
+                        sender: row.get(0)?,
+                        text: row.get(1)?,
+                        timestamp: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+    }
+
+    /// The web searches and page reads that have actually run since `since` (a timestamp
+    /// as this table writes them), or in the last ten minutes when there is none to give.
+    /// Oldest first. With a conversation named, only that conversation's: another one
+    /// running at the same time has its own hosts, and they vouch for nothing here.
+    pub fn web_reads_since(
+        &self,
+        since: Option<&str>,
+        session_id: Option<&str>,
+    ) -> rusqlite::Result<Vec<ActionRecord>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, \
+             session_id \
+             FROM action_log \
+             WHERE tool IN ('search_web', 'fetch_url') AND status = 'executed' \
+               AND ts >= COALESCE(?1, datetime('now', '-10 minutes')) \
+               AND (?2 IS NULL OR session_id = ?2) \
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![since, session_id], action_from_row)?;
+        rows.collect()
+    }
+
     pub fn get_action(&self, id: i64) -> rusqlite::Result<Option<ActionRecord>> {
         self.connect()?
             .query_row(

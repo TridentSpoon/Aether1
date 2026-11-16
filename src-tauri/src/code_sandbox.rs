@@ -770,6 +770,27 @@ pub fn bwrap_args(
         &root_s,
     ]);
 
+    // The project's policy directory, read-only over the writable workspace: what the project
+    // has been trusted with is not something a command run inside that trust may rewrite.
+    // The approved copy is what is obeyed either way (see code_policy::document); this is
+    // so the file is not left saying something else. The engine's own state lives under the
+    // same directory and is bound back writable, because resuming a session depends on it.
+    if access.write_workspace {
+        for name in [crate::code_policy::DIR, crate::code_policy::ALT_DIR] {
+            let dir = root.join(name);
+            if !dir.is_dir() {
+                continue;
+            }
+            let dir_s = dir.to_string_lossy().to_string();
+            push(&["--ro-bind", &dir_s, &dir_s]);
+            let engine = dir.join("engine");
+            if engine.is_dir() {
+                let engine_s = engine.to_string_lossy().to_string();
+                push(&["--bind", &engine_s, &engine_s]);
+            }
+        }
+    }
+
     let cwd_s = cwd.to_string_lossy().to_string();
     push(&["--chdir", &cwd_s]);
 

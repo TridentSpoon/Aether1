@@ -292,6 +292,12 @@ pub fn brains(engine: &LlmEngine) -> Value {
             "ready": !available.local.is_empty(),
             "value": llm::auto::PICKER_VALUE,
             "setting": llm::auto::ENABLED_SETTING,
+            // The one online provider Auto may send a hard question to, and the setting
+            // that names it. Null means it stays on this machine -- having a key saved for
+            // a provider is not the operator choosing it.
+            "cloud": llm::auto::cloud_provider(db, llm::auto::stored_provider(db))
+                .map(|provider| provider.key()),
+            "cloud_setting": llm::auto::CLOUD_SETTING,
         },
     })
 }
@@ -1242,7 +1248,32 @@ pub fn code_set_level(engine: &LlmEngine, level: &str) -> Result<Value, String> 
 /// The Settings page's and the HTTP route's twin of `aether1 code effective`. Read-only, and
 /// it decides nothing -- `code_effective` calls the modules that own each answer.
 pub fn code_effective_report(engine: &LlmEngine) -> Value {
-    crate::code_effective::to_json(&crate::code_effective::report(engine.db()))
+    let mut report = crate::code_effective::to_json(&crate::code_effective::report(engine.db()));
+    // What the project's file asks for that nobody has approved. Beside the report rather
+    // than in it: the report is what is in force, and this is exactly what is not.
+    let pending = crate::code_workspace::root(engine.db())
+        .ok()
+        .and_then(|root| crate::code_policy::pending_change(&root));
+    if let Some(object) = report.as_object_mut() {
+        object.insert("policy_pending".to_string(), serde_json::json!(pending));
+    }
+    report
+}
+
+/// The operator's answer to a policy file that differs from what they approved: take it as
+/// the policy, or put the file back. Returns the report as it stands afterwards.
+pub fn code_policy_pending(engine: &LlmEngine, accept: bool) -> Result<Value, String> {
+    let root = crate::code_workspace::root(engine.db())?;
+    if accept {
+        crate::code_policy::accept_pending(&root)?;
+        // An accepted file may name a level, and a level is its switches.
+        if crate::code_policy::is_trusted(&root) {
+            crate::code_policy::level(&root).apply(engine.db())?;
+        }
+    } else {
+        crate::code_policy::discard_pending(&root)?;
+    }
+    Ok(code_effective_report(engine))
 }
 
 pub fn code_net_status(engine: &LlmEngine) -> Value {
@@ -1357,10 +1388,150 @@ pub fn code_net_clear_denied(engine: &LlmEngine) -> Value {
     code_net_status(engine)
 }
 
+/// The settings a save from the page may write: the ones the Settings pane and the HUD's
+/// own switches send, and nothing else.
+///
+/// The settings table holds a good deal the page never sends -- the tools the operator has
+/// said "always allow" to, the record that the starter command list was seeded, which of the
+/// two local shapes an endpoint is driven as, the egress gate's allow list, pairing state.
+/// The save route used to write whatever key it was handed, so anything that could reach it
+/// could write those too, and several of them are the thing that decides what the companion
+/// may do. They each have a command that validates what it is given; this is not it.
+///
+/// A key that is not here is refused by name and nothing in the payload is written, so a
+/// control added to the pane without being added here fails the first time it is saved
+/// rather than quietly not saving.
+const PANE_SETTINGS: &[&str] = &[
+    "agent_name",
+    "answer_divert",
+    "audio_input_device",
+    "audio_input_label",
+    "audio_output_device",
+    "audio_output_label",
+    "auto_speak",
+    "autostart_app",
+    "autostart_ollama",
+    "code_perm_edit",
+    "code_perm_github",
+    "code_perm_internet",
+    "code_perm_run",
+    "code_perm_system",
+    "code_run_allowlist",
+    "code_run_network",
+    "code_run_unconfined",
+    "code_workspace_root",
+    "color_theme",
+    "command_allowlist",
+    "custom_directive",
+    "desktop_sprite_enabled",
+    "doctor_self_repair",
+    "enable_sfx",
+    "graft_auto_refresh",
+    "graft_track_all",
+    "handoff_enabled",
+    "handoff_flatten",
+    "headphones_connected",
+    "hotkey_handoff",
+    "hotkey_toggle",
+    "lan_autostart",
+    "llm_api_key",
+    "llm_endpoint",
+    "llm_gateway_url",
+    "llm_model",
+    "llm_provider",
+    "llm_reasoning",
+    "local_only",
+    "machine_kind",
+    "machine_nickname",
+    "ollama_idle_minutes",
+    "operator_name",
+    "persona_type",
+    "quiet_hours_enabled",
+    "quiet_hours_end",
+    "quiet_hours_start",
+    "stt_language",
+    "stt_model_path",
+    "tools_enabled",
+    "tts_engine",
+    "tts_local_voice",
+    "tts_system_voice",
+    "vault_journal",
+    "vault_path",
+    "voice_name",
+    "voice_pitch_semitones",
+    "voice_playback_rate",
+    "voice_startup_audible",
+    "web_search_enabled",
+    llm::auto::ENABLED_SETTING,
+    llm::auto::CLOUD_SETTING,
+    llm::GATEWAY_KEY_SETTING,
+];
+
+/// The switches among them that widen what the companion may do. The pane sends each as a
+/// checkbox, so anything but a plain true or false is not the pane.
+const PANE_SWITCHES: &[&str] = &[
+    "code_perm_edit",
+    "code_perm_github",
+    "code_perm_internet",
+    "code_perm_run",
+    "code_perm_system",
+    "code_run_unconfined",
+    "handoff_enabled",
+    "local_only",
+    "tools_enabled",
+    "web_search_enabled",
+];
+
+/// The two lists of programs. Bare names only, as `run_command` matches them: a path or a
+/// name with arguments in it is not an entry the allowlist could ever honour.
+const PANE_PROGRAM_LISTS: &[&str] = &["command_allowlist", "code_run_allowlist"];
+
+/// Why this payload is not one the page's save may write, or Ok.
+fn check_pane_settings(map: &serde_json::Map<String, Value>) -> Result<(), String> {
+    let strangers: Vec<&str> = map
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !PANE_SETTINGS.contains(key))
+        .collect();
+    if !strangers.is_empty() {
+        return Err(format!(
+            "not saved: {} {} not something the Settings pane saves",
+            strangers.join(", "),
+            if strangers.len() == 1 { "is" } else { "are" }
+        ));
+    }
+    for (key, value) in map {
+        if PANE_SWITCHES.contains(&key.as_str()) && !value.is_boolean() {
+            return Err(format!(
+                "not saved: {key} is a switch and takes true or false"
+            ));
+        }
+        if PANE_PROGRAM_LISTS.contains(&key.as_str()) {
+            let names = value
+                .as_array()
+                .ok_or_else(|| format!("not saved: {key} takes a list of program names"))?;
+            for name in names {
+                let ok = name.as_str().is_some_and(|name| {
+                    !name.is_empty()
+                        && !name.contains(['/', '\\'])
+                        && !name.chars().any(char::is_whitespace)
+                });
+                if !ok {
+                    return Err(format!(
+                        "not saved: {key} takes bare program names, and {name} is not one"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
     let Some(map) = settings.as_object() else {
         return Err("settings payload must be a JSON object".to_string());
     };
+    check_pane_settings(map)?;
     /* Which provider this payload is about. Settings saves the provider and its details
     in one request, so the stored value is still the *previous* provider at this point and
     reading it here would file OpenAI's key under Anthropic. */
@@ -2912,6 +3083,58 @@ mod tests {
             std::env::temp_dir().join(format!("aether1_resume_{name}_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         LlmEngine::new(llm::MemoryDb::open(path).unwrap())
+    }
+
+    #[test]
+    fn a_save_writes_only_what_the_settings_pane_sends() {
+        let engine = resume_engine("pane_keys");
+        // An ordinary save.
+        save_settings(
+            &engine,
+            serde_json::json!({"agent_name": "Rory", "tools_enabled": true}),
+        )
+        .unwrap();
+
+        // Keys the page never sends, each of which decides what the companion may do or
+        // records something only the program should write.
+        for stranger in [
+            "tool_always_allow",
+            "command_allowlist_seeded",
+            "code_net_allow",
+            "something_new",
+        ] {
+            let err = save_settings(
+                &engine,
+                serde_json::json!({"agent_name": "Mallory", stranger: ["x"]}),
+            )
+            .unwrap_err();
+            assert!(err.contains(stranger), "{err}");
+            assert!(
+                engine.db().get_setting(stranger).unwrap().is_none(),
+                "{stranger} was written"
+            );
+        }
+        // And the key that was fine did not go in beside a refused one.
+        assert_eq!(engine.db().get_setting_string("agent_name", ""), "Rory");
+    }
+
+    #[test]
+    fn the_switches_and_program_lists_are_checked_for_shape() {
+        let engine = resume_engine("pane_shapes");
+        assert!(save_settings(&engine, serde_json::json!({"code_run_unconfined": "yes"})).is_err());
+        assert!(save_settings(&engine, serde_json::json!({"local_only": 0})).is_err());
+        assert!(save_settings(&engine, serde_json::json!({"command_allowlist": "ls"})).is_err());
+        for bad in ["/bin/sh", "sh -c", "", "..\\cmd"] {
+            assert!(
+                save_settings(&engine, serde_json::json!({"command_allowlist": [bad]})).is_err(),
+                "{bad:?}"
+            );
+        }
+        save_settings(
+            &engine,
+            serde_json::json!({"command_allowlist": ["ls", "git"], "local_only": true}),
+        )
+        .unwrap();
     }
 
     /// What a picker that can only save a provider and a model sends when Auto is chosen,

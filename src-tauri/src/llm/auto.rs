@@ -96,6 +96,64 @@ pub const LOCAL_SHAPE_SETTING: &str = "llm_provider_local";
 /// Either spelling counts. The switch is the canonical one and is what AETHER1's own picker
 /// writes; the provider spelling is what a picker that only knows how to save a provider
 /// writes. One reader, so they cannot disagree.
+/// The online provider Auto may use for a hard question, chosen by the operator in so many
+/// words. Empty means none, and none means Auto stays on this machine.
+///
+/// It exists because having a key is not a choice. Auto used to fall back to the first
+/// provider in a fixed order that had any key saved -- including one typed in once to try a
+/// model and never selected again -- and a hard question, with the conversation and the
+/// loaded notes, went there. Which company reads a conversation is the operator's to say.
+pub const CLOUD_SETTING: &str = "auto_router_cloud";
+
+/// What the operator has said about where Auto may go online.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudChoice {
+    /// Never asked. An install from before the setting existed, where the brain that was
+    /// selected when Auto was turned on is still the best record of what they meant.
+    Unset,
+    /// Asked, and the answer was nowhere. Not the same as never asked: somebody who picks
+    /// "stay on this computer" with a cloud brain still selected underneath has said no,
+    /// and reading that as "no opinion" would send the conversation out anyway.
+    StayLocal,
+    Use(Provider),
+}
+
+/// What `CLOUD_SETTING` says. A name that is not an online provider is read as nowhere
+/// rather than as unset, because whatever it was, it was not permission.
+pub fn cloud_choice(db: &MemoryDb) -> CloudChoice {
+    let Some(value) = db.get_setting(CLOUD_SETTING).ok().flatten() else {
+        return CloudChoice::Unset;
+    };
+    let key = value.as_str().unwrap_or_default().trim();
+    ONLINE
+        .into_iter()
+        .find(|provider| provider.key() == key)
+        .map_or(CloudChoice::StayLocal, CloudChoice::Use)
+}
+
+/// The one online provider Auto may use, given the brain that is selected underneath it.
+pub fn cloud_provider(db: &MemoryDb, configured: Provider) -> Option<Provider> {
+    match cloud_choice(db) {
+        CloudChoice::Use(provider) => Some(provider),
+        CloudChoice::StayLocal => None,
+        CloudChoice::Unset => is_online(configured).then_some(configured),
+    }
+}
+
+/// Whether a routed turn to this provider leaves the machine.
+pub fn is_online(provider: Provider) -> bool {
+    ONLINE.contains(&provider)
+}
+
+/// The online providers, in the order the picker lists them.
+const ONLINE: [Provider; 5] = [
+    Provider::Anthropic,
+    Provider::OpenAi,
+    Provider::Gemini,
+    Provider::Groq,
+    Provider::Gateway,
+];
+
 pub fn enabled(db: &MemoryDb) -> bool {
     db.get_setting_bool(ENABLED_SETTING, false)
         || db.get_setting_string("llm_provider", "") == PROVIDER_SPELLING
@@ -202,35 +260,29 @@ pub fn candidates(db: &MemoryDb) -> Candidates {
         })
         .collect();
 
-    let online = [
-        Provider::Anthropic,
-        Provider::OpenAi,
-        Provider::Gemini,
-        Provider::Groq,
-        Provider::Gateway,
-    ]
-    .into_iter()
-    .map(|provider| Candidate {
-        provider,
-        // What the operator last set for *this* provider, which #245/#255 remember per
-        // provider, before the shipped default. Routing a hard question to Anthropic and
-        // sending it `claude-opus-5` when they have chosen something else for Anthropic
-        // would be the router overriding a choice it has no business touching.
-        model: {
-            let remembered = db.get_setting_string(&super::model_setting_for(provider), "");
-            if remembered.trim().is_empty() {
-                super::default_model_for(provider).to_string()
-            } else {
-                remembered.trim().to_string()
-            }
-        },
-        local: false,
-        tools: None,
-        // A provider with no key switches and then fails with a 401, which is worse than
-        // not being offered.
-        ready: !super::api_key_for(db, provider).trim().is_empty(),
-    })
-    .collect();
+    let online = ONLINE
+        .into_iter()
+        .map(|provider| Candidate {
+            provider,
+            // What the operator last set for *this* provider, which #245/#255 remember per
+            // provider, before the shipped default. Routing a hard question to Anthropic and
+            // sending it `claude-opus-5` when they have chosen something else for Anthropic
+            // would be the router overriding a choice it has no business touching.
+            model: {
+                let remembered = db.get_setting_string(&super::model_setting_for(provider), "");
+                if remembered.trim().is_empty() {
+                    super::default_model_for(provider).to_string()
+                } else {
+                    remembered.trim().to_string()
+                }
+            },
+            local: false,
+            tools: None,
+            // A provider with no key switches and then fails with a 401, which is worse than
+            // not being offered.
+            ready: !super::api_key_for(db, provider).trim().is_empty(),
+        })
+        .collect();
 
     Candidates {
         local_provider,
@@ -244,20 +296,17 @@ pub fn candidates(db: &MemoryDb) -> Candidates {
 impl Candidates {
     /// The cloud provider a routed turn should use, when it wants one.
     ///
-    /// `configured` -- whatever the operator last chose -- wins where it is a ready cloud
-    /// provider, because "Auto, and when it goes to the cloud use Claude" is a sentence an
-    /// operator can hold in their head. Otherwise the first ready one in the fixed order
-    /// above, so the answer does not depend on hash iteration.
-    fn cloud(&self, configured: Provider) -> Option<&Candidate> {
+    /// `chosen` is the provider the operator picked: the one named for Auto, or the brain
+    /// they had selected when they turned Auto on. It is used when it has a key, and nothing
+    /// else ever is. There is no "otherwise the first one with a key": a saved key is
+    /// evidence that a provider was tried once, not that conversations may go to it.
+    fn cloud(&self, chosen: Provider) -> Option<&Candidate> {
         // The mode is checked here rather than baked into `ready`, so that a provider with
         // a key is still reported as configured while being refused -- see `Candidate`.
         if self.local_only {
             return None;
         }
-        self.online
-            .iter()
-            .find(|c| c.ready && c.provider == configured)
-            .or_else(|| self.online.iter().find(|c| c.ready))
+        self.online.iter().find(|c| c.ready && c.provider == chosen)
     }
 
     /// Whether anything local could answer at all.
@@ -608,7 +657,7 @@ pub fn decide(
                     .to_string()
             } else {
                 "Auto kept this on your machine -- it would have used a larger model, but \
-                 no online provider has a key."
+                 no online provider has been chosen for Auto, or the one chosen has no key."
                     .to_string()
             },
         });
@@ -664,7 +713,13 @@ pub fn route(
     if prompt.trim().is_empty() {
         return Err("nothing to judge".to_string());
     }
-    let available = candidates(db);
+    let mut available = candidates(db);
+    // Nowhere chosen means nothing to choose from, which is how `decide` is told: it then
+    // keeps a hard question local and says that no provider has been chosen.
+    let chosen = cloud_provider(db, configured);
+    if chosen.is_none() {
+        available.online.clear();
+    }
     // The endpoint the turn is already using, not the one in the settings, for the one case
     // where they differ: a gateway rewrites `endpoint`, and judging at a gateway's address
     // would send the question to the cloud to decide whether to send it to the cloud.
@@ -770,7 +825,9 @@ pub fn route(
         verdict,
         sure,
         &available,
-        configured,
+        // The one named for Auto, and failing that the brain that was selected when Auto
+        // was turned on. Never a provider that merely has a key.
+        chosen.unwrap_or(configured),
         reach,
         local_base.as_deref(),
     )
@@ -903,6 +960,37 @@ mod tests {
     }
 
     #[test]
+    fn staying_local_is_an_answer_and_not_the_absence_of_one() {
+        let path = std::env::temp_dir().join(format!(
+            "aether1_auto_cloud_choice_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = MemoryDb::open(path).unwrap();
+        // Never asked: the brain selected underneath Auto is what they meant.
+        assert_eq!(
+            cloud_provider(&db, Provider::OpenAi),
+            Some(Provider::OpenAi)
+        );
+        assert_eq!(cloud_provider(&db, Provider::Ollama), None);
+        // Asked, and the answer was nowhere -- with a cloud brain still selected.
+        db.set_setting(CLOUD_SETTING, &serde_json::json!(""))
+            .unwrap();
+        assert_eq!(cloud_provider(&db, Provider::OpenAi), None);
+        // Asked, and named.
+        db.set_setting(CLOUD_SETTING, &serde_json::json!("anthropic"))
+            .unwrap();
+        assert_eq!(
+            cloud_provider(&db, Provider::OpenAi),
+            Some(Provider::Anthropic)
+        );
+        // Something that is not a provider is not permission.
+        db.set_setting(CLOUD_SETTING, &serde_json::json!("whoever"))
+            .unwrap();
+        assert_eq!(cloud_provider(&db, Provider::OpenAi), None);
+    }
+
+    #[test]
     fn a_configured_provider_with_no_key_does_not_win() {
         let mut available = both();
         available.online = vec![
@@ -920,7 +1008,9 @@ mod tests {
             None,
         )
         .expect("something to route to");
-        assert_eq!(routed.provider, Provider::Groq);
+        // And nothing else wins in its place: Groq has a key, and a key is not a choice.
+        assert_eq!(routed.provider, Provider::Ollama);
+        assert!(routed.why.contains("chosen for Auto"), "{}", routed.why);
     }
 
     #[test]

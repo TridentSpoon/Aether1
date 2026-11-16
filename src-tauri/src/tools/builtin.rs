@@ -424,6 +424,9 @@ pub struct FetchUrl;
 /// on one document. A 7B with an 8K window cannot be handed 200KB of HTML.
 const MAX_PAGE_CHARS: usize = 12_000;
 
+/// How many redirects a fetch follows before giving up. Each one is a fresh, checked request.
+const MAX_REDIRECTS: usize = 5;
+
 impl Tool for FetchUrl {
     fn name(&self) -> &'static str {
         "fetch_url"
@@ -473,10 +476,53 @@ impl Tool for FetchUrl {
             ));
         }
 
-        let response = crate::net::get(url, "the page was not fetched")?
-            .header("User-Agent", crate::websearch::USER_AGENT)
-            .call()
-            .map_err(|e| format!("cannot fetch {url}: {e}"))?;
+        /* Redirects are followed here rather than by the client, so that each hop is put
+        to the same questions as the first: is it http or https, is it somewhere on the web
+        rather than on this machine, and does local-only mode allow it. Left to the client,
+        a public page could answer "302, go to http://localhost:8378/..." and be obeyed. */
+        let mut url = url.to_string();
+        let mut hops = 0;
+        let response = loop {
+            let response = crate::net::get_public(&url, "the page was not fetched")?
+                .header("User-Agent", crate::websearch::USER_AGENT)
+                .call()
+                .map_err(|e| {
+                    if crate::net::refused_as_local(&e) {
+                        format!(
+                            "{url} answers from an address on this machine or its network, \
+                             which is not the web, so the page was not fetched"
+                        )
+                    } else {
+                        format!("cannot fetch {url}: {e}")
+                    }
+                })?;
+            if !response.status().is_redirection() {
+                break response;
+            }
+            let Some(next) = response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|location| url::Url::parse(&url).ok()?.join(location).ok())
+            else {
+                break response;
+            };
+            if !matches!(next.scheme(), "http" | "https") {
+                return Err(format!(
+                    "{url} redirects to {next}, which is not a web address, so the page was \
+                     not fetched"
+                ));
+            }
+            hops += 1;
+            if hops > MAX_REDIRECTS {
+                return Err(format!(
+                    "{url} was still redirecting after {MAX_REDIRECTS} hops, so the page was \
+                     not fetched"
+                ));
+            }
+            url = next.to_string();
+        };
+        let url = url.as_str();
 
         let body = response
             .into_body()
@@ -591,6 +637,26 @@ mod tests {
             .unwrap();
         assert!(outcome.result.contains("/etc/hostname"));
         assert!(outcome.undo.is_none(), "a read is not reversible work");
+    }
+
+    /// Needs the network, so it is run by hand: `cargo test -- --ignored a_public_redirect`.
+    /// `https://www.github.com/` answers 301 to the bare name, which is one hop through `net::get_public`
+    /// and the loop in `FetchUrl::call` rather than through the client's own following.
+    #[test]
+    #[ignore]
+    fn a_public_redirect_is_followed_hop_by_hop() {
+        let db = temp_db("fetch_redirect");
+        crate::net::install(&db);
+        db.set_setting("web_search_enabled", &json!(true)).unwrap();
+        let ctx = ToolContext::new(&db);
+        let outcome = FetchUrl
+            .call(&json!({"url": "https://www.github.com/"}), &ctx)
+            .unwrap();
+        assert!(
+            outcome.result.starts_with("[PAGE] https://github.com/"),
+            "{}",
+            &outcome.result[..outcome.result.len().min(200)]
+        );
     }
 
     #[test]

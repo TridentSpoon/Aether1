@@ -343,6 +343,7 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/agents/run", post(run_agents))
         .route("/api/code/level", post(code_level))
         .route("/api/code/effective", get(code_effective))
+        .route("/api/code/policy/pending", post(code_policy_pending))
         .route("/api/code/net", get(code_net))
         .route("/api/code/net/allow", post(code_net_allow))
         .route("/api/code/net/forget", post(code_net_forget))
@@ -1851,6 +1852,24 @@ async fn code_effective(
         tokio::task::spawn_blocking(move || commands::code_effective_report(&state.engine))
             .await
             .map_err(internal_error)?;
+    Ok(Json(report))
+}
+
+/// Browser-transport twin of code_policy_pending_rust: accept or discard what the project's
+/// policy file proposes.
+async fn code_policy_pending(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let accept = body.get("accept").and_then(Value::as_bool).ok_or((
+        StatusCode::BAD_REQUEST,
+        "say whether to accept: {\"accept\": true} or {\"accept\": false}".to_string(),
+    ))?;
+    let report =
+        tokio::task::spawn_blocking(move || commands::code_policy_pending(&state.engine, accept))
+            .await
+            .map_err(internal_error)?
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     Ok(Json(report))
 }
 
