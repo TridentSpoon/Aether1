@@ -2338,6 +2338,16 @@ fn code_effective_rust(engine: tauri::State<LlmEngine>) -> serde_json::Value {
     commands::code_effective_report(&engine)
 }
 
+/// Rust-native twin of POST /api/code/policy/pending: accept what the project's policy file
+/// proposes, or put the file back to what was approved.
+#[tauri::command(async)]
+fn code_policy_pending_rust(
+    engine: tauri::State<LlmEngine>,
+    accept: bool,
+) -> Result<serde_json::Value, String> {
+    commands::code_policy_pending(&engine, accept)
+}
+
 /// Rust-native twin of GET /api/code/net: the sandbox's domain policy and whatever is
 /// waiting on an answer. The HUD polls this, and polling it is what tells the proxy there
 /// is somebody here to ask -- see commands::code_net_status.
@@ -3360,6 +3370,8 @@ fn set_agent_selection_rust(
 fn build_llm_engine() -> LlmEngine {
     let engine = open_llm_engine();
     net::install(engine.db());
+    // Where approved project policies are kept. See code_policy::document.
+    code_policy::install(engine.db());
     // The one-time switch-on for installs that had tools off without choosing to. Here
     // for the same reason `net::install` is: it is the single path every entry point
     // shares, and it has to happen before anything asks a model a question.
@@ -3610,6 +3622,7 @@ fn main() {
             save_settings_rust,
             code_set_level_rust,
             code_effective_rust,
+            code_policy_pending_rust,
             code_net_status_rust,
             code_net_allow_rust,
             code_net_forget_rust,

@@ -170,6 +170,87 @@ pub fn post(
     Ok(ureq::post(url))
 }
 
+/// Refuses to hand back an address on this machine or its network.
+///
+/// The name check in `get_public` is the first half of that refusal and cannot be the whole
+/// of it: `internal.example.com` is a public-looking name that may answer with 10.0.0.5, and
+/// a name can answer differently the second time it is asked. So the question is asked here,
+/// about the addresses the connection is actually about to be made to, on every connection
+/// the agent makes.
+///
+/// Behind a proxy the lookup this sees is the proxy's own, and the proxy resolves the page's
+/// name somewhere this process cannot see. That lookup is let through -- refusing it would
+/// refuse everything -- and the name check is then all there is.
+#[derive(Debug)]
+struct PublicAddressesOnly;
+
+impl ureq::unversioned::resolver::Resolver for PublicAddressesOnly {
+    fn resolve(
+        &self,
+        uri: &ureq::http::Uri,
+        config: &ureq::config::Config,
+        timeout: ureq::unversioned::transport::NextTimeout,
+    ) -> Result<ureq::unversioned::resolver::ResolvedSocketAddrs, ureq::Error> {
+        let found = ureq::unversioned::resolver::DefaultResolver::default()
+            .resolve(uri, config, timeout)?;
+        let is_the_proxy = config
+            .proxy()
+            .is_some_and(|proxy| uri.host() == Some(proxy.host()));
+        if !is_the_proxy
+            && found
+                .iter()
+                .any(|addr| crate::local_only::is_local_ip(addr.ip()))
+        {
+            return Err(ureq::Error::Other(LOCAL_ADDRESS.into()));
+        }
+        Ok(found)
+    }
+}
+
+/// What a refused lookup says. Matched by `refused_as_local` so the caller can say it in
+/// the operator's terms rather than as a transport error.
+const LOCAL_ADDRESS: &str = "the name answers with an address on this machine or its network";
+
+/// Whether an error from a `get_public` request is the resolver's refusal above.
+pub fn refused_as_local(error: &ureq::Error) -> bool {
+    error.to_string().contains(LOCAL_ADDRESS)
+}
+
+/// An outbound GET for something that is supposed to be on the public web, and so may not
+/// be on this machine or its network at all.
+///
+/// The opposite exemption to `get`. There, a local address is always allowed, because the
+/// caller is talking to the operator's own model server. Here the address came from a
+/// model, and often from a web page the model has just read, and "fetch
+/// http://192.168.1.1/" or "http://localhost:8378/api/..." is a way for that page to reach
+/// things only this machine can reach. So a local name is refused, a name that resolves to
+/// a local address is refused, and redirects are not followed: the caller gets the 3xx back
+/// and asks again for the next hop, so that every hop is put to the same questions.
+pub fn get_public(
+    url: &str,
+    action: &str,
+) -> Result<ureq::RequestBuilder<ureq::typestate::WithoutBody>, String> {
+    if crate::local_only::is_local_endpoint(url) {
+        return Err(format!(
+            "{url} is on this machine or its network, which is not the web, so {action}"
+        ));
+    }
+    require_online(url, action)?;
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    let agent = AGENT.get_or_init(|| {
+        let config = ureq::Agent::config_builder()
+            .max_redirects(0)
+            .max_redirects_will_error(false)
+            .build();
+        ureq::Agent::with_parts(
+            config,
+            ureq::unversioned::transport::DefaultConnector::default(),
+            PublicAddressesOnly,
+        )
+    });
+    Ok(agent.get(url))
+}
+
 /// A GET to something that forwards off this machine. See `require_forwarding`.
 ///
 /// Used for a gateway's model list: the list itself is harmless, but asking for it proves
@@ -195,6 +276,22 @@ pub fn post_forwarding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_public_fetch_refuses_this_machine_and_its_network_by_name() {
+        for local in [
+            "http://localhost:8378/api/settings",
+            "http://127.0.0.1:11434/api/tags",
+            "http://192.168.1.1/",
+            "http://[::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://nas.local/",
+        ] {
+            let err = get_public(local, "the page was not fetched").unwrap_err();
+            assert!(err.contains("not the web"), "{local}: {err}");
+        }
+    }
 
     fn set_mode(db: &MemoryDb, on: bool) {
         db.set_setting(crate::local_only::SETTING, &serde_json::json!(on))

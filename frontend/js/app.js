@@ -10106,7 +10106,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 closeBrainPopover();
             });
         }
-        brainPop.auto.replaceChildren(autoRow);
+        /* Where Auto may send a hard question. One provider, picked here, or nowhere. It
+           used to be whichever provider had a key saved, which is not the same as chosen. */
+        const auto = (brainState.data && brainState.data.auto) || {};
+        const cloudRow = document.createElement('label');
+        cloudRow.className = 'brain-auto-sub';
+        cloudRow.style.cssText = 'display:flex;gap:.5rem;align-items:center;padding:.35rem .75rem';
+        cloudRow.textContent = 'When Auto wants a larger model, use ';
+        const cloudPick = document.createElement('select');
+        cloudPick.id = 'brain-auto-cloud';
+        cloudPick.className = 'bg-transparent border border-cyan-500/30 rounded px-1';
+        const stay = document.createElement('option');
+        stay.value = '';
+        stay.textContent = 'nothing — stay on this computer';
+        cloudPick.appendChild(stay);
+        for (const entry of (brainState.data && brainState.data.online) || []) {
+            const option = document.createElement('option');
+            option.value = entry.provider;
+            option.textContent = entry.ready ? entry.label : `${entry.label} (no key saved)`;
+            option.disabled = !entry.ready;
+            cloudPick.appendChild(option);
+        }
+        cloudPick.value = auto.cloud || '';
+        cloudPick.disabled = !!(brainState.data && brainState.data.local_only);
+        cloudPick.addEventListener('click', (event) => event.stopPropagation());
+        cloudPick.addEventListener('change', async () => {
+            try {
+                await writeStoredSetting(auto.cloud_setting || 'auto_router_cloud', cloudPick.value);
+                if (brainState.data && brainState.data.auto) brainState.data.auto.cloud = cloudPick.value || null;
+            } catch (error) {
+                cloudPick.value = auto.cloud || '';
+            }
+        });
+        cloudRow.appendChild(cloudPick);
+        brainPop.auto.replaceChildren(autoRow, cloudRow);
 
         // ---- the list
         const groups = brainPopGroups();
@@ -15737,11 +15770,62 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /* Draws the report. */
+    /* The project's policy file asking for something nobody approved: a build script wrote
+       to it, or the repository came with one. It is not in force, and this is where the
+       operator is told and gets to say. Built here rather than in the markup because it is
+       absent nearly always. */
+    function applyPolicyPending(rows, pending) {
+        let notice = document.getElementById('code-policy-pending');
+        if (!pending) {
+            notice?.remove();
+            return;
+        }
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.id = 'code-policy-pending';
+            notice.className = 'my-2 p-2 rounded border border-amber-500/40 text-xs text-amber-300';
+            rows.parentNode.insertBefore(notice, rows);
+        }
+        const text = document.createElement('p');
+        text.textContent = pending;
+        const answer = async (accept) => {
+            try {
+                const report = IS_TAURI
+                    ? await tauriInvoke('code_policy_pending_rust', { accept })
+                    : await (async () => {
+                        const resp = await apiFetch('/api/code/policy/pending', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ accept }),
+                        });
+                        if (!resp.ok) throw new Error(await resp.text());
+                        return resp.json();
+                    })();
+                applyCodeEffective(report);
+                await loadSettings();
+            } catch (e) {
+                text.textContent = `That was not done: ${e.message || e}`;
+            }
+        };
+        const buttons = document.createElement('div');
+        buttons.className = 'mt-2 flex gap-2';
+        for (const [label, accept] of [['Accept the file', true], ['Keep what I approved', false]]) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'px-2 py-1 rounded border border-amber-500/40 hover:bg-amber-500/10';
+            button.textContent = label;
+            button.addEventListener('click', () => answer(accept));
+            buttons.appendChild(button);
+        }
+        notice.replaceChildren(text, buttons);
+    }
+
     function applyCodeEffective(report) {
         const rows = document.getElementById('code-effective-rows');
         const state = document.getElementById('code-effective-state');
         const level = document.getElementById('code-effective-level');
         if (!rows) return;
+        applyPolicyPending(rows, report && report.policy_pending);
 
         if (!report) {
             rows.replaceChildren();

@@ -117,17 +117,17 @@ pub const PENDING_SETTING: &str = "code_net_pending";
 /// adds, minus whatever it removes.
 pub fn allowed(root: &Path) -> BTreeSet<String> {
     let mut domains: BTreeSet<String> = STARTER_DOMAINS.iter().map(|d| d.to_string()).collect();
-    let Ok(text) = std::fs::read_to_string(crate::code_policy::file_in(root)) else {
-        return domains;
-    };
-    let Ok(policy) = serde_json::from_str::<Value>(&text) else {
-        return domains;
-    };
+    // The approved policy, not the file as it stands: see `code_policy::document`. And each
+    // entry is put to the same test as one typed into Settings, so a row that could never
+    // have been added there does not count for being written some other way.
+    let policy = crate::code_policy::document(root);
     // `allow` adds, `deny` takes away, and deny wins -- an operator who wrote a host into
     // `deny` has said something more deliberate than the default list ever did.
     if let Some(list) = policy.get("allow").and_then(Value::as_array) {
         for entry in list.iter().filter_map(Value::as_str) {
-            domains.insert(entry.trim().to_ascii_lowercase());
+            if let Ok(domain) = domain_name(entry) {
+                domains.insert(domain);
+            }
         }
     }
     if let Some(list) = policy.get("deny").and_then(Value::as_array) {
@@ -190,26 +190,11 @@ fn domain_name(domain: &str) -> Result<String, String> {
 /// Reads the project's policy file, or an empty object if there is not one yet.
 fn read_policy(root: &Path) -> Result<(PathBuf, Value), String> {
     let path = crate::code_policy::file_in(root);
-    let policy: Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
+    let policy = crate::code_policy::document(root);
     if !policy.is_object() {
         return Err(format!("{} is not a JSON object", path.display()));
     }
     Ok((path, policy))
-}
-
-fn write_policy(path: &Path, policy: &Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("{} could not be made: {e}", parent.display()))?;
-    }
-    std::fs::write(
-        path,
-        serde_json::to_string_pretty(policy).unwrap_or_default() + "\n",
-    )
-    .map_err(|e| format!("{} could not be written: {e}", path.display()))
 }
 
 /// Adds `domain` to one of the file's two lists and takes it out of the other.
@@ -237,7 +222,7 @@ fn move_domain(root: &Path, domain: &str, into: &str, out_of: &str) -> Result<St
         list.retain(|v| v.as_str() != Some(domain.as_str()));
     }
 
-    write_policy(&path, &policy)?;
+    crate::code_policy::write_document(root, &policy)?;
     Ok(domain)
 }
 

@@ -23,6 +23,7 @@ pub mod protocol;
 pub(crate) mod selfcheck;
 pub mod skills;
 pub(crate) mod update;
+mod web_guard;
 
 use std::sync::LazyLock;
 
@@ -430,7 +431,9 @@ pub fn run(
     // same road a mutating call does: written down, shown to the operator, run only if they
     // say so, and gone the moment it has run. Elevation is per request and nothing else --
     // a second identical call is proposed again.
-    if let Some(reason) = domain::elevation_needed(ctx, tool, args) {
+    if let Some(reason) = domain::elevation_needed(ctx, tool, args)
+        .or_else(|| web_guard::new_host_needs_asking(ctx, tool, args))
+    {
         let id = consent::propose(
             ctx.db,
             name,

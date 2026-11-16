@@ -258,6 +258,29 @@ pub fn resolve(db: &MemoryDb, path: &str) -> Result<PathBuf, String> {
 /// returns success. `find` text that appears twice is genuinely ambiguous, so it is refused
 /// with the count and the model is told to include more surrounding context -- which is the
 /// one thing that reliably makes a small model's next attempt correct.
+/// Refuses a write into the project's own policy directory.
+///
+/// `.aether/` (or `.aurora/`) holds what the project has been trusted with. The approved
+/// copy is what is obeyed, so a write here would be flagged rather than honoured -- but the
+/// model editing the file that describes its own permissions is not a thing to allow and
+/// then catch. The operator changes the policy in Settings or with `aether1 code`.
+fn refuse_policy_dir(root: &Path, resolved: &Path) -> Result<(), String> {
+    let relative = resolved.strip_prefix(root).unwrap_or(resolved);
+    let first = relative
+        .components()
+        .next()
+        .map(|part| part.as_os_str().to_string_lossy().to_ascii_lowercase());
+    if matches!(first.as_deref(), Some(dir) if dir == crate::code_policy::DIR || dir == crate::code_policy::ALT_DIR)
+    {
+        return Err(format!(
+            "{} is where this project's permissions are kept, and it is not edited from \
+             here. The operator changes them in Settings.",
+            relative.display()
+        ));
+    }
+    Ok(())
+}
+
 pub fn edit_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
     let path = string_arg(args, "path")?;
     let find = string_arg(args, "find")?;
@@ -282,6 +305,7 @@ pub fn edit_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
     // handing the path back to the operating system to resolve a second time -- see
     // code_openat for why a second walk is a race and not a formality.
     let root = root(db)?;
+    refuse_policy_dir(&root, &resolved)?;
     let before = crate::code_openat::read(&root, &resolved)?;
 
     let count = before.matches(find.as_str()).count();
@@ -356,6 +380,7 @@ pub fn create_file(db: &MemoryDb, args: &Value) -> Result<String, String> {
     // a link swapped in as one of them is refused instead of being followed -- `create_dir_all`
     // would have followed it. See code_openat.
     let root = root(db)?;
+    refuse_policy_dir(&root, &resolved)?;
     crate::code_openat::write(&root, &resolved, content.as_bytes(), true)?;
 
     let _ = db.log_action(

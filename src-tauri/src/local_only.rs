@@ -70,6 +70,11 @@ pub fn is_local_ip(ip: std::net::IpAddr) -> bool {
             ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
         }
         std::net::IpAddr::V6(ip) => {
+            // `::ffff:127.0.0.1` is 127.0.0.1 with a different spelling, and connects to
+            // the same place.
+            if let Some(v4) = ip.to_ipv4_mapped() {
+                return is_local_ip(std::net::IpAddr::V4(v4));
+            }
             ip.is_loopback()
                 || ip.is_unspecified()
                 // Unique local (fc00::/7) and link-local (fe80::/10). Both have stable

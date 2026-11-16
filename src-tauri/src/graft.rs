@@ -178,6 +178,13 @@ pub fn program() -> PathBuf {
     PathBuf::from("graft")
 }
 
+/// The folder Aether1 installs Graft into when npm's own prefix is not this user's to write
+/// -- see `graft_install::run`. Under the app's data directory, so removing Aether1's data
+/// removes it and nothing of the operator's Node setup is touched.
+pub fn own_prefix() -> Option<PathBuf> {
+    crate::paths::app_data_dir().map(|dir| dir.join("graft"))
+}
+
 /// Look for `graft` where `npm install -g` leaves it.
 fn npm_global_graft() -> Option<PathBuf> {
     let home = crate::paths::home_dir();
@@ -210,6 +217,16 @@ fn npm_global_graft() -> Option<PathBuf> {
             versions.sort();
             dirs.extend(versions);
         }
+    }
+
+    // Aether1's own prefix last, because the last match wins: when it exists, it is the copy
+    // this program installed.
+    if let Some(prefix) = own_prefix() {
+        dirs.push(if cfg!(target_os = "windows") {
+            prefix
+        } else {
+            prefix.join("bin")
+        });
     }
 
     dirs.into_iter()

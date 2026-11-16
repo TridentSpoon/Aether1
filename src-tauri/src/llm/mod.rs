@@ -647,6 +647,9 @@ pub struct LlmEngine {
     /// The line the routing wants the operator to see, waiting to be collected. Read and
     /// cleared by `take_routing_notice`.
     routing_notice: Mutex<Option<String>>,
+    /// Conversations that have already been told Auto is sending them off this machine, so
+    /// the fuller notice is the first online turn's and not every one's.
+    told_going_online: Mutex<std::collections::HashSet<String>>,
 }
 
 /// How long the endpoint's model list is trusted before asking again. Short enough that
@@ -663,6 +666,7 @@ impl LlmEngine {
             available: Mutex::new(None),
             reported_missing: Mutex::new(std::collections::HashSet::new()),
             routing_notice: Mutex::new(None),
+            told_going_online: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -2011,7 +2015,29 @@ impl LlmEngine {
         Here rather than inside `load_config` because the judgment is about the prompt,
         which `load_config` has no business knowing about, and because it must not run for
         a turn that never reaches a model: an instant command is answered above. */
-        let (config, routed) = self.apply_auto_router(config, prompt);
+        let (config, mut routed) = self.apply_auto_router(config, prompt);
+        /* The first time Auto takes a conversation off this machine, it says so in full and
+        ahead of the answer: the line is the reply's preamble, which goes out before the
+        request does. Until now the operator learned where a turn had gone from the line
+        above the answer it produced, which is after the conversation had already been
+        sent. Once per conversation, because after the first the short line says enough. */
+        if let Some(routed) = routed.as_mut() {
+            if auto::is_online(routed.provider)
+                && self
+                    .told_going_online
+                    .lock()
+                    .unwrap()
+                    .insert(session_id.to_string())
+            {
+                routed.why = format!(
+                    "{} This is the first message in this conversation to leave your \
+                     machine: the message, the conversation so far and any notes loaded for \
+                     it are going to {}. Pick a local model, or set Auto to stay on this \
+                     computer, to keep the rest here.",
+                    routed.why, routed.provider
+                );
+            }
+        }
         let auto_trace = routed
             .as_ref()
             .map(|r| crate::tools::protocol::trace_of(&r.why))

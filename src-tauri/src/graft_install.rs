@@ -23,6 +23,7 @@
 //! saying nothing would make that promise false in a way they could not see.
 
 use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -206,10 +207,31 @@ fn run() {
     };
 
     enter_step(1);
-    match run_streaming(&npm, &["install", "-g", PACKAGE], INSTALL_TIMEOUT) {
+    /* Where it goes. `npm install -g` writes into npm's own prefix, and on a machine whose
+    npm came from the package manager that is /usr, which only root may write: the install
+    ends in EACCES and the answer the internet gives is sudo. So when the prefix cannot be
+    written, Graft goes into a folder of Aether1's own instead -- same package, same
+    command, no elevation -- and `graft::program` looks there. */
+    let own_prefix = if npm_prefix_writable(&npm) {
+        None
+    } else {
+        crate::graft::own_prefix()
+    };
+    let mut args: Vec<String> = vec!["install".into(), "-g".into()];
+    if let Some(prefix) = &own_prefix {
+        if let Err(e) = std::fs::create_dir_all(prefix) {
+            fail(format!("{} could not be made: {e}", prefix.display()));
+            return;
+        }
+        args.push("--prefix".into());
+        args.push(prefix.to_string_lossy().to_string());
+    }
+    args.push(PACKAGE.into());
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    match run_streaming(&npm, &borrowed, INSTALL_TIMEOUT) {
         Ok(()) => {}
         Err(why) => {
-            fail(format!("npm install -g {PACKAGE} failed: {why}"));
+            fail(format!("npm {} failed: {why}", args.join(" ")));
             return;
         }
     }
@@ -244,6 +266,49 @@ fn run() {
             ),
         };
     });
+}
+
+/// Whether this user can write where `npm install -g` would put a package.
+///
+/// Asked of npm rather than guessed: the prefix is configurable, and nvm, Homebrew and a
+/// distribution's package each put it somewhere different. An answer that cannot be had
+/// counts as writable, which leaves npm to try its own default and report in its own words.
+fn npm_prefix_writable(npm: &Path) -> bool {
+    let Ok(output) = crate::paths::quiet_command(npm)
+        .args(["config", "get", "prefix"])
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return true;
+    };
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || prefix.is_empty() {
+        return true;
+    }
+    let prefix = PathBuf::from(prefix);
+    let target = if cfg!(target_os = "windows") {
+        prefix
+    } else {
+        prefix.join("lib").join("node_modules")
+    };
+    dir_writable(&target)
+}
+
+/// Whether a file could be created in `dir`, or in the nearest folder above it that exists
+/// (npm makes the ones that do not). Found by doing it, because permission bits do not
+/// account for a read-only filesystem or an immutable distribution.
+fn dir_writable(dir: &Path) -> bool {
+    let Some(existing) = dir.ancestors().find(|candidate| candidate.is_dir()) else {
+        return false;
+    };
+    let probe = existing.join(format!(".aether1-write-test-{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// Runs a command, streaming each output line into the detail field, and kills it at `timeout`.
@@ -429,6 +494,29 @@ mod tests {
     /// The package name is the whole trap. Three plausible spellings install something that is
     /// not Graft, and one of them shadows the real binary, so this is pinned rather than left
     /// to be retyped from memory by whoever next touches this file.
+    #[test]
+    fn a_folder_that_cannot_be_written_is_found_out_by_trying() {
+        let dir = std::env::temp_dir().join(format!("aether1_graft_prefix_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // The folder npm would make does not exist yet; the one above it does.
+        assert!(dir_writable(&dir.join("lib").join("node_modules")));
+        assert!(
+            std::fs::read_dir(&dir).unwrap().next().is_none(),
+            "the probe is removed"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            // Root writes through permission bits, so this half only means something as a user.
+            let is_root = std::fs::File::create(dir.join("probe")).is_ok();
+            if !is_root {
+                assert!(!dir_writable(&dir.join("lib").join("node_modules")));
+            }
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
     #[test]
     fn the_package_is_the_scoped_one_and_not_a_near_miss() {
         assert_eq!(PACKAGE, "@nanonets/graft");

@@ -216,25 +216,270 @@ impl Level {
 
 // ------------------------------------------------------------------ the file
 
-/// Reads the raw policy document, or an empty one.
-fn document(root: &Path) -> Value {
-    std::fs::read_to_string(file_in(root))
+/// Where what the operator has approved is kept: the settings database, which is under
+/// the home directory the sandbox hides, and so is somewhere a command run in the project
+/// cannot write.
+static APPROVALS: std::sync::OnceLock<MemoryDb> = std::sync::OnceLock::new();
+
+/// The setting holding the approved policies: a map from a project's canonical path to the
+/// document that was approved for it and a hash of the file as it stood then.
+pub const APPROVED_SETTING: &str = "code_policy_approved";
+
+/// Set once the projects that already had a policy file have been taken as approved.
+const ADOPTED_SETTING: &str = "code_policy_adopted_existing";
+
+/// Hands this module the settings database. Called once, where `net::install` is.
+///
+/// Without it there is nowhere to keep an approval, and the file is read as it stands --
+/// which is how a unit test, with a database of its own per test and no process-wide one,
+/// still sees what it wrote. Every real entry point comes through `build_llm_engine`.
+///
+/// The first call on an existing install takes the current project's file as approved, once:
+/// it was being obeyed in full the day before, and an update that silently dropped every
+/// operator back to the defaults would be read as the update breaking their setup.
+pub fn install(db: &MemoryDb) {
+    if APPROVALS.set(db.clone()).is_err() {
+        return;
+    }
+    if db.get_setting_bool(ADOPTED_SETTING, false) {
+        return;
+    }
+    let root = db.get_setting_string("code_workspace_root", "");
+    if !root.trim().is_empty() {
+        let root = crate::paths::expand_home(root.trim());
+        if let Some((text, document)) = file_document(&root) {
+            let _ = record_approval(db, &root, &text, &document);
+        }
+    }
+    let _ = db.set_setting(ADOPTED_SETTING, &serde_json::json!(true));
+}
+
+/// The project's path as approvals are filed under it.
+fn approval_key(root: &Path) -> String {
+    root.canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The file as it is on disk: its text and the object in it. None when there is no file or
+/// it is not a JSON object.
+fn file_document(root: &Path) -> Option<(String, Value)> {
+    let text = std::fs::read_to_string(file_in(root)).ok()?;
+    let document: Value = serde_json::from_str(&text).ok()?;
+    document.is_object().then_some((text, document))
+}
+
+fn approvals(db: &MemoryDb) -> serde_json::Map<String, Value> {
+    db.get_setting(APPROVED_SETTING)
         .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .flatten()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn record_approval(db: &MemoryDb, root: &Path, text: &str, document: &Value) -> Result<(), String> {
+    let mut all = approvals(db);
+    all.insert(
+        approval_key(root),
+        serde_json::json!({ "sha256": sha256_hex(text), "document": document }),
+    );
+    db.set_setting(APPROVED_SETTING, &Value::Object(all))
+        .map_err(|e| format!("the approved policy could not be recorded: {e}"))
+}
+
+/// The policy in force for this project.
+///
+/// **The file is a proposal; what the operator approved is the policy.** The file sits in
+/// the workspace, which is the one place a sandboxed command can write and the one place a
+/// cloned repository puts things. Obeying it as written meant a build script could add
+/// `"level": "unrestricted"` or a writable mount for the next command to enjoy, and a
+/// repository could arrive with its own allow list. So the document every reader gets is
+/// the one recorded when the operator last answered for this project -- by choosing a
+/// level, naming a folder, allowing a domain, or accepting a change to the file -- and a
+/// file that has drifted from it is reported by `pending_change` rather than obeyed.
+///
+/// A project nobody has answered for has the empty policy, which is the baseline: the
+/// default level, the starter domains, no extra folders.
+pub(crate) fn document(root: &Path) -> Value {
+    document_in(APPROVALS.get(), root)
+}
+
+fn document_in(db: Option<&MemoryDb>, root: &Path) -> Value {
+    let Some(db) = db else {
+        return file_document(root)
+            .map(|(_, document)| document)
+            .unwrap_or_else(|| serde_json::json!({}));
+    };
+    approvals(db)
+        .get(&approval_key(root))
+        .and_then(|record| record.get("document"))
+        .filter(|document| document.is_object())
+        .cloned()
         .unwrap_or_else(|| serde_json::json!({}))
 }
 
-fn write_document(root: &Path, policy: &Value) -> Result<(), String> {
+/// Writes the policy to the project's file and records it as what the operator approved.
+/// Every caller is the operator answering something, which is what makes that true.
+pub(crate) fn write_document(root: &Path, policy: &Value) -> Result<(), String> {
+    write_document_in(APPROVALS.get(), root, policy)
+}
+
+fn write_document_in(db: Option<&MemoryDb>, root: &Path, policy: &Value) -> Result<(), String> {
     let path = file_in(root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("{} could not be made: {e}", parent.display()))?;
     }
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(policy).unwrap_or_default() + "\n",
-    )
-    .map_err(|e| format!("{} could not be written: {e}", path.display()))
+    let text = serde_json::to_string_pretty(policy).unwrap_or_default() + "\n";
+    std::fs::write(&path, &text)
+        .map_err(|e| format!("{} could not be written: {e}", path.display()))?;
+    match db {
+        Some(db) => record_approval(db, root, &text, policy),
+        None => Ok(()),
+    }
+}
+
+/// What the project's file says that the operator has not approved, in a sentence, or None
+/// when the file and the approved policy agree.
+pub fn pending_change(root: &Path) -> Option<String> {
+    pending_change_in(APPROVALS.get()?, root)
+}
+
+fn pending_change_in(db: &MemoryDb, root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(file_in(root)).ok()?;
+    let record = approvals(db).get(&approval_key(root)).cloned();
+    let approved_hash = record
+        .as_ref()
+        .and_then(|record| record.get("sha256"))
+        .and_then(Value::as_str);
+    if approved_hash == Some(sha256_hex(&text).as_str()) {
+        return None;
+    }
+    let name = format!("{}/policy.json", dir_in(root));
+    let Some((_, proposed)) = file_document(root) else {
+        return Some(format!(
+            "{name} has been changed and is no longer readable. The policy you approved is \
+             still the one in force."
+        ));
+    };
+    if proposed.as_object().is_some_and(|object| object.is_empty()) && record.is_none() {
+        return None;
+    }
+    let mut asks = Vec::new();
+    if let Some(level) = proposed.get("level").and_then(Value::as_str) {
+        asks.push(format!("level {level}"));
+    }
+    // Named rather than counted: what the operator is being asked to accept is these
+    // folders and these domains, and "2 folders" is not something anyone can say yes to.
+    let listed = |items: Vec<String>| {
+        let shown: Vec<String> = items.iter().take(6).cloned().collect();
+        let more = items.len().saturating_sub(shown.len());
+        if more > 0 {
+            format!("{} and {more} more", shown.join(", "))
+        } else {
+            shown.join(", ")
+        }
+    };
+    if let Some(list) = proposed.get("mounts").and_then(Value::as_array) {
+        let folders: Vec<String> = list
+            .iter()
+            .filter_map(|entry| {
+                let path = entry.get("path").and_then(Value::as_str)?;
+                let write = entry.get("write").and_then(Value::as_bool).unwrap_or(false);
+                Some(format!(
+                    "{path} ({})",
+                    if write { "read and write" } else { "read" }
+                ))
+            })
+            .collect();
+        if !folders.is_empty() {
+            asks.push(format!("the folders {}", listed(folders)));
+        }
+    }
+    for (field, what) in [
+        ("allow", "network access to"),
+        ("deny", "no network access to"),
+        ("similar_commands", "running without asking"),
+    ] {
+        let items: Vec<String> = proposed
+            .get(field)
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !items.is_empty() {
+            asks.push(format!("{what} {}", listed(items)));
+        }
+    }
+    Some(format!(
+        "{name} {} and asks for: {}. None of it is in force until you accept it.",
+        if record.is_some() {
+            "has changed since you approved it"
+        } else {
+            "came with this project"
+        },
+        if asks.is_empty() {
+            "nothing".to_string()
+        } else {
+            asks.join("; ")
+        }
+    ))
+}
+
+/// Takes the file as it stands as the policy. The operator's answer to `pending_change`.
+///
+/// What is accepted is still read through the same checks as anything else here: a folder
+/// that may never be shared, a command that cannot be a rule and a domain that is not one
+/// are dropped by `mounts`, `similar_commands` and the proxy whether or not they are in the
+/// approved document.
+pub fn accept_pending(root: &Path) -> Result<(), String> {
+    let db = APPROVALS
+        .get()
+        .ok_or_else(|| "there is nowhere to record an approval".to_string())?;
+    accept_pending_in(db, root)
+}
+
+fn accept_pending_in(db: &MemoryDb, root: &Path) -> Result<(), String> {
+    let (text, document) = file_document(root)
+        .ok_or_else(|| format!("{} is not a readable policy", file_in(root).display()))?;
+    record_approval(db, root, &text, &document)
+}
+
+/// Puts the file back to the policy the operator approved, discarding what it proposed.
+pub fn discard_pending(root: &Path) -> Result<(), String> {
+    write_document(root, &document(root))
+}
+
+/// Why a folder may never be shared with the sandbox, or None. One rule for a folder being
+/// added and for one already written down: a list that is only checked on the way in is not
+/// checked for anything that got into the file another way.
+fn unshareable(resolved: &Path) -> Option<&'static str> {
+    if resolved.parent().is_none() {
+        return Some("the filesystem root is not a folder to share");
+    }
+    if let Some(home) = crate::paths::home_dir() {
+        let home = home.canonicalize().unwrap_or(home);
+        // The home directory, and anything it is inside of: sharing /home shares it too.
+        if home.starts_with(resolved) {
+            return Some(
+                "the whole home directory is what the sandbox is for. Name a folder inside it.",
+            );
+        }
+    }
+    None
 }
 
 /// The level this project is trusted at.
@@ -374,6 +619,11 @@ pub fn mounts(root: &Path) -> Vec<Mount> {
             if !path.exists() {
                 return None;
             }
+            // The same refusals `add_mount` makes, asked again of what is written down.
+            let resolved = path.canonicalize().ok()?;
+            if !resolved.is_dir() || unshareable(&resolved).is_some() {
+                return None;
+            }
             let asked_for_write = entry.get("write").and_then(Value::as_bool).unwrap_or(false);
             Some(Mount {
                 path,
@@ -392,16 +642,8 @@ pub fn add_mount(root: &Path, path: &str, write: bool) -> Result<PathBuf, String
     if !resolved.is_dir() {
         return Err(format!("{} is not a folder", resolved.display()));
     }
-    // The two folders that are never a mount: the home directory itself, which is what the
-    // sandbox exists to hide, and the filesystem root. Naming a subfolder is the answer.
-    if Some(resolved.as_path()) == crate::paths::home_dir().as_deref() {
-        return Err(
-            "the whole home directory is what the sandbox is for. Name a folder inside it."
-                .to_string(),
-        );
-    }
-    if resolved.parent().is_none() {
-        return Err("the filesystem root is not a folder to share".to_string());
+    if let Some(reason) = unshareable(&resolved) {
+        return Err(reason.to_string());
     }
 
     let mut policy = document(root);
@@ -444,6 +686,104 @@ pub fn remove_mount(root: &Path, path: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn approvals_fixture(name: &str) -> (MemoryDb, PathBuf) {
+        let base = std::env::temp_dir().join(format!(
+            "aether1_policy_approval_{name}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        std::fs::create_dir_all(root.join(DIR)).unwrap();
+        let db = MemoryDb::open(base.join("settings.db")).unwrap();
+        (db, root)
+    }
+
+    #[test]
+    fn a_file_nobody_approved_is_a_proposal_and_not_the_policy() {
+        // What a cloned repository arrives with, or what a build script leaves behind.
+        let (db, root) = approvals_fixture("unapproved");
+        std::fs::write(
+            file_in(&root),
+            r#"{"level": "unrestricted", "allow": ["collector.example"],
+                "mounts": [{"path": "/etc", "write": true}]}"#,
+        )
+        .unwrap();
+
+        let in_force = document_in(Some(&db), &root);
+        assert_eq!(
+            in_force,
+            serde_json::json!({}),
+            "the baseline, not the file"
+        );
+        let said = pending_change_in(&db, &root).expect("and the operator is told");
+        assert!(said.contains("came with this project"), "{said}");
+        assert!(said.contains("level unrestricted"), "{said}");
+        assert!(said.contains("/etc (read and write)"), "{said}");
+        assert!(said.contains("collector.example"), "{said}");
+    }
+
+    #[test]
+    fn what_the_operator_wrote_is_in_force_and_a_later_edit_to_the_file_is_not() {
+        let (db, root) = approvals_fixture("drift");
+        let approved = serde_json::json!({"level": "developer", "allow": ["crates.io"]});
+        write_document_in(Some(&db), &root, &approved).unwrap();
+        assert_eq!(document_in(Some(&db), &root), approved);
+        assert_eq!(pending_change_in(&db, &root), None);
+
+        // A command inside the sandbox rewrites the file.
+        std::fs::write(
+            file_in(&root),
+            r#"{"level": "unrestricted", "allow": ["crates.io", "collector.example"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            document_in(Some(&db), &root),
+            approved,
+            "still what was approved"
+        );
+        let said = pending_change_in(&db, &root).unwrap();
+        assert!(said.contains("has changed since you approved it"), "{said}");
+
+        // Accepting is the operator saying yes to the file as it stands.
+        accept_pending_in(&db, &root).unwrap();
+        assert_eq!(
+            document_in(Some(&db), &root)["level"],
+            serde_json::json!("unrestricted")
+        );
+        assert_eq!(pending_change_in(&db, &root), None);
+    }
+
+    #[test]
+    fn approvals_are_per_project() {
+        let (db, root) = approvals_fixture("per_project");
+        write_document_in(Some(&db), &root, &serde_json::json!({"level": "agent"})).unwrap();
+        let other = root.parent().unwrap().join("other");
+        std::fs::create_dir_all(other.join(DIR)).unwrap();
+        std::fs::copy(file_in(&root), file_in(&other)).unwrap();
+        assert_eq!(document_in(Some(&db), &other), serde_json::json!({}));
+    }
+
+    #[test]
+    fn a_folder_that_may_never_be_shared_is_dropped_wherever_it_was_written() {
+        let (_db, root) = approvals_fixture("unshareable");
+        let home = crate::paths::home_dir().unwrap();
+        let shared = root.parent().unwrap().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(
+            file_in(&root),
+            serde_json::json!({"level": "agent", "mounts": [
+                {"path": "/", "write": true},
+                {"path": home.to_string_lossy(), "write": true},
+                {"path": home.parent().unwrap().to_string_lossy(), "write": false},
+                {"path": shared.to_string_lossy(), "write": true},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let named: Vec<PathBuf> = mounts(&root).into_iter().map(|m| m.path).collect();
+        assert_eq!(named, vec![shared.canonicalize().unwrap()]);
+    }
 
     fn project(name: &str) -> (MemoryDb, PathBuf) {
         let home = std::env::temp_dir().join(format!(
