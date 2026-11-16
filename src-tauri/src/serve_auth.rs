@@ -568,12 +568,8 @@ fn save_devices(path: &Path, devices: &[Device]) -> Result<(), String> {
     }
     let json = serde_json::to_string_pretty(devices)
         .map_err(|e| format!("could not write out the device list: {e}"))?;
-    std::fs::write(path, json).map_err(|e| format!("could not save {}: {e}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
+    crate::paths::write_private(path, json)
+        .map_err(|e| format!("could not save {}: {e}", path.display()))?;
     Ok(())
 }
 
@@ -626,19 +622,12 @@ fn save_hash_at(path: &Path, hash: &str) -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    std::fs::write(path, hash).map_err(|e| {
+    crate::paths::write_private(path, hash).map_err(|e| {
         format!(
             "could not save the pairing token to {}: {e}",
             path.display()
         )
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Best-effort: a filesystem that won't take permission changes (some network
-        // mounts) still has a working token on it, just not one this can lock down further.
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(())
 }
 
@@ -820,13 +809,8 @@ fn mint_pairing_code_at(path: &Path) -> Result<(String, u64), String> {
     };
     let json = serde_json::to_string(&record)
         .map_err(|e| format!("could not write out the pairing code: {e}"))?;
-    std::fs::write(path, json)
+    crate::paths::write_private(path, json)
         .map_err(|e| format!("could not save the pairing code to {}: {e}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
     Ok((code, expires_at))
 }
 

@@ -98,15 +98,8 @@ fn save_at(file: &Path, peers: &[Peer]) -> Result<(), String> {
     }
     let text = serde_json::to_string_pretty(peers)
         .map_err(|e| format!("could not write the paired machines list: {e}"))?;
-    std::fs::write(file, text)
+    crate::paths::write_private(file, text)
         .map_err(|e| format!("could not write the paired machines list: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // It holds tokens in the clear, so it is readable by this account and nobody else --
-        // the same promise serve_devices.json and the key file make.
-        let _ = std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(())
 }
 

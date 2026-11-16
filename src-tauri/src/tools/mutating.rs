@@ -72,6 +72,11 @@ impl Tool for WriteFile {
         }
     }
 
+    fn asks_every_time(&self, args: &Value) -> Option<&'static str> {
+        let path = args.get("path").and_then(Value::as_str)?;
+        fs_guard::runs_later(&fs_guard::resolve_writable(path).ok()?)
+    }
+
     fn call(&self, args: &Value, _ctx: &ToolContext) -> Result<Outcome, String> {
         let path = fs_guard::resolve_writable(string_arg(args, "path")?)?;
         let content = string_arg(args, "content")?;
@@ -203,6 +208,16 @@ impl Tool for SetSetting {
             "Set {} to {}",
             args.get("key").and_then(Value::as_str).unwrap_or("?"),
             args.get("value").unwrap_or(&Value::Null)
+        )
+    }
+
+    fn asks_every_time(&self, args: &Value) -> Option<&'static str> {
+        let key = args.get("key").and_then(Value::as_str)?;
+        // Pre-approving this tool for themes and names is not pre-approving a change to
+        // where every later prompt is sent.
+        matches!(key, "llm_endpoint" | "llm_provider").then_some(
+            "This changes where every later message is sent, so it is asked about every \
+             time, even with always-allow on.",
         )
     }
 
