@@ -424,13 +424,29 @@ impl Tool for RunCommand {
         64 KB, which `ps -ef` on a desktop exceeds -- blocked on its own output, never
         exited, and was killed at the timeout for being slow. `graft_install` already
         reads its child this way and says why. */
+        /* Everything is read but only the start is kept: a little over what will be shown,
+        so `truncate` below still sees that there was more. Keeping all of it would let a
+        program that prints without end grow this process until the timeout. */
+        const KEPT: usize = MAX_OUTPUT_BYTES + 1024;
         fn drain<R: std::io::Read + Send + 'static>(
             pipe: Option<R>,
         ) -> std::thread::JoinHandle<Vec<u8>> {
             std::thread::spawn(move || {
                 let mut collected = Vec::new();
-                if let Some(mut pipe) = pipe {
-                    let _ = std::io::Read::read_to_end(&mut pipe, &mut collected);
+                let Some(mut pipe) = pipe else {
+                    return collected;
+                };
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let room = KEPT.saturating_sub(collected.len());
+                            collected.extend_from_slice(&chunk[..n.min(room)]);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
+                    }
                 }
                 collected
             })
