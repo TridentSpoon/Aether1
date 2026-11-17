@@ -2079,6 +2079,13 @@
                             <option value="all">Any purpose</option>
                             <option value="chat">To talk to</option>
                             <option value="code">To write code</option>
+                            <!-- Last, and only on the Hugging Face tab does it find
+                                 anything: the hub's own catalogues hold nothing of the
+                                 kind. It exists because the hub's most-downloaded GGUF
+                                 repositories are embedding models, which the tab now
+                                 keeps out of a list of things to talk to -- and a
+                                 default that hides something needs a way back to it. -->
+                            <option value="embedding">Not for talking (embeddings, speech)</option>
                         </select>
                         <select id="hub-filter-fit" class="hub-select" aria-label="Which models to show">
                             <option value="fits">Fits this computer</option>

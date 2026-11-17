@@ -317,20 +317,19 @@ fn has_model(installed: &[String], name: &str) -> bool {
 ///
 /// Matched on the name because that is all a server reports. A false negative costs an
 /// unnecessary download and a false positive costs somebody a day wondering why the agent
-/// keeps inventing functions, so the list is the families this catalogue knows plus the two
-/// words every coding model in the wild has in its name.
-fn is_coding_model(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    [
-        "coder",
-        "-code",
-        "codestral",
-        "devstral",
-        "codellama",
-        "codegemma",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
+/// keeps inventing functions.
+///
+/// The list itself lives in `hf::CODE_MARKERS`, because the model hub asks the same
+/// question about the same string: the Hugging Face tab offers "Use for coding" on a
+/// repository it reads as a coder, and `code_set_model_preference` is what has to accept
+/// the result. Two lists would be two answers waiting to disagree, and they already did --
+/// this one had never heard of `starcoder`, `codeqwen`, `opencoder` or `granite-code`,
+/// so a perfectly good coding model pulled from the hub was not recognised as one here.
+///
+/// It also inherits the ordering that keeps `jina-embeddings-v2-base-code` out: an
+/// embedder of code is not a model that writes any.
+pub(crate) fn is_coding_model(name: &str) -> bool {
+    crate::hf::purpose(name) == crate::hf::Purpose::Code
 }
 
 /// A program that can read the operator's files, change them, and run their tests.
@@ -732,8 +731,20 @@ pub fn advise(
                 .find(|model| model.installed && model.name == name)
         });
     let chosen = preferred.or(downloaded).unwrap_or(recommended);
-    let model = chosen.name.clone();
-    let model_installed = chosen.installed;
+    /* A preference for a model that is on the server and in no catalogue.
+
+    `models` holds catalogue entries only, so the lookup above could never find
+    `hf.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M` -- or any coder pulled by
+    hand. `code_set_model_preference` accepted the choice, the panel said it was now the
+    coding model, and this function then quietly ran a different one. A choice that is
+    saved, confirmed and ignored is worse than one that is refused. The server reporting
+    the name is the whole test, the same one the setter applies. */
+    let hand_picked = preferred_model
+        .map(str::trim)
+        .filter(|name| !name.is_empty() && preferred.is_none())
+        .filter(|name| installed.iter().any(|have| have == name));
+    let model = hand_picked.map_or_else(|| chosen.name.clone(), str::to_string);
+    let model_installed = hand_picked.is_some() || chosen.installed;
 
     let has_coding_model = installed.iter().any(|name| is_coding_model(name));
 
@@ -748,8 +759,10 @@ pub fn advise(
     let aether1_model_too_small = aether1_model.as_deref().is_some_and(too_small_for_tools);
     // Worth saying only when it is actually an improvement: the model in hand is up to the
     // job and the one AETHER1 is on is not, or is not set at all.
-    let covers_aether1_too =
-        chosen.runs_aether1 && (aether1_model_too_small || aether1_model.is_none());
+    // Nothing is claimed for a hand-picked model: no catalogue entry says what it is up to.
+    let covers_aether1_too = hand_picked.is_none()
+        && chosen.runs_aether1
+        && (aether1_model_too_small || aether1_model.is_none());
 
     let num_ctx = context_tokens(ram_total_gb);
     let sized_against = sized_against(ram_total_gb, card);
@@ -1045,7 +1058,36 @@ mod tests {
             .any(|step| step.title.contains("run AETHER1 itself")));
     }
 
-    /// Nothing to improve, so nothing said. A panel that offers the same advice whatever
+    /// The choice the Hugging Face tab's "Use for coding" saves. It is in no catalogue, and
+    /// it used to be saved, confirmed on screen and then passed over for a catalogue model.
+    #[test]
+    fn a_chosen_model_outside_the_catalogue_is_the_one_that_runs() {
+        let pulled = "hf.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M";
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b", pulled]),
+            32.0,
+            &[],
+            false,
+            NO_AGENTS,
+            None,
+            Some(pulled),
+        );
+        assert_eq!(advice.model, pulled);
+        assert!(advice.model_installed);
+
+        // Chosen once and since removed from the server: fall back, do not name a ghost.
+        let advice = advise(
+            &scan_with(&["qwen2.5-coder:7b"]),
+            32.0,
+            &[],
+            false,
+            NO_AGENTS,
+            None,
+            Some(pulled),
+        );
+        assert_eq!(advice.model, "qwen2.5-coder:7b");
+    }
+
     /// the machine is doing is a panel nobody reads twice.
     #[test]
     fn a_brain_already_big_enough_is_left_alone() {

@@ -8878,6 +8878,25 @@ document.addEventListener('DOMContentLoaded', () => {
        knows about is still listed, as itself: somebody who pulled a model by hand has it
        installed, and a hub that only admits to models it recommended is lying about the
        computer. */
+    /* The coding families, by the markers that appear in a model's name.
+
+       The same list as `hf::CODE_MARKERS` in Rust, which is the same list as
+       `code_setup::is_coding_model`, and scripts/check_code_markers.sh fails the build if
+       the three drift apart. Duplicated here rather than fetched because this answers a
+       question about a name the server reported, with no round trip to hang the list on --
+       and a guard is cheaper than a request per row. */
+    const HUB_CODE_MARKERS = [
+        'coder', '-code', 'codestral', 'devstral', 'codellama', 'code-llama',
+        'codegemma', 'starcoder', 'deepseek-coder', 'codeqwen', 'granite-code', 'opencoder',
+    ];
+
+    function hubLooksLikeCode(name) {
+        const lower = String(name || '').toLowerCase();
+        // An embedder of code is not a model that writes any -- same order as `hf::purpose`.
+        if (/embed|rerank|minilm|\bbge[-_]|\bgte[-_]/.test(lower)) return false;
+        return HUB_CODE_MARKERS.some(marker => lower.includes(marker));
+    }
+
     function hubDeviceRows() {
         const known = new Map(hub.models.map(model => [model.name, model]));
         return hub.installed.map(name => known.get(name) || {
@@ -8891,7 +8910,14 @@ document.addEventListener('DOMContentLoaded', () => {
             fits_on_gpu: false,
             recommended: false,
             installed: true,
-            purposes: [],
+            /* A model pulled from the Hugging Face tab lands here, and it used to land
+               with no purposes at all -- so `qwen2.5-coder:14b` or
+               `hf.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M`, downloaded three
+               minutes earlier for exactly that job, had no button anywhere that would
+               make it the coding model. The name is all the server reports, and it is
+               enough: `code_setup::is_coding_model` reads the same name to decide what
+               the coding panel recommends. */
+            purposes: hubLooksLikeCode(name) ? ['chat', 'code'] : [],
             runs_aether1: false,
             unknown: true,
         });
@@ -8908,7 +8934,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return hub.hf
             .filter(repo => !hub.hfOnlyTools || repo.tools !== 'none')
             .map(repo => {
-                const chosen = hub.hfChosenQuant[repo.id];
+                /* The quantisation in play: the one picked, or -- before anybody has
+                   touched the picker -- the one the picker is about to show. The second
+                   half was missing, and the panel filled `hfChosenQuant` in only while
+                   drawing itself, after this row had already been built without it. So a
+                   model downloaded yesterday opened with a Download button, and went on
+                   saying so until the picker was moved and moved back. */
+                const quants = hub.hfQuants[repo.id];
+                const chosen = hub.hfChosenQuant[repo.id]
+                    || (quants && quants.length
+                        ? (quants.find(q => q.preferred) || quants[0]).label
+                        : null);
                 const pull = chosen ? `hf.co/${repo.id}:${chosen}` : null;
                 return {
                     name: repo.id,
@@ -8920,7 +8956,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     fits_on_gpu: false,
                     recommended: false,
                     installed: !!pull && installed.some(have => have.toLowerCase() === pull.toLowerCase()),
-                    purposes: ['chat'],
+                    /* What the repository is for, as `hf::purpose` read it off the
+                       name -- not the flat `['chat']` this used to assert about every
+                       row on the tab. That constant was three faults at once: the
+                       purpose dropdown above the list filtered on it and so did
+                       nothing here, every row claimed to be something to talk to
+                       including the embedding models that cannot say hello, and a
+                       coding model pulled from this tab could never be made the
+                       AETHER CODE model, because the button that does that asks for
+                       exactly the 'code' this never set. */
+                    purposes: hubHfPurposes(repo),
                     // Only known once a quantisation is chosen; until then the row makes no
                     // claim about fit rather than claiming it fits.
                     fits: hubHfFits(repo),
@@ -8937,6 +8982,39 @@ document.addEventListener('DOMContentLoaded', () => {
                     hf: repo,
                 };
             });
+    }
+
+    /* The purposes of a Hugging Face row, out of the one fact the listing can support.
+
+       A coder is both: it answers in a conversation and it is what AETHER CODE should be
+       pointed at, and the panel offers both buttons for it. An embedder or a reranker is
+       neither -- an empty list is the honest answer, and it is what keeps them out of a
+       tab whose question is "what shall I talk to". */
+    function hubHfPurposes(repo) {
+        if (repo.purpose === 'code') return ['chat', 'code'];
+        // `talks` is the server's own answer, so a purpose added in `hf.rs` later cannot
+        // be one this forgets to keep out of the list.
+        if (repo.talks === false) return [];
+        return ['chat'];
+    }
+
+    /* Whether a row survives the purpose dropdown on the Hugging Face tab.
+
+       "Any purpose" is not "everything" here, and that is the one place this departs from
+       the other two tabs. The listing is `sort=downloads`, and the most downloaded GGUF
+       repositories on the hub are embedding models -- `all-MiniLM`, `bge`, `nomic-embed`
+       are each pulled more often than any model anybody talks to. Left in, they are the
+       top of the default list, and because they are tiny every figure the fit panel prints
+       about one is flattering: it fits, it leaves the whole window, it is fast. A
+       confident row for a model that cannot answer anything.
+
+       So the default is "something to talk to", and the dropdown's new last option brings
+       them back for somebody who came looking for one. */
+    function hubHfWithinPurpose(row) {
+        const purposes = row.purposes || [];
+        if (hub.purpose === 'embedding') return !purposes.length;
+        if (hub.purpose === 'all') return purposes.includes('chat');
+        return purposes.includes(hub.purpose);
     }
 
     /* True until a quantisation is chosen: a row cannot be greyed out for not fitting
@@ -8995,7 +9073,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function hubVisibleRows() {
-        if (hub.tab === 'hf') return hubHfRows().filter(hubHfWithinScale);
+        /* The purpose filter runs here too now. It did not, and the dropdown above the
+           list sat there offering "To talk to" and "To write code" over a list that
+           never changed -- the same shape of fault as the size filter that was skipped
+           on this tab in #247, and found the same way: by setting it and watching
+           nothing happen. */
+        if (hub.tab === 'hf') {
+            return hubHfRows().filter(hubHfWithinScale).filter(hubHfWithinPurpose);
+        }
         let rows = hub.tab === 'device' ? hubDeviceRows() : hub.models.slice();
 
         const term = hub.search.trim().toLowerCase();
@@ -9152,7 +9237,15 @@ document.addEventListener('DOMContentLoaded', () => {
             title.textContent = hub.tab === 'device'
                 ? `${rows.length} downloaded on this computer`
                 : hub.tab === 'hf'
-                    ? (hub.hfLoading ? 'Searching Hugging Face...' : `${rows.length} from Hugging Face`)
+                    /* "0 from Hugging Face" over a box explaining that Hugging Face
+                       could not be reached is the heading claiming a result for a
+                       request that never arrived. A count is only a count when there
+                       was an answer to count. */
+                    ? (hub.hfLoading
+                        ? 'Searching Hugging Face...'
+                        : hub.hfError
+                            ? 'Hugging Face did not answer'
+                            : `${rows.length} from Hugging Face`)
                     : `${rows.length} models for this computer`;
         }
 
@@ -9278,29 +9371,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (model.installed && (model.purposes || []).includes('code')) {
-            const code = document.createElement('button');
-            code.type = 'button';
-            code.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
-            code.textContent = 'Use for coding';
-            code.addEventListener('click', async () => {
-                code.disabled = true;
-                try {
-                    if (IS_TAURI) await tauriInvoke('code_set_model_preference_rust', { model: model.name });
-                    else {
-                        const response = await apiFetch('/api/code/model', {
-                            method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ model: model.name }),
-                        });
-                        if (!response.ok) throw new Error((await response.text()) || 'Could not set coding model.');
-                    }
-                    setHubStatus(`${model.name} is now the preferred AETHER CODE model.`, 'good');
-                    const advice = await fetchCodeAdvice().catch(() => null);
-                    if (advice) renderCodeAdvice(advice);
-                } catch (error) {
-                    setHubStatus(`⚠ ${error.message || error}`, 'bad');
-                } finally { code.disabled = false; }
-            });
-            buttons.appendChild(code);
+            buttons.appendChild(hubUseForCodingButton(model));
         }
 
         if (!model.installed) {
@@ -9353,11 +9424,54 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function hubHfEmptyText() {
+        /* Hugging Face answered and this tab kept the answer back: say that, and say
+           how to see it, rather than blaming the search. "whisper" finds repositories;
+           they are just not things to talk to. */
+        if (hub.hf.length && !hubHfRows().some(hubHfWithinPurpose)) {
+            return hub.purpose === 'all' || hub.purpose === 'chat'
+                ? `Hugging Face found ${hub.hf.length}, but none is a model to talk to — they are `
+                    + 'embedding or speech weights. Choose "Not for talking" above to see them.'
+                : 'Nothing Hugging Face returned for that matches the purpose chosen above.';
+        }
         if (hub.hfOnlyTools) {
             return 'Nothing on Hugging Face matched that from a family known to support tools. '
                 + 'Clear "only models that can use tools" to see everything that matched.';
         }
         return 'Hugging Face returned nothing for that. Try a family name — qwen3, llama, mistral.';
+    }
+
+    /* The button that points AETHER CODE at a model, as one function rather than one
+       panel's private code.
+
+       It lived inside the Discover detail panel, which is why the Hugging Face panel --
+       a separate renderer that returns before that code is reached -- had no way to offer
+       it, and why a coding model pulled from the hub could be downloaded and then never
+       used for coding anywhere in the program. */
+    function hubUseForCodingButton(model) {
+        const code = document.createElement('button');
+        code.type = 'button';
+        code.className = 'cyber-btn text-xs py-1.5 px-3 whitespace-nowrap';
+        code.textContent = 'Use for coding';
+        code.title = `Points AETHER CODE at ${model.name}`;
+        code.addEventListener('click', async () => {
+            code.disabled = true;
+            try {
+                if (IS_TAURI) await tauriInvoke('code_set_model_preference_rust', { model: model.name });
+                else {
+                    const response = await apiFetch('/api/code/model', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ model: model.name }),
+                    });
+                    if (!response.ok) throw new Error((await response.text()) || 'Could not set coding model.');
+                }
+                setHubStatus(`${model.name} is now the preferred AETHER CODE model.`, 'good');
+                const advice = await fetchCodeAdvice().catch(() => null);
+                if (advice) renderCodeAdvice(advice);
+            } catch (error) {
+                setHubStatus(`⚠ ${error.message || error}`, 'bad');
+            } finally { code.disabled = false; }
+        });
+        return code;
     }
 
     /* The detail panel for a Hugging Face repository.
@@ -9372,6 +9486,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const tags = document.createElement('div');
         tags.className = 'hub-tags';
         if (repo.params) tags.appendChild(hubTag(`${repo.params} parameters`));
+        /* What it is for, before what it can call. The panel used to open with a memory
+           figure and a tool guess for an embedding model, and never once said that the
+           thing could not hold a conversation -- which is the only fact about it that
+           decides anything. */
+        if (repo.purpose === 'code') tags.appendChild(hubTag('To write code', 'pick'));
+        if (repo.purpose === 'embedding') tags.appendChild(hubTag('Turns text into numbers — not something to talk to', 'off'));
+        if (repo.purpose === 'rerank') tags.appendChild(hubTag('Scores search results — not something to talk to', 'off'));
+        if (repo.purpose === 'speech') tags.appendChild(hubTag('Speech weights — install these under Settings → Voice', 'off'));
         if (repo.tools === 'known') tags.appendChild(hubTag('Can use tools', 'on'));
         if (repo.tools === 'none') tags.appendChild(hubTag('Cannot use tools', 'off'));
         if (repo.tools === 'unknown') tags.appendChild(hubTag('Tool support unknown'));
@@ -9436,6 +9558,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 use.textContent = '✔ Use this one';
                 use.addEventListener('click', () => hubUseModel({ name: pull }));
                 buttons.appendChild(use);
+                /* The other half of "use this one", and the half this panel never had.
+                   Somebody searching this tab for `qwen2.5-coder` is looking for a coding
+                   model; they could pull it here and then find no button anywhere in the
+                   program that would point AETHER CODE at it -- the Discover panel's one
+                   asks for a purpose the catalogue sets and a repository never had, and on
+                   the On device tab the pulled model arrives as an unknown with no
+                   purposes at all. The server was never the obstacle:
+                   `code_set_model_preference` accepts any model the local server reports,
+                   and `code_setup::is_coding_model` already recognises this name. */
+                if ((model.purposes || []).includes('code')) {
+                    buttons.appendChild(hubUseForCodingButton({ name: pull }));
+                }
             } else {
                 const download = document.createElement('button');
                 download.type = 'button';
@@ -10576,6 +10710,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 await loadSettings();
                 settingsModal?.classList.remove('hidden');
                 showSettingsSection(what === 'avatars' ? 'avatars' : 'brain');
+                /* The hub is only ever filled by a refresh, and the two places that asked
+                   for one were the Settings button and the hub's own reload arrow. This
+                   button -- the one labelled "Model hub" -- opened the pane without asking,
+                   so it showed no machine chips, an empty Discover list, nothing under On
+                   device, and a Hugging Face tab whose Download was greyed out because
+                   nothing had yet said Ollama was here. */
+                if (what !== 'avatars') {
+                    refreshBrainStatus();
+                    refreshModelHub();
+                }
             });
         });
 
