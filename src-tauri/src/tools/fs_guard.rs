@@ -79,6 +79,19 @@ const DENIED_FRAGMENTS: &[&str] = &[
     "/.config/gh/",
     "/.docker/config.json",
     "/.netrc",
+    // Where the other command-line tools keep the tokens they log in with, the desktop's
+    // own keyring and password store, and browser profiles -- saved logins and live
+    // session cookies both.
+    "/.kube/",
+    "/.config/gcloud/",
+    "/.terraform.d/",
+    "/.cargo/credentials",
+    "/.password-store/",
+    "/.local/share/keyrings/",
+    "/.mozilla/",
+    "/.config/google-chrome/",
+    "/.config/chromium/",
+    "/.config/bravesoftware/",
     "/etc/shadow",
     "/etc/gshadow",
     "/etc/sudoers",
@@ -109,6 +122,18 @@ const DENIED_FRAGMENTS: &[&str] = &[
 /// set it up -- the file is simply not Aether1's to read.
 const DENIED_NAMES: &[&str] = &[
     ".env",
+    ".npmrc",
+    ".pypirc",
+    ".git-credentials",
+    "fish_history",
+    // Aether1's own: the pairing token and code, the paired devices and machines (whose
+    // tokens are in the clear), the TLS key, and the GitHub token when there is no keychain.
+    "serve_token.hash",
+    "serve_devices.json",
+    "serve_pair_code.json",
+    "serve_peers.json",
+    "serve_key.pem",
+    "github_token",
     "id_rsa",
     "id_ed25519",
     ".netrc",
@@ -142,8 +167,78 @@ fn denied(path: &Path) -> bool {
             // Case-insensitively: Windows filesystems are, and "ID_RSA" is the same key.
             let name = name.to_string_lossy().to_lowercase();
             DENIED_NAMES.iter().any(|denied| name == *denied)
+                || env_file(&name)
+                // A password database is a password database under any name.
+                || name.ends_with(".kdbx")
+                // The environment a process was started with, which is where its API keys
+                // are -- Aether1's own included. The rest of /proc is how the diagnostic
+                // persona sees the machine and stays readable.
+                || (name == "environ" && as_text.starts_with("/proc/"))
         })
         .unwrap_or(false)
+}
+
+/// Whether a lower-cased file name is a `.env` in one of its per-environment spellings.
+///
+/// `.env.local` and `.env.production` hold the same secrets `.env` does. The templates a
+/// repository checks in to show which variables exist hold none, and are what someone
+/// asking "what does this project need set" wants read.
+fn env_file(name: &str) -> bool {
+    const TEMPLATES: &[&str] = &["example", "sample", "template", "dist", "defaults"];
+    name.strip_prefix(".env.")
+        .is_some_and(|rest| !TEMPLATES.contains(&rest))
+}
+
+/// Files that run by themselves later: shell start-up files, things the desktop or systemd
+/// starts at login, git hooks, and a skill's instructions.
+const RUNS_LATER_NAMES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".bash_logout",
+    ".profile",
+    ".zshrc",
+    ".zshenv",
+    ".zprofile",
+    ".zlogin",
+    ".xprofile",
+    ".xinitrc",
+    ".xsessionrc",
+    ".pam_environment",
+    "skill.md",
+];
+
+const RUNS_LATER_FRAGMENTS: &[&str] = &[
+    "/.config/autostart/",
+    "/.config/systemd/user/",
+    "/.config/environment.d/",
+    "/.config/fish/",
+    "/.git/hooks/",
+    "/start menu/programs/startup/",
+];
+
+/// Why a write to this path is put to the operator every time, or None for an ordinary file.
+///
+/// "Always allow write_file" is the operator agreeing that files in their home may be
+/// written without a card each time. It was not them agreeing that something may be
+/// arranged to run at their next login, or to instruct every later conversation -- a write
+/// to one of these is a different act from a write to a notes file, even though it is the
+/// same tool. So these are shown, whatever the always-allow list says.
+pub fn runs_later(path: &Path) -> Option<&'static str> {
+    let as_text = format!("{}/", paths::comparable(path));
+    let named = path.file_name().is_some_and(|name| {
+        let name = name.to_string_lossy().to_lowercase();
+        RUNS_LATER_NAMES.contains(&name.as_str())
+    });
+    (named
+        || RUNS_LATER_FRAGMENTS
+            .iter()
+            .any(|fragment| as_text.contains(fragment)))
+    .then_some(
+        "This file runs or is obeyed by itself later (a shell start-up file, a login or \
+         service entry, a git hook, or a skill), so it is asked about every time, even with \
+         always-allow on.",
+    )
 }
 
 /// Resolves `path` for reading, or explains why it can't be read. The error text reaches
@@ -494,6 +589,58 @@ mod tests {
             "USERPROFILE should locate home: {readable:?}"
         );
         assert!(writable.is_ok(), "and be writable: {writable:?}");
+    }
+
+    #[test]
+    fn the_stores_other_tools_keep_their_logins_in_are_never_read() {
+        for path in [
+            "/home/t/.kube/config",
+            "/home/t/.config/gcloud/credentials.db",
+            "/home/t/.npmrc",
+            "/home/t/.git-credentials",
+            "/home/t/.cargo/credentials.toml",
+            "/home/t/.password-store/bank.gpg",
+            "/home/t/.local/share/keyrings/login.keyring",
+            "/home/t/.mozilla/firefox/x.default/logins.json",
+            "/home/t/.config/chromium/Default/Cookies",
+            "/home/t/.local/share/fish/fish_history",
+            "/home/t/Documents/passwords.kdbx",
+            "/home/t/.local/share/aether1/backend/serve_peers.json",
+            "/home/t/.local/share/aether1/backend/serve_key.pem",
+            "/home/t/.local/share/aether1/backend/github_token",
+            "/proc/1234/environ",
+            "/home/t/app/.env.local",
+            "/home/t/app/.env.production",
+        ] {
+            assert!(denied(Path::new(path)), "{path} should be off limits");
+        }
+        for path in [
+            "/home/t/app/.env.example",
+            "/home/t/app/environ",
+            "/proc/1234/status",
+            "/home/t/.config/aether1/notes.md",
+            "/home/t/.cargo/config.toml",
+        ] {
+            assert!(!denied(Path::new(path)), "{path} should be readable");
+        }
+    }
+
+    #[test]
+    fn files_that_run_by_themselves_are_told_apart_from_ordinary_ones() {
+        for path in [
+            "/home/t/.bashrc",
+            "/home/t/.zshrc",
+            "/home/t/.profile",
+            "/home/t/.config/autostart/thing.desktop",
+            "/home/t/.config/systemd/user/thing.service",
+            "/home/t/code/app/.git/hooks/pre-commit",
+            "/home/t/.aurora/skills/tidy/SKILL.md",
+            r"C:\Users\T\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\x.bat",
+        ] {
+            assert!(runs_later(Path::new(path)).is_some(), "{path}");
+        }
+        assert!(runs_later(Path::new("/home/t/notes/todo.md")).is_none());
+        assert!(runs_later(Path::new("/home/t/code/app/src/main.rs")).is_none());
     }
 
     #[test]

@@ -320,12 +320,8 @@ pub fn store_token(token: &str) -> Result<Storage, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("could not make somewhere to keep the token: {e}"))?;
     }
-    std::fs::write(&path, token).map_err(|e| format!("could not write the token: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
+    crate::paths::write_private(&path, token)
+        .map_err(|e| format!("could not write the token: {e}"))?;
     Ok(Storage::File)
 }
 

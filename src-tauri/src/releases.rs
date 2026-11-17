@@ -596,7 +596,11 @@ pub fn download_and_verify(
     let dir = download_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|e| FetchError::Disk(format!("could not make somewhere to download to: {e}")))?;
-    let path = dir.join(&asset.name);
+    // Downloaded under another name and given its real one only once the signature has
+    // checked out. A kill or a power cut mid-download otherwise leaves an unverified bundle
+    // sitting in downloads/ under exactly the name a verified one has.
+    let verified_path = dir.join(&asset.name);
+    let path = dir.join(format!("{}.part", asset.name));
 
     let mut request = crate::net::get(&asset_url(repo, asset.id), "nothing was downloaded")
         .map_err(FetchError::Refused)?
@@ -659,7 +663,11 @@ pub fn download_and_verify(
         return Err(FetchError::BadSignature { deleted: true });
     }
 
-    Ok(path)
+    std::fs::rename(&path, &verified_path).map_err(|e| {
+        let _ = std::fs::remove_file(&path);
+        FetchError::Disk(format!("could not put the verified download in place: {e}"))
+    })?;
+    Ok(verified_path)
 }
 
 /// Verify a bundle already sitting on disk -- the USB-stick case, and the way to check a
