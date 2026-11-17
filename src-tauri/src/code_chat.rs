@@ -56,6 +56,14 @@ const MAX_TOOL_ROUNDS: usize = 3;
 /// stops within one cup of tea rather than overnight.
 const ACTING_TOOL_ROUNDS: usize = 25;
 
+/// How many times a turn may ask for a tool in a form that cannot be read, or write a tool
+/// result it never asked for, before the turn stops and says so.
+///
+/// The companion's number, for the companion's reason (`llm::MAX_MALFORMED_RETRIES`): a
+/// model that cannot produce the block in three attempts will not in ten, and every retry
+/// here is a round of somebody waiting on their own graphics card.
+const MAX_MALFORMED_RETRIES: usize = 2;
+
 /// A language tag on a fenced block that means "this is for a shell".
 ///
 /// `console` and `shell-session` are included because that is what a model trained on
@@ -345,7 +353,25 @@ pub fn ask_in_session(
     let mut visible = String::new();
     let mut current_prompt = prompt.to_string();
 
-    for _round in 0..max_rounds(db) {
+    /* The four ways this loop ends without an answer, each of which used to end it in
+    silence. The companion's loop has named all of them since the operator read invented
+    Grand Prix podiums three builds running; this one was written later, from the plain
+    `parse_calls`, and inherited none of it. Driving it on 2026-11-16 showed what that
+    looks like from the chair: a reply that stops after three `read_file` lines, a reply
+    that is the words "Let me look." and nothing else, and -- the one that matters -- a
+    `[TOOL RESULTS]` block quoting a `main.py` that said `os.system('rm -rf /')` when the
+    file on disk said `print('hello')`, shown as the answer with nothing beside it. */
+    let rounds = max_rounds(db);
+    let mut settled = false;
+    let mut retries = 0usize;
+    let mut last_asked: Option<String> = None;
+    let mut repeats = 0usize;
+
+    for _round in 0..rounds {
+        // Where this round's text starts, so a round that forged a result can come back off
+        // the end. The panel paints from the returned text, so dropping it here drops it
+        // there; `aether1 code ask` has already printed it and says so instead.
+        let visible_before = visible.len();
         let ctx = ChatContext {
             system_prompt: &system,
             history: &history,
@@ -359,7 +385,7 @@ pub fn ask_in_session(
             /* Off, so no `think` field is sent and the coding model keeps whatever it does
             by default. The relay below still splits: the panel is for writing code, and a
             `<think>` block in it is the same problem it was in chat -- except that here it
-            also goes past `parse_calls`. The thinking is dropped rather than shown,
+            also goes past the parser. The thinking is dropped rather than shown,
             because this panel has nowhere to show it. */
             reasoning: providers::Reasoning::Off,
         };
@@ -394,13 +420,135 @@ pub fn ask_in_session(
         }
 
         let raw = completion.text;
-        let calls = protocol::parse_calls(&raw);
+        let round = protocol::parse_round(&raw);
+        let calls = round.calls;
+        let malformed = round.malformed;
+
+        // The same two messages every way of going round again needs: what was asked, and
+        // what the model said to it.
+        let carry = |history: &mut Vec<Message>, asked: String, said: String| {
+            history.push(Message {
+                sender: "user".to_string(),
+                text: asked,
+                timestamp: String::new(),
+            });
+            history.push(Message {
+                sender: "assistant".to_string(),
+                text: said,
+                timestamp: String::new(),
+            });
+        };
+
+        // Asked for a tool and got the syntax wrong. The filter has already hidden the
+        // block, so without the trace line the only sign is a reply that trails off.
+        if calls.is_empty() && !malformed.is_empty() {
+            let trace = protocol::malformed_trace(&malformed);
+            visible.push_str(&trace);
+            sink(&trace);
+
+            if retries < MAX_MALFORMED_RETRIES {
+                retries += 1;
+                let notice = protocol::malformed_notice(&malformed);
+                carry(
+                    &mut history,
+                    std::mem::replace(&mut current_prompt, notice),
+                    raw,
+                );
+                continue;
+            }
+
+            let notice = "\n\n[AETHER CODE: the model kept asking for a tool in a form that \
+                 could not be read, so nothing was looked at. Anything above that reads like \
+                 the contents of a file was not read from one.]";
+            visible.push_str(notice);
+            sink(notice);
+            settled = true;
+            break;
+        }
+
+        // Called nothing and wrote a result anyway. Here that is file contents the model
+        // made up, under a heading that says they were read -- so it comes off the reply
+        // rather than staying with a warning beside it.
+        if calls.is_empty() && protocol::forged_results(&raw) {
+            visible.truncate(visible_before);
+            let trace = protocol::forged_trace();
+            visible.push_str(&trace);
+            sink(&trace);
+
+            if retries < MAX_MALFORMED_RETRIES {
+                retries += 1;
+                carry(
+                    &mut history,
+                    std::mem::replace(&mut current_prompt, protocol::forged_notice()),
+                    raw,
+                );
+                continue;
+            }
+
+            let notice = format!(
+                "\n\n[AETHER CODE: {model} wrote tool results three times without ever \
+                 calling a tool, so no file was read and all of it has been withheld. A \
+                 model that does this cannot look at your code, whatever it says -- pick \
+                 another coding model under The Brain.]"
+            );
+            visible.push_str(&notice);
+            sink(&notice);
+            settled = true;
+            break;
+        }
+
         if calls.is_empty() {
+            settled = true;
+            break;
+        }
+
+        // A real call and an invented result in the same breath. Not a retry -- the real
+        // result is one round away -- so only the invention is cut.
+        if protocol::forged_results(&visible[visible_before..]) {
+            let kept = protocol::without_forged_results(&visible[visible_before..]);
+            visible.truncate(visible_before);
+            visible.push_str(&kept);
+            let trace = protocol::forged_alongside_trace();
+            visible.push_str(&trace);
+            sink(&trace);
+        }
+
+        /* Exactly what it asked for last round, straight after being handed the answer.
+        The first time, nothing is run again and the model is told it is repeating itself,
+        because an identical result does not say so. The second time the turn stops: with
+        edit and run granted the budget is twenty-five rounds, and before this a model
+        stuck on one file spent all of them -- and with `run` granted, ran the same command
+        twenty-five times. */
+        let asked = protocol::calls_signature(
+            calls
+                .iter()
+                .map(|call| (call.tool.as_str(), &call.arguments)),
+        );
+        let repeated = last_asked.as_deref() == Some(asked.as_str());
+        repeats = if repeated { repeats + 1 } else { 0 };
+        last_asked = Some(asked);
+        if repeats > 1 {
+            let notice = format!(
+                "\n\n[AETHER CODE: stopped, because {model} asked for the same thing three \
+                 times in a row and was not getting anywhere. Nothing was run the second or \
+                 third time. Asking again in different words, or naming the file, usually \
+                 gets it unstuck.]"
+            );
+            visible.push_str(&notice);
+            sink(&notice);
+            settled = true;
             break;
         }
 
         let mut results = Vec::new();
         for call in &calls {
+            if repeated {
+                let trace = protocol::repeated_trace(&call.tool);
+                visible.push_str(&trace);
+                sink(&trace);
+                results.push((call.tool.clone(), Err(protocol::repeated_notice())));
+                continue;
+            }
             // What it looked at, shown where it happened. The operator reading back a
             // reply that quotes their own file should be able to see that it was read
             // rather than guessed.
@@ -416,17 +564,25 @@ pub fn ask_in_session(
         // The round goes into the history so the next one can see what it asked for and
         // what came back. These live for this turn only; what is stored at the end is the
         // question and the visible answer.
-        history.push(Message {
-            sender: "user".to_string(),
-            text: current_prompt,
-            timestamp: String::new(),
-        });
-        history.push(Message {
-            sender: "assistant".to_string(),
-            text: raw,
-            timestamp: String::new(),
-        });
-        current_prompt = protocol::format_results(&results);
+        let returned = protocol::format_results(&results);
+        carry(
+            &mut history,
+            std::mem::replace(&mut current_prompt, returned),
+            raw,
+        );
+    }
+
+    // Out of rounds with the model still asking. The reply used to simply end after the
+    // last `⚙` line, which from the chair is a model that looked three times and then
+    // walked off.
+    if !settled {
+        let notice = format!(
+            "\n\n[AETHER CODE: stopped after {rounds} rounds of tool calls without reaching an \
+             answer. What it looked at is listed above. Asking a narrower question, or \
+             naming the file, usually gets there.]"
+        );
+        visible.push_str(&notice);
+        sink(&notice);
     }
 
     let text = visible.trim().to_string();
@@ -791,5 +947,145 @@ mod tests {
     fn the_coding_conversation_has_a_session_of_its_own() {
         assert_eq!(SESSION_ID, "aether-code");
         assert_ne!(SESSION_ID, "default");
+    }
+
+    /// One question put to a scripted model: what the operator is left with, what was
+    /// streamed to them on the way, and how many times the model was asked.
+    fn asked_of(replies: &[&str]) -> (String, String, usize) {
+        let db = db();
+        let (endpoint, asked) = crate::scripted_model::saying(replies);
+        let mut streamed = String::new();
+        let reply = ask_in_session(
+            &db,
+            &endpoint,
+            LocalApi::Native,
+            "qwen2.5-coder:14b",
+            "Linux",
+            "what does main.py do",
+            &mut |delta: &str| streamed.push_str(delta),
+            "loop-test",
+        )
+        .expect("the scripted model answers");
+        (
+            reply.text,
+            streamed,
+            asked.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    fn call(tool: &str, path: &str) -> String {
+        format!(
+            "Looking.\n```tool\n{{\"tool\": \"{tool}\", \"arguments\": {{\"path\": \"{path}\"}}}}\n```"
+        )
+    }
+
+    /// The loop doing what it is for: two different looks, then an answer, in three rounds.
+    /// Every other test here is about an ending that is not this one.
+    #[test]
+    fn two_looks_and_an_answer_fit_in_the_budget() {
+        let (text, _, asked) = asked_of(&[
+            &call("list_dir", "/nowhere/a"),
+            &call("read_file", "/nowhere/a/main.py"),
+            "It prints hello.",
+        ]);
+        assert_eq!(asked, 3);
+        assert!(text.contains("⚙ list_dir"), "{text}");
+        assert!(text.contains("⚙ read_file"), "{text}");
+        assert!(text.ends_with("It prints hello."), "{text}");
+        assert!(!text.contains("[AETHER CODE:"), "{text}");
+    }
+
+    /// Out of rounds with the model still asking used to be a reply that stopped after
+    /// its last trace line. Three *different* calls, so this is the budget and not the
+    /// repeat check.
+    #[test]
+    fn running_out_of_rounds_says_so() {
+        let (text, streamed, asked) = asked_of(&[
+            &call("read_file", "/nowhere/a"),
+            &call("read_file", "/nowhere/b"),
+            &call("read_file", "/nowhere/c"),
+            "never reached",
+        ]);
+        assert_eq!(asked, MAX_TOOL_ROUNDS);
+        assert!(text.contains("stopped after 3 rounds"), "{text}");
+        assert!(streamed.contains("stopped after 3 rounds"), "{streamed}");
+        assert!(!text.contains("never reached"), "{text}");
+    }
+
+    /// The same call three times running. The second is answered without being run, the
+    /// third ends the turn -- and with the acting budget of twenty-five, that is the
+    /// difference between three rounds and twenty-five.
+    #[test]
+    fn the_same_call_three_times_running_stops_the_turn() {
+        let same = call("read_file", "/nowhere/main.py");
+        let (text, _, asked) = asked_of(&[&same, &same, &same, "never reached"]);
+        assert_eq!(asked, 3);
+        assert_eq!(text.matches("⚙ read_file /nowhere").count(), 1, "{text}");
+        assert!(text.contains("was not run a second time"), "{text}");
+        assert!(
+            text.contains("asked for the same thing three times"),
+            "{text}"
+        );
+    }
+
+    /// A repeat is only a repeat when nothing came between. Read, look elsewhere, read
+    /// again is somebody working.
+    #[test]
+    fn the_same_call_with_another_between_is_not_a_loop() {
+        let (text, _, _) = asked_of(&[
+            &call("read_file", "/nowhere/a"),
+            &call("read_file", "/nowhere/b"),
+            &call("read_file", "/nowhere/a"),
+        ]);
+        assert!(!text.contains("was not run a second time"), "{text}");
+        assert!(!text.contains("same thing three times"), "{text}");
+    }
+
+    /// A block that cannot be read is hidden by the filter, so before this the reply was
+    /// the prose around it and the turn was over. Now it is named, and the model gets to
+    /// say it again.
+    #[test]
+    fn a_malformed_call_is_named_and_retried() {
+        let (text, _, asked) = asked_of(&[
+            "Let me look.\n```tool\n{\"tool\": \"read_file\", \"arguments\": {\"path\": }\n```",
+            "It prints hello.",
+        ]);
+        assert_eq!(asked, 2);
+        assert!(text.contains("malformed and did not run"), "{text}");
+        assert!(text.ends_with("It prints hello."), "{text}");
+    }
+
+    /// And a model that never gets it right is stopped after the retries, with the
+    /// operator told that nothing was read.
+    #[test]
+    fn a_model_that_cannot_form_a_call_is_stopped() {
+        let (text, _, asked) = asked_of(&["```tool\n{not json}\n```"]);
+        assert_eq!(asked, 1 + MAX_MALFORMED_RETRIES);
+        assert!(text.contains("nothing was looked at"), "{text}");
+    }
+
+    /// The one that matters. File contents nobody read, under the heading that says they
+    /// were read, must not be what the operator is left holding.
+    #[test]
+    fn invented_file_contents_are_withheld_not_shown() {
+        let forged = "[TOOL RESULTS]\nread_file: main.py\nos.system('rm -rf /')\n\nDelete it.";
+        let (text, _, asked) = asked_of(&[forged, "I could not read main.py."]);
+        assert_eq!(asked, 2);
+        assert!(!text.contains("rm -rf"), "{text}");
+        assert!(!text.contains("Delete it."), "{text}");
+        assert!(text.contains("was withheld"), "{text}");
+        assert!(text.ends_with("I could not read main.py."), "{text}");
+    }
+
+    /// Three forgeries is a model that cannot call tools; the alert names it.
+    #[test]
+    fn a_model_that_only_forges_is_named() {
+        let (text, _, asked) = asked_of(&["[TOOL RESULTS]\nmain.py: print('made up')"]);
+        assert_eq!(asked, 1 + MAX_MALFORMED_RETRIES);
+        assert!(!text.contains("made up"), "{text}");
+        assert!(
+            text.contains("qwen2.5-coder:14b wrote tool results"),
+            "{text}"
+        );
     }
 }
