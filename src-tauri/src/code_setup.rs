@@ -317,20 +317,19 @@ fn has_model(installed: &[String], name: &str) -> bool {
 ///
 /// Matched on the name because that is all a server reports. A false negative costs an
 /// unnecessary download and a false positive costs somebody a day wondering why the agent
-/// keeps inventing functions, so the list is the families this catalogue knows plus the two
-/// words every coding model in the wild has in its name.
-fn is_coding_model(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    [
-        "coder",
-        "-code",
-        "codestral",
-        "devstral",
-        "codellama",
-        "codegemma",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
+/// keeps inventing functions.
+///
+/// The list itself lives in `hf::CODE_MARKERS`, because the model hub asks the same
+/// question about the same string: the Hugging Face tab offers "Use for coding" on a
+/// repository it reads as a coder, and `code_set_model_preference` is what has to accept
+/// the result. Two lists would be two answers waiting to disagree, and they already did --
+/// this one had never heard of `starcoder`, `codeqwen`, `opencoder` or `granite-code`,
+/// so a perfectly good coding model pulled from the hub was not recognised as one here.
+///
+/// It also inherits the ordering that keeps `jina-embeddings-v2-base-code` out: an
+/// embedder of code is not a model that writes any.
+pub(crate) fn is_coding_model(name: &str) -> bool {
+    crate::hf::purpose(name) == crate::hf::Purpose::Code
 }
 
 /// A program that can read the operator's files, change them, and run their tests.

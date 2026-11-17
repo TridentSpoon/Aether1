@@ -392,6 +392,12 @@ jobs:
       - name: Check the performance panel only reads fields the engine sends
         run: ./scripts/check_panel_fields.sh
 
+      # The markers that say "this model was built for code" exist once in Rust and once
+      # in the browser. A family added to one and not the other is a "Use for coding"
+      # button that appears on one tab and not the next.
+      - name: The hub and the panel agree on what a coding model is
+        run: ./scripts/check_code_markers.sh
+
       # The terminal runs a real shell. It is safe to ship only because nothing but the
       # native window can reach it -- no tool, no HTTP route, nothing persisted. Every one
       # of those is the kind of property a reasonable-looking refactor removes silently, so

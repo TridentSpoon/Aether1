@@ -106,6 +106,129 @@ const CANNOT_CALL_TOOLS: &[&str] = &[
     "stablelm",
 ];
 
+/// **What a repository is for**, guessed from its name, the same way and with the same
+/// honesty as `tool_support` above.
+///
+/// This exists because of a hole somebody could fall straight down. The listing is
+/// `filter=gguf&sort=downloads`, and embedding models ship as GGUF and are among the most
+/// downloaded repositories on the hub -- `all-MiniLM`, `bge`, `nomic-embed` are each
+/// pulled more often than any chat model. None of them can answer a question. Worse, they
+/// are tiny, so every figure the fit panel prints about one is flattering: it fits, it
+/// leaves the whole window, it sits alongside what is loaded, and the speed estimate --
+/// bandwidth over weights -- comes out very high. A confident, inviting row for a model
+/// that cannot say hello.
+///
+/// `tool_support` does not catch them: an embedding repository matches no family in either
+/// list, so it comes back `Unknown`, and the tab's "hide models that can't use tools" box
+/// keeps unknowns on purpose. So the tab needs to know what a repository is *for* as well
+/// as what it can call.
+///
+/// Guessed from the name, because the listing reports nothing else, and carrying the same
+/// caveat the rest of this module does: the server settles it after the pull.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Purpose {
+    /// Turns text into a vector. Cannot hold a conversation; cannot write code.
+    Embedding,
+    /// Scores a document against a query. Same: not something to talk to.
+    Rerank,
+    /// Speech: a transcriber or a voice. `whisper.cpp` ships GGUFs and sits in the same
+    /// listing, and a repository of Whisper weights is no more something to talk to than
+    /// an embedder is. Aurora1 has its own way in for both -- Settings has a voice pane
+    /// that installs Piper voices and Whisper weights -- so offering one here as a
+    /// companion is offering the wrong door to the right thing.
+    Speech,
+    /// Built for code. Still a chat model -- a coder answers in a conversation -- but the
+    /// thing it is *for* is AETHER CODE, and until now nothing said so.
+    Code,
+    /// Everything else, which on this hub means "a model to talk to" -- the default the
+    /// tab was built around and the only one it used to admit existed.
+    Chat,
+}
+
+impl Purpose {
+    /// Whether this is something an operator can hold a conversation with. The question
+    /// the Hugging Face tab is mostly being asked.
+    pub fn talks(self) -> bool {
+        matches!(self, Purpose::Chat | Purpose::Code)
+    }
+}
+
+/// Names that mean "this turns text into numbers". Deliberately the markers that appear in
+/// the *name*, because that is all a listing gives: `bge-large-en`, `nomic-embed-text`,
+/// `e5-mistral-7b-instruct`, `all-MiniLM-L6-v2`.
+const EMBEDDING_MARKERS: &[&str] = &[
+    "embed",
+    "embedding",
+    "bge-",
+    "bge_",
+    "gte-",
+    "gte_",
+    "e5-",
+    "minilm",
+    "sentence-transformers",
+    "sfr-embedding",
+    "stella_en",
+    "jina-embeddings",
+];
+
+/// Rerankers, checked first: `bge-reranker-v2-m3` contains `bge-` and is not an embedder.
+const RERANK_MARKERS: &[&str] = &["rerank", "reranker", "cross-encoder"];
+
+/// Transcribers and voices. Narrow on purpose: `whisper` is the only one of these common
+/// enough in a GGUF listing to matter, and widening it would start catching models whose
+/// authors merely liked the word.
+const SPEECH_MARKERS: &[&str] = &[
+    "whisper",
+    "piper-voices",
+    "faster-whisper",
+    "distil-whisper",
+    "parakeet",
+    "kokoro",
+    "xtts",
+];
+
+/// Built for code. `code` alone is too loose -- it matches `codename`, `decoder` and
+/// `Codestral`'s unrelated namesakes -- so the markers are the ones that actually name a
+/// coding family, mirroring `code_setup::is_coding_model` so the hub and the coding panel
+/// cannot disagree about what a coding model is.
+const CODE_MARKERS: &[&str] = &[
+    "coder",
+    "-code",
+    "codestral",
+    "devstral",
+    "codellama",
+    "code-llama",
+    "codegemma",
+    "starcoder",
+    "deepseek-coder",
+    "codeqwen",
+    "granite-code",
+    "opencoder",
+];
+
+/// What a repository is for, from its name alone.
+///
+/// Ordered deliberately: a reranker before an embedder (`bge-reranker` is both strings),
+/// and both before code, because `jina-embeddings-v2-base-code` is an embedder of code and
+/// not a model that writes any.
+pub fn purpose(repo_id: &str) -> Purpose {
+    let id = repo_id.to_lowercase();
+    if RERANK_MARKERS.iter().any(|marker| id.contains(marker)) {
+        return Purpose::Rerank;
+    }
+    if EMBEDDING_MARKERS.iter().any(|marker| id.contains(marker)) {
+        return Purpose::Embedding;
+    }
+    if SPEECH_MARKERS.iter().any(|marker| id.contains(marker)) {
+        return Purpose::Speech;
+    }
+    if CODE_MARKERS.iter().any(|marker| id.contains(marker)) {
+        return Purpose::Code;
+    }
+    Purpose::Chat
+}
+
 /// What this knows about one family, from its name alone.
 pub fn tool_support(repo_id: &str) -> Support {
     let id = repo_id.to_lowercase();
@@ -133,6 +256,11 @@ pub struct Repo {
     /// repository is worth noticing and the exact day is not worth a date library.
     pub updated: Option<String>,
     pub tools: Support,
+    /// What the name says it is for. See `purpose`.
+    pub purpose: Purpose,
+    /// Whether that is something to hold a conversation with. Sent rather than left for
+    /// the panel to work out, so a purpose added here cannot be one the panel forgets.
+    pub talks: bool,
     /// The parameter count out of the name, when it is in there -- "7B", "30B-A3B". Most
     /// GGUF repositories put it in the title and nowhere machine-readable.
     pub params: Option<String>,
@@ -292,6 +420,8 @@ pub fn parse_listing(body: &Value) -> Vec<Repo> {
         .map(|repo| Repo {
             owner: repo.id.split('/').next().unwrap_or_default().to_string(),
             tools: tool_support(&repo.id),
+            purpose: purpose(&repo.id),
+            talks: purpose(&repo.id).talks(),
             params: parameter_size(&repo.id),
             // `gated` is `false` or a string naming the kind of gate, so anything that is
             // not literally false is a repository that will refuse an anonymous pull.
@@ -583,6 +713,130 @@ mod tests {
             tool_support("somebody/Experiment-7B-GGUF"),
             Support::Unknown
         );
+    }
+
+    /// The hole this closes. Every one of these is among the hub's most-downloaded GGUF
+    /// repositories, every one comes back `Support::Unknown` from `tool_support`, and not
+    /// one of them can answer a question.
+    #[test]
+    fn an_embedding_repository_is_not_something_to_talk_to() {
+        for id in [
+            "second-state/All-MiniLM-L6-v2-Embedding-GGUF",
+            "CompendiumLabs/bge-large-en-v1.5-gguf",
+            "nomic-ai/nomic-embed-text-v1.5-GGUF",
+            "ChristianAzinn/gte-large-gguf",
+            "dranger003/e5-mistral-7b-instruct-GGUF",
+        ] {
+            assert_eq!(purpose(id), Purpose::Embedding, "{id}");
+            assert!(!purpose(id).talks(), "{id}");
+            // The point of the whole thing: the tool guess says nothing useful here.
+            assert_eq!(tool_support(id), Support::Unknown, "{id}");
+        }
+    }
+
+    /// Whisper weights are in this listing too, and were being offered as a companion.
+    #[test]
+    fn transcription_weights_are_not_something_to_talk_to() {
+        for id in [
+            "ggml-org/whisper.cpp-GGUF",
+            "distil-whisper/distil-large-v3-GGUF",
+            "rhasspy/piper-voices",
+        ] {
+            assert_eq!(purpose(id), Purpose::Speech, "{id}");
+            assert!(!purpose(id).talks(), "{id}");
+        }
+    }
+
+    /// `bge-reranker-v2-m3` contains `bge-`, so the order of the two checks is the test.
+    #[test]
+    fn a_reranker_is_read_as_a_reranker_and_not_as_an_embedder() {
+        assert_eq!(purpose("gpustack/bge-reranker-v2-m3-GGUF"), Purpose::Rerank);
+        assert!(!purpose("gpustack/bge-reranker-v2-m3-GGUF").talks());
+    }
+
+    /// An embedder *of* code is still an embedder. Checked before the code markers for
+    /// exactly this name.
+    #[test]
+    fn an_embedder_of_code_is_not_a_model_that_writes_code() {
+        assert_eq!(
+            purpose("jina-ai/jina-embeddings-v2-base-code-GGUF"),
+            Purpose::Embedding
+        );
+    }
+
+    #[test]
+    fn a_coding_model_says_so() {
+        for id in [
+            "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
+            "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+            "bartowski/Codestral-22B-v0.1-GGUF",
+            "mradermacher/deepseek-coder-6.7b-instruct-GGUF",
+            "bartowski/codegemma-7b-it-GGUF",
+        ] {
+            assert_eq!(purpose(id), Purpose::Code, "{id}");
+            // A coder is still something you talk to -- it answers in a conversation.
+            assert!(purpose(id).talks(), "{id}");
+        }
+    }
+
+    /// The default has to stay the default: the hub is mostly chat models and a guess that
+    /// started hiding them would be worse than the fault it fixes.
+    #[test]
+    fn an_ordinary_chat_repository_is_still_a_chat_repository() {
+        for id in [
+            "bartowski/Qwen2.5-7B-Instruct-GGUF",
+            "meta-llama/Llama-3.3-70B-Instruct-GGUF",
+            "somebody/Qwythos-9B-v2-GGUF",
+            "bartowski/gemma-3-12b-it-GGUF",
+        ] {
+            assert_eq!(purpose(id), Purpose::Chat, "{id}");
+            assert!(purpose(id).talks(), "{id}");
+        }
+    }
+
+    /// Every marker, not just the names somebody happened to think of: a family added to
+    /// `CODE_MARKERS` that the coding panel does not recognise is a "Use for coding"
+    /// button over a model `code_set_model_preference` refuses.
+    #[test]
+    fn every_coding_marker_is_a_coding_model_to_both() {
+        for marker in CODE_MARKERS {
+            let id = format!("someone/Model{marker}-7B-GGUF");
+            assert_eq!(purpose(&id), Purpose::Code, "{id}");
+            assert!(crate::code_setup::is_coding_model(&id), "{id}");
+        }
+    }
+
+    /// The hub and the coding panel have to agree about what a coding model is, or the
+    /// tab offers "Use for coding" on something `code_setup` will not accept.
+    #[test]
+    fn what_the_hub_calls_a_coding_model_is_what_the_coding_panel_calls_one() {
+        for id in [
+            "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
+            "bartowski/Codestral-22B-v0.1-GGUF",
+            "bartowski/codegemma-7b-it-GGUF",
+            "mistralai/Devstral-Small-2505-GGUF",
+        ] {
+            assert_eq!(purpose(id), Purpose::Code, "{id}");
+            assert!(
+                crate::code_setup::is_coding_model(id),
+                "{id} is a coding model to the hub but not to code_setup"
+            );
+        }
+    }
+
+    /// The listing carries it, so the panel does not have to guess a second time in
+    /// JavaScript -- the mistake that put a size filter on one tab and not the other.
+    #[test]
+    fn the_listing_carries_the_purpose() {
+        let body = json!([
+            { "id": "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF", "downloads": 1, "likes": 1 },
+            { "id": "nomic-ai/nomic-embed-text-v1.5-GGUF", "downloads": 1, "likes": 1 },
+        ]);
+        let repos = parse_listing(&body);
+        assert_eq!(repos[0].purpose, Purpose::Code);
+        assert_eq!(repos[1].purpose, Purpose::Embedding);
+        assert!(repos[0].talks);
+        assert!(!repos[1].talks);
     }
 
     #[test]
