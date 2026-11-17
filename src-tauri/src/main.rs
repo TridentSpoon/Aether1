@@ -62,6 +62,8 @@ mod peers;
 mod persona_voice;
 mod profile;
 mod releases;
+#[cfg(test)]
+mod scripted_model;
 mod secrets;
 mod serve_auth;
 mod serve_tls;

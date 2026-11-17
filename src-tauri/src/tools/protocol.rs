@@ -421,6 +421,7 @@ pub fn salvaged_trace(tool: &str) -> String {
 }
 
 /// The calls alone, for callers with nothing to do about a malformed one.
+#[cfg(test)]
 pub fn parse_calls(text: &str) -> Vec<ToolCall> {
     parse_round(text).calls
 }
@@ -507,6 +508,45 @@ pub fn forged_alongside_trace() -> String {
         "a made-up tool result was written alongside the real call, and was removed -- the \
          call itself ran",
     )
+}
+
+/// What a round asked for, as one string, so two rounds can be compared.
+///
+/// The question it answers is "did the model just ask for exactly what it asked for last
+/// time", which is the whole of what a model going in circles looks like from here: the
+/// same tool, the same arguments, straight after being handed the result. The names and
+/// the arguments are both in it, in order, because `read_file a` then `read_file b` is
+/// progress and `read_file a` twice is not.
+///
+/// Empty for a round that called nothing, and the callers never compare an empty one: two
+/// rounds of prose are not a loop.
+pub fn calls_signature<'a>(calls: impl IntoIterator<Item = (&'a str, &'a Value)>) -> String {
+    calls
+        .into_iter()
+        .map(|(tool, arguments)| format!("{tool} {arguments}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Handed back in place of a result when a round repeats the round before it exactly.
+///
+/// The call is not run again. Its result is already in front of the model, one message up,
+/// and running it a second time would return the same thing and teach it nothing -- or, for
+/// a command, do the same thing twice. What a small model in this state needs is to be told
+/// that it is repeating itself, because nothing in an identical result says so.
+pub fn repeated_notice() -> String {
+    "NOT RUN AGAIN: this is exactly the call you made last time, with the same arguments, \
+     and its result is already above. Calling it again will not change the result. Use what \
+     it returned and answer the operator now, or call something different. If the result \
+     was a failure, say plainly what failed."
+        .to_string()
+}
+
+/// The operator's side of a repeated call, in the slot where its `⚙` line would have been.
+pub fn repeated_trace(tool: &str) -> String {
+    trace_of(&format!(
+        "{tool} was asked for again with the same arguments, and was not run a second time"
+    ))
 }
 
 /// Fed back as the next round's prompt when a round asked for a tool and got the syntax
@@ -1310,5 +1350,33 @@ mod tests {
         let found = salvage_calls(text, &known);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].call.arguments, json!({"path": "/tmp/a{b}c"}));
+    }
+
+    /// The repeat check compares these, so the two things it must not confuse are pinned:
+    /// the same tool on a different file is a different request, and the same request is
+    /// the same however many times it is written down.
+    #[test]
+    fn a_signature_tells_the_same_call_from_a_similar_one() {
+        let a = serde_json::json!({"path": "src/main.rs"});
+        let b = serde_json::json!({"path": "src/lib.rs"});
+        let sign = |calls: &[(&str, &Value)]| calls_signature(calls.iter().copied());
+
+        assert_eq!(sign(&[("read_file", &a)]), sign(&[("read_file", &a)]));
+        assert_ne!(sign(&[("read_file", &a)]), sign(&[("read_file", &b)]));
+        assert_ne!(sign(&[("read_file", &a)]), sign(&[("list_dir", &a)]));
+        assert_ne!(
+            sign(&[("read_file", &a)]),
+            sign(&[("read_file", &a), ("read_file", &a)])
+        );
+    }
+
+    /// The notice goes back as the call's result, and the worst thing it could do is look
+    /// like one: a model that reads it as file contents has learned nothing.
+    #[test]
+    fn the_repeat_notice_says_nothing_ran_and_what_to_do() {
+        let notice = repeated_notice();
+        assert!(notice.starts_with("NOT RUN AGAIN"), "{notice}");
+        assert!(notice.contains("answer the operator"), "{notice}");
+        assert!(repeated_trace("read_file").contains("read_file"));
     }
 }
