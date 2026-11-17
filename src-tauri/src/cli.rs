@@ -1437,8 +1437,10 @@ fn run_code_ask(question: &str, task: Option<&str>) -> String {
 
     let engine = crate::build_llm_engine();
     let mut streamed = false;
+    let mut printed = String::new();
     let result = commands::code_chat_ask(&engine, question, task, &mut |delta| {
         streamed = true;
+        printed.push_str(delta);
         print!("{delta}");
         let _ = std::io::stdout().flush();
     });
@@ -1448,7 +1450,18 @@ fn run_code_ask(question: &str, task: Option<&str>) -> String {
         Ok(reply) => {
             // Nothing streamed means the provider answered in one piece, so the text has
             // not been printed yet and printing it now is the only way it is seen.
-            let mut out = if streamed {
+            /* The HUD paints from the returned text, so a round the loop takes back --
+            file contents the model made up under a results heading -- vanishes there. A
+            terminal cannot unprint. So when what was printed is not what was kept, the
+            kept answer is printed again under a line saying which one to believe; left
+            alone, the invention would sit in the scrollback looking like the answer. */
+            let mut out = if streamed && printed.trim() != reply.text.trim() {
+                format!(
+                    "\n\n---- Part of what was printed above was made up by the model and \
+                     has been withheld.\n---- This is the answer as it stands:\n\n{}\n",
+                    reply.text
+                )
+            } else if streamed {
                 "\n".to_string()
             } else {
                 format!("{}\n", reply.text)
