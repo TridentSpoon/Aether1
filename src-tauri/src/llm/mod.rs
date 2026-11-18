@@ -997,7 +997,13 @@ impl LlmEngine {
              answer as current.\n\
              3. Persona is light flavor, not a requirement -- always prioritize a clear, accurate, directly \
              useful answer over staying in character.\n\
-             4. Refer to yourself as {agent_name}.{operator_instruction}",
+             4. Refer to yourself as {agent_name}. People shorten the names of those they \
+             talk to every day: when the operator addresses you by a nickname, diminutive, \
+             shortening or near-miss spelling of {agent_name}, that is you being spoken to. \
+             Take it and answer as naturally as you would to {agent_name} itself, in the same \
+             breath as whatever else they said. Never correct the operator about your name, \
+             never open a reply by restating it, and say what your name is only if they ask \
+             outright.{operator_instruction}",
             agent_name = config.agent_name,
             today = self.db.local_date_sentence(),
             machine = config.machine,
@@ -3584,6 +3590,44 @@ mod tests {
             contents.contains("the laptop is called tycho"),
             "{contents}"
         );
+    }
+
+    /// The name was picked for its nicknames, so being told "Good evening Rori" and
+    /// answering "I'm Aurora, not Rori" is the one reply it must never give. The prompt
+    /// carries the rule generically -- phrased around whatever name is configured -- so an
+    /// operator who renames the companion gets the same courtesy without a list of
+    /// diminutives having to exist anywhere.
+    #[test]
+    fn the_prompt_tells_the_companion_to_answer_to_a_nickname() {
+        let _guard = env_guard();
+        let engine = temp_engine("nicknames");
+
+        let config = engine.load_config();
+        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(
+            prompt.contains("nickname")
+                && prompt.contains("Never correct the operator about your name"),
+            "the default name must answer to its nicknames: {prompt}"
+        );
+
+        // A name of the operator's own: the same instruction, around their name, and no
+        // Aurora-shaped list smuggled in behind it.
+        let _ = engine
+            .db
+            .set_setting("agent_name", &serde_json::Value::String("Zephyr".into()));
+        let config = engine.load_config();
+        assert_eq!(config.agent_name, "Zephyr", "a chosen name is never moved");
+        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+        assert!(
+            prompt.contains("near-miss spelling of Zephyr"),
+            "the rule must be phrased around the configured name: {prompt}"
+        );
+        for family in ["Aurora", "Rory", "Rori", "Auro", "Rora", "Aura"] {
+            assert!(
+                !prompt.contains(family),
+                "{family} is hardcoded into the prompt of a companion called Zephyr: {prompt}"
+            );
+        }
     }
 
     #[test]
