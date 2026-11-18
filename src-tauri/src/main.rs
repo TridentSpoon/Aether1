@@ -189,7 +189,7 @@ fn github_token() -> Option<String> {
 /// path's comparison, used only where a `.git` directory is present (see releases::Mode).
 /// Always call this off the main thread.
 fn fetch_latest_main_sha() -> Result<String, String> {
-    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/main");
+    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/commits/{UPDATE_BRANCH}");
     let mut request = net::get(&url, "the update check was not made")?
         .config()
         .timeout_global(Some(Duration::from_secs(8)))
@@ -219,6 +219,64 @@ fn fetch_latest_main_sha() -> Result<String, String> {
         .read_json::<GhCommit>()
         .map(|c| c.sha)
         .map_err(|e| e.to_string())
+}
+
+/// The branch a checkout has to be on for the developer update path to mean anything: the
+/// one [`fetch_latest_main_sha`] compares this build against.
+const UPDATE_BRANCH: &str = "main";
+
+/// Why this checkout cannot be brought to [`UPDATE_BRANCH`], when it cannot -- `None` when
+/// it can, or when the reason is one of the ones already named elsewhere.
+///
+/// The check and the update disagreed about which branch they were discussing.
+/// [`compute_checkout_status`] compares this build against the tip of `main`;
+/// [`perform_update_core`] fast-forwards whatever branch the checkout is *on* to that
+/// branch's own upstream. On `main` those are the same thing. On any other branch they
+/// never meet: the pull is a no-op, the rebuild produces the same binary, the relaunch
+/// reports the same version, and the next check compares against `main` again and offers
+/// the very same update. Every step succeeds, so nothing is ever reported as having gone
+/// wrong -- the operator just clicks Update, waits out a full release build, and watches
+/// the same offer come back, with no way to tell from inside the app that it never could
+/// have worked.
+///
+/// Asked here once and answered the same way to both callers, so the offer and the attempt
+/// cannot drift apart again.
+///
+/// Only a branch that positively tracks something other than `main` is reported. No
+/// upstream, a detached HEAD, a missing git, a directory that is not a checkout: those are
+/// each said where they are already said (see `perform_update_core`), and guessing at them
+/// from here would put a second, vaguer sentence in front of the better one.
+fn off_update_branch(root: &std::path::Path) -> Option<String> {
+    let upstream = run_git(
+        root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()?;
+    if !upstream.status.success() {
+        return None;
+    }
+    let upstream = String::from_utf8_lossy(&upstream.stdout).trim().to_string();
+    // `origin/main` -> `main`. Split once from the left rather than taking the last
+    // segment, so a branch genuinely called `feature/main` is not mistaken for `main`.
+    let tracked = upstream.split_once('/').map(|(_, branch)| branch);
+    if upstream.is_empty() || tracked == Some(UPDATE_BRANCH) {
+        return None;
+    }
+
+    let branch = run_git(root, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        return None;
+    }
+
+    Some(format!(
+        "this checkout is on branch `{branch}`, which tracks `{upstream}` rather than \
+         `{UPDATE_BRANCH}` -- the update compares this build against the tip of \
+         `{UPDATE_BRANCH}` and can only fast-forward `{branch}`, so there is nothing here \
+         for it to pull: `git checkout {UPDATE_BRANCH}` in {} updates this copy, and \
+         staying on `{branch}` means building it yourself",
+        root.display()
+    ))
 }
 
 /// Result of comparing this build against whatever it should be compared against -- the tip
@@ -354,6 +412,17 @@ fn compute_checkout_status() -> UpdateStatus {
     if BUILT_COMMIT == "unknown" {
         return UpdateStatus {
             error: Some("not built from a git checkout -- nothing to compare against".to_string()),
+            ..base_status()
+        };
+    }
+
+    // An offer the updater cannot honour is worse than no offer: see `off_update_branch`
+    // for the loop it produced. Reported as a comparison that did not conclude, which is
+    // what it is -- `checked` stays false, so nothing is claimed in either direction and
+    // no update is offered, and the reason is in `error` where the operator can read it.
+    if let Some(why) = off_update_branch(&project_root()) {
+        return UpdateStatus {
+            error: Some(why),
             ..base_status()
         };
     }
@@ -1185,6 +1254,14 @@ fn perform_update_core<R: tauri::Runtime>(
         return Err((UpdateStage::Pull, detail));
     }
     let upstream = String::from_utf8_lossy(&upstream.stdout).trim().to_string();
+
+    // Asked before the fetch and before the rebuild, because on a branch that does not
+    // track `main` both of them work perfectly and achieve nothing (see
+    // `off_update_branch`). The cost of finding that out at the end was a full release
+    // build and a relaunch into the identical version.
+    if let Some(why) = off_update_branch(&root) {
+        return Err((UpdateStage::Pull, why));
+    }
 
     let before = git(&["rev-parse", "--short", "HEAD"])?;
     let before = String::from_utf8_lossy(&before.stdout).trim().to_string();
@@ -4441,5 +4518,127 @@ mod ipc_thread_tests {
                 "{name} is allowed on the main thread but no longer exists",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod update_branch_tests {
+    use super::off_update_branch;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// A throwaway checkout with a remote-tracking `origin/main` and `origin/feature`, and
+    /// no network: `update-ref` writes the remote-tracking refs directly, which is all
+    /// `@{u}` needs to resolve.
+    fn checkout(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "aether1_branch_{}_{name}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("a temp directory");
+        git(&root, &["init", "-q"]);
+        git(&root, &["config", "user.email", "test@example.com"]);
+        git(&root, &["config", "user.name", "test"]);
+        // A remote has to exist for `--set-upstream-to` to accept `origin/...` as a
+        // branch, and for `@{u}` to resolve at all. It points at this same directory and
+        // is never fetched from: the remote-tracking refs below are written by hand, so
+        // nothing here touches a network.
+        git(&root, &["remote", "add", "origin", "."]);
+        git(&root, &["commit", "-q", "--allow-empty", "-m", "root"]);
+        git(&root, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(
+            &root,
+            &["update-ref", "refs/remotes/origin/feature", "HEAD"],
+        );
+        root
+    }
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// The branch the update check compares against is not a problem to report.
+    #[test]
+    fn a_checkout_tracking_main_has_nothing_to_report() {
+        let root = checkout("on_main");
+        git(&root, &["checkout", "-q", "-B", "main"]);
+        git(&root, &["branch", "--set-upstream-to=origin/main", "main"]);
+        assert_eq!(off_update_branch(&root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The loop, pinned: on a feature branch the pull is a no-op, the rebuild is identical
+    /// and the same update is offered again, so the attempt is refused with the reason
+    /// instead -- naming the branch, what it tracks, and the one command that fixes it.
+    #[test]
+    fn a_checkout_on_another_branch_is_told_why_it_cannot_update() {
+        let root = checkout("on_feature");
+        git(&root, &["checkout", "-q", "-B", "feature"]);
+        git(
+            &root,
+            &["branch", "--set-upstream-to=origin/feature", "feature"],
+        );
+        let why = off_update_branch(&root).expect("a branch that does not track main");
+        assert!(why.contains("feature"), "the branch must be named: {why}");
+        assert!(
+            why.contains("origin/feature"),
+            "what it tracks must be named: {why}"
+        );
+        assert!(
+            why.contains("git checkout main"),
+            "the fix must be spelled out: {why}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A branch genuinely called `release/main` tracks `main` in neither sense, and the
+    /// last path segment is the easy way to get that wrong.
+    #[test]
+    fn a_branch_whose_name_merely_ends_in_main_is_not_main() {
+        let root = checkout("ends_in_main");
+        git(
+            &root,
+            &["update-ref", "refs/remotes/origin/release/main", "HEAD"],
+        );
+        git(&root, &["checkout", "-q", "-B", "release/main"]);
+        git(
+            &root,
+            &[
+                "branch",
+                "--set-upstream-to=origin/release/main",
+                "release/main",
+            ],
+        );
+        assert!(
+            off_update_branch(&root).is_some(),
+            "`release/main` is not `main`"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// No upstream is a different complaint, already made in `perform_update_core` with a
+    /// different fix. Answering it from here too would put the vaguer of the two sentences
+    /// in front of the operator.
+    #[test]
+    fn a_branch_with_no_upstream_is_left_to_the_caller_that_already_explains_it() {
+        let root = checkout("no_upstream");
+        git(&root, &["checkout", "-q", "-B", "solo"]);
+        assert_eq!(off_update_branch(&root), None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
