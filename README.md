@@ -1175,11 +1175,23 @@ runs perfectly and simply says it cannot check for updates.
    `minisign -G -W -p minisign.pub -s minisign.key`. Put the contents of `minisign.key` in a
    repository **secret** named `MINISIGN_SECRET_KEY`, and the bare base64 line from
    `minisign.pub` (the second line, not the comment) in a repository *variable* named
-   `AETHER1_MINISIGN_PUBLIC_KEY`. Keep `minisign.key` somewhere safe and off the repository:
-   losing it means every copy already out there stops accepting new releases.
+   `AETHER1_MINISIGN_PUBLIC_KEY` -- pasting the whole two-line file there works too, since
+   both halves of the pipeline read it through `scripts/minisign_public_key.sh`. Keep
+   `minisign.key` somewhere safe and off the repository: losing it means every copy already
+   out there stops accepting new releases.
 
 Set both or neither -- the release workflow fails on half a keypair rather than shipping
-signatures nothing can check, or apps that reject every release.
+signatures nothing can check, or apps that reject every release. It asks that question in
+its first job, in a few seconds, by signing a scratch file and verifying it: a keypair that
+does not work costs a ten-second job rather than the whole build matrix and a tag to push
+again.
+
+**Set them before the tag, not after.** A release run reads the pair when it starts, and a
+keypair added while one is in flight -- or after it has finished -- changes nothing about
+the assets already published. An unsigned release is fixed by deleting it, deleting the tag,
+and pushing the same tag again. The copies already installed matter here too: a build made
+before the public key existed carries none, so it cannot check *any* release and says so
+instead of updating. One install by hand gets a machine onto the signed track.
 
 ### Serving the HUD to a browser
 

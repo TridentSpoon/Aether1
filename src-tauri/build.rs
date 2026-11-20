@@ -134,7 +134,14 @@ fn main() {
     for name in ["AETHER1_GITHUB_CLIENT_ID", "AETHER1_MINISIGN_PUBLIC_KEY"] {
         // Trimmed because both of these are pasted into an Actions secret or an environment
         // by hand, and a trailing newline in a client ID is a 401 with nothing to see.
-        let value = std::env::var(name).unwrap_or_default().trim().to_string();
+        //
+        // `key_line` additionally drops minisign's comment line, because `minisign.pub` is
+        // two lines and pasting the whole file is the mistake anyone makes once. A multi-line
+        // value here does not merely compile in something useless: the newline ends the cargo
+        // directive below, so the binary would carry the comment and reject every release
+        // with "the compiled-in signing key is unreadable". scripts/minisign_public_key.sh
+        // does the same for the workflow's own verification.
+        let value = key_line(&std::env::var(name).unwrap_or_default());
         println!("cargo:rustc-env={name}={value}");
         // Without this, a build with the value set and a build without it are the same
         // fingerprint to cargo, so setting the secret for the first time changes nothing
@@ -147,4 +154,17 @@ fn main() {
     // commit or `git pull` only moves the ref file under .git/refs/heads.
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs/heads");
+}
+
+/// The bare key out of a value that may have been pasted as a whole `minisign.pub` file:
+/// the last line that is neither blank nor minisign's `untrusted comment:` header, with all
+/// whitespace removed. A single-line value comes back trimmed, which is what every other
+/// compiled-in value here wants.
+fn key_line(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty() && !line.starts_with("untrusted comment:"))
+        .unwrap_or("")
+        .split_whitespace()
+        .collect()
 }
