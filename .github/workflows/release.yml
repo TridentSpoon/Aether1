@@ -41,8 +41,54 @@ env:
   AETHER1_MINISIGN_PUBLIC_KEY: ${{ vars.AETHER1_MINISIGN_PUBLIC_KEY }}
 
 jobs:
+  # Ten seconds, before the forty minutes. The keypair used to be looked at for the first
+  # time in publish-release, after all five builders had finished -- so a half-configured
+  # pair, a public key pasted with its comment line, or a key with a passphrase on it cost
+  # the whole matrix and then left a release to delete and a tag to push again by hand.
+  # This signs a scratch file and verifies it against the public key the binaries are about
+  # to be compiled with, which is the same question publish-release asks and the only one
+  # that can be asked before there is anything to sign.
+  signing-keys:
+    name: Check the signing keypair
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign something and check it verifies
+        id: check
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PUB: ${{ vars.AETHER1_MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_KEY:-}" ] && [ -z "${MINISIGN_PUB:-}" ]; then
+            echo "::warning::No minisign keypair configured -- this release will be UNSIGNED, and no installed copy will offer it."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${MINISIGN_KEY:-}" ] || [ -z "${MINISIGN_PUB:-}" ]; then
+            echo "::error::minisign is half-configured. Set both the MINISIGN_SECRET_KEY secret and the AETHER1_MINISIGN_PUBLIC_KEY variable, or neither."
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+          printf '%s\n' "$MINISIGN_KEY" > minisign.key
+          chmod 600 minisign.key
+          echo "a release's worth of bytes, in miniature" > probe
+          # `< /dev/null` so that a key with a passphrase on it fails here rather than
+          # sitting at a prompt nobody can answer until the job times out. There is no way
+          # to supply one in CI, which is why the README says `minisign -G -W`.
+          minisign -S -H -s minisign.key -m probe -t "AETHER1 keypair check" < /dev/null
+          rm -f minisign.key
+          minisign -V -P "$(scripts/minisign_public_key.sh)" -m probe
+          echo "The keypair signs and verifies; the release will be signed."
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
   linux-offline-bundle:
     name: Linux offline bundle
+    needs: signing-keys
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -84,6 +130,7 @@ jobs:
 
   linux-slim-bundle:
     name: Linux slim bundle
+    needs: signing-keys
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -117,6 +164,7 @@ jobs:
 
   windows-installer:
     name: Windows offline installer
+    needs: signing-keys
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -276,6 +324,7 @@ jobs:
 
   linux-appimage:
     name: Linux AppImage
+    needs: signing-keys
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -326,6 +375,7 @@ jobs:
 
   macos-dmg:
     name: macOS disk image (${{ matrix.arch }})
+    needs: signing-keys
     # Both images are built on the Apple Silicon runner. The SDK there carries both
     # architectures, so the Intel one is `rustup target add` and a `--target` flag -- and
     # keeping them on one runner image means the two differ in exactly that flag rather than
@@ -387,11 +437,15 @@ jobs:
     # Only for a real tag push -- workflow_dispatch is for testing the packaging itself
     # without also needing a release to exist to attach to.
     if: github.ref_type == 'tag'
-    needs: [linux-offline-bundle, linux-slim-bundle, linux-appimage, windows-installer, macos-dmg]
+    needs: [signing-keys, linux-offline-bundle, linux-slim-bundle, linux-appimage, windows-installer, macos-dmg]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      # For scripts/minisign_public_key.sh alone -- the bundles themselves come from the
+      # builders. Before download-artifact, because a checkout cleans the workspace.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -406,30 +460,11 @@ jobs:
       # authentication proves who may download, a signature proves what was downloaded. A
       # stolen token, a replaced asset and a bundle passed hand to hand on a USB stick are all
       # cases where only the second question helps. See src-tauri/src/releases.rs.
-      - name: Decide whether the assets can be signed
+      # Already answered, in ten seconds, before anything was built. Carried here rather
+      # than asked again so that the two cannot disagree.
+      - name: Whether the assets are signed
         id: minisign
-        env:
-          MINISIGN_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-          MINISIGN_PUB: ${{ vars.AETHER1_MINISIGN_PUBLIC_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -n "${MINISIGN_KEY:-}" ] && [ -n "${MINISIGN_PUB:-}" ]; then
-            echo "Assets will be signed with minisign."
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          elif [ -z "${MINISIGN_KEY:-}" ] && [ -z "${MINISIGN_PUB:-}" ]; then
-            # Not a build failure -- a fork, or this repo before the keypair exists, should
-            # still produce a working release. It is a loud warning because the updater refuses
-            # to install anything it cannot verify, so an unsigned release is one nobody's app
-            # will offer them.
-            echo "::warning::No minisign keypair configured -- shipping an UNSIGNED release. Installed copies will not offer this update, because they cannot check it."
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-          else
-            # Half-configured is not "ship it unsigned": a private key with no matching public
-            # key compiled into the binaries produces signatures nothing can check, and a public
-            # key with no private key produces apps that reject every release.
-            echo "::error::minisign is half-configured. Set both the MINISIGN_SECRET_KEY secret and the AETHER1_MINISIGN_PUBLIC_KEY variable, or neither."
-            exit 1
-          fi
+        run: echo "configured=${{ needs.signing-keys.outputs.configured }}" >> "$GITHUB_OUTPUT"
 
       - name: Sign the assets
         if: steps.minisign.outputs.configured == 'true'
@@ -445,7 +480,7 @@ jobs:
           # The key has to be passwordless (`minisign -G -W`): there is nobody here to type a
           # passphrase, and a passphrase held in a second secret beside the key protects
           # nothing anyway.
-          printf '%s' "$MINISIGN_KEY" > minisign.key
+          printf '%s\n' "$MINISIGN_KEY" > minisign.key
           chmod 600 minisign.key
 
           for file in dist/aurora1-offline-linux-x86_64.tar.gz \
@@ -457,7 +492,7 @@ jobs:
             # -H prehashes. Not optional: the client verifies while it streams the download to
             # disk rather than reading half a gigabyte back afterwards, and a streaming verifier
             # can only check a prehashed signature.
-            minisign -S -H -s minisign.key -m "$file" -t "AETHER1 $TAG"
+            minisign -S -H -s minisign.key -m "$file" -t "AETHER1 $TAG" < /dev/null
           done
           rm -f minisign.key
 
@@ -466,12 +501,11 @@ jobs:
           # which is found by whoever downloads it rather than here. Verified against the same
           # public key that is compiled into the binaries, not against the private key's own
           # idea of itself.
-          printf '%s' "$MINISIGN_PUB" > minisign.pub.b64
+          pubkey="$(scripts/minisign_public_key.sh)"
           for file in dist/*.minisig; do
             target="${file%.minisig}"
-            minisign -V -P "$(cat minisign.pub.b64)" -m "$target"
+            minisign -V -P "$pubkey" -m "$target"
           done
-          rm -f minisign.pub.b64
 
       - uses: softprops/action-gh-release@v2
         with:
