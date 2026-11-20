@@ -269,9 +269,10 @@ impl MemoryDb {
                 provider TEXT PRIMARY KEY,
                 requests_left INTEGER,
                 requests_limit INTEGER,
+                requests_reset_seconds INTEGER,
                 tokens_left INTEGER,
                 tokens_limit INTEGER,
-                resets_in_seconds INTEGER,
+                tokens_reset_seconds INTEGER,
                 refused_for_seconds INTEGER,
                 seen_at INTEGER NOT NULL
             );",
@@ -908,24 +909,27 @@ impl MemoryDb {
         let reading = stored.reading;
         self.connect()?.execute(
             "INSERT INTO provider_ledger
-                 (provider, requests_left, requests_limit, tokens_left, tokens_limit,
-                  resets_in_seconds, refused_for_seconds, seen_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 (provider, requests_left, requests_limit, requests_reset_seconds,
+                  tokens_left, tokens_limit, tokens_reset_seconds,
+                  refused_for_seconds, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(provider) DO UPDATE SET
                  requests_left = ?2,
                  requests_limit = ?3,
-                 tokens_left = ?4,
-                 tokens_limit = ?5,
-                 resets_in_seconds = ?6,
-                 refused_for_seconds = ?7,
-                 seen_at = ?8",
+                 requests_reset_seconds = ?4,
+                 tokens_left = ?5,
+                 tokens_limit = ?6,
+                 tokens_reset_seconds = ?7,
+                 refused_for_seconds = ?8,
+                 seen_at = ?9",
             params![
                 provider,
                 reading.requests_left,
                 reading.requests_limit,
+                reading.requests_reset_in,
                 reading.tokens_left,
                 reading.tokens_limit,
-                reading.resets_in,
+                reading.tokens_reset_in,
                 reading.refused_for,
                 stored.seen_at,
             ],
@@ -942,8 +946,9 @@ impl MemoryDb {
     pub fn provider_headroom(&self, provider: &str) -> Option<Stored> {
         let conn = self.connect().ok()?;
         conn.query_row(
-            "SELECT requests_left, requests_limit, tokens_left, tokens_limit,
-                    resets_in_seconds, refused_for_seconds, seen_at
+            "SELECT requests_left, requests_limit, requests_reset_seconds,
+                    tokens_left, tokens_limit, tokens_reset_seconds,
+                    refused_for_seconds, seen_at
              FROM provider_ledger WHERE provider = ?1",
             params![provider],
             |row| {
@@ -951,18 +956,41 @@ impl MemoryDb {
                     reading: Reading {
                         requests_left: row.get(0)?,
                         requests_limit: row.get(1)?,
-                        tokens_left: row.get(2)?,
-                        tokens_limit: row.get(3)?,
-                        resets_in: row.get(4)?,
-                        refused_for: row.get(5)?,
+                        requests_reset_in: row.get(2)?,
+                        tokens_left: row.get(3)?,
+                        tokens_limit: row.get(4)?,
+                        tokens_reset_in: row.get(5)?,
+                        refused_for: row.get(6)?,
                     },
-                    seen_at: row.get(6)?,
+                    seen_at: row.get(7)?,
                 })
             },
         )
         .optional()
         .ok()
         .flatten()
+    }
+
+    /// Forgets what a provider said, because it was said by a connection that no longer
+    /// exists.
+    ///
+    /// A row is a statement about one key at one address, but it is filed under the
+    /// provider, which is the only thing the response itself identifies. So when the key or
+    /// the address changes, the row stops describing anything: the operator who pastes a
+    /// fresh key *because* the old one ran out would otherwise be told, by the allowance
+    /// their previous key reported, that the new one has nothing left -- and Auto would go
+    /// on keeping turns local until a window they never used had run its course.
+    ///
+    /// Forgetting rather than re-keying the row by credential, deliberately. Tying a stored
+    /// balance to a key would mean keeping something derived from a secret in a table the
+    /// secrets deliberately do not live in, and the thing being protected is worth less than
+    /// that: one unmetered request, after which the provider says what the new key has.
+    pub fn forget_provider_headroom(&self, provider: &str) -> rusqlite::Result<()> {
+        self.connect()?.execute(
+            "DELETE FROM provider_ledger WHERE provider = ?1",
+            params![provider],
+        )?;
+        Ok(())
     }
 
     /// Everything the Profile pane counts, in one pass over the messages table.

@@ -63,15 +63,25 @@ const STALE_AFTER_SECONDS: i64 = 900;
 pub struct Reading {
     pub requests_left: Option<u64>,
     pub requests_limit: Option<u64>,
+    /// Seconds from the reply until the *requests* allowance refills.
+    pub requests_reset_in: Option<u64>,
     pub tokens_left: Option<u64>,
     pub tokens_limit: Option<u64>,
-    /// Seconds from the reply until the allowance refills, where the provider said.
-    pub resets_in: Option<u64>,
+    /// Seconds from the reply until the *tokens* allowance refills.
+    pub tokens_reset_in: Option<u64>,
     /// Seconds from the reply for which the provider refused to be asked again: a
     /// `retry-after` on a 429, and nothing else. This is the one unambiguous fact in the
     /// whole module -- not a count to interpret, but the provider saying "not yet".
     pub refused_for: Option<u64>,
 }
+
+/* Each counter keeps its own reset, and that is not a tidiness point. Taking the longest of
+the two resets and applying it to both -- which is what this did first -- blocks a provider
+for the whole of the longer window when only the shorter one has run out. A reply reporting
+zero requests left with a one-second request reset, and a thousand tokens left with a
+four-minute token reset, is a provider that is ready again in one second and was being
+refused for four minutes. An allowance is spent when its first half runs out, but it is
+*back* when that half refills, and the two are not the same window. */
 
 impl Reading {
     /// Whether anything was actually learned. A response with none of these headers must
@@ -79,7 +89,8 @@ impl Reading {
     pub fn says_anything(&self) -> bool {
         self.requests_left.is_some()
             || self.tokens_left.is_some()
-            || self.resets_in.is_some()
+            || self.requests_reset_in.is_some()
+            || self.tokens_reset_in.is_some()
             || self.refused_for.is_some()
     }
 }
@@ -152,32 +163,50 @@ pub fn standing(stored: Option<Stored>, now: i64) -> Standing {
         }
     }
 
-    /* The window has rolled over since this was read, so the counts in it describe an
-    allowance that no longer exists -- including a zero. Reported as clear with no figures
-    rather than as unknown, because one thing *is* known and it is the thing that matters:
-    an allowance that has refilled is not spent. Saying "unknown" here would make a provider
-    disappear from the picker's figures for the whole of the window it had just been given. */
-    if let Some(resets_in) = reading.resets_in {
-        if remaining(resets_in) == 0 {
-            return Standing::Clear {
-                requests_left: None,
-                tokens_left: None,
-                left_percent: None,
-            };
-        }
-    }
+    /* Whether a counter still describes anything, which is one question asked of each
+    counter separately rather than of the row as a whole.
 
-    let exhausted = reading.requests_left == Some(0) || reading.tokens_left == Some(0);
-    if exhausted {
+    A count is believed while its own window is still running. Once that window has rolled
+    over, the count describes an allowance that has since been replaced -- a zero included,
+    which is the whole point. A counter that named no window at all is believed only while
+    the reading is fresh: there is nothing in the row that can say whether its window has
+    turned over, and the one thing that must not happen is a zero with no reset time
+    becoming permanent. It would be, left alone: Auto reads it as a closed door, routes the
+    next turn to this machine instead, and so never makes the request that would have
+    brought back a newer reading. Nothing in the program recovers from that, and the
+    operator sees a provider that has quietly stopped being used. */
+    let live = |count: Option<u64>, window: Option<u64>| match window {
+        Some(window) => count.filter(|_| remaining(window) > 0),
+        None => count.filter(|_| age <= STALE_AFTER_SECONDS),
+    };
+    let requests_left = live(reading.requests_left, reading.requests_reset_in);
+    let tokens_left = live(reading.tokens_left, reading.tokens_reset_in);
+
+    /* The wait is the one belonging to the counter that has actually run out, and where
+    both have, the longer of the two -- because the allowance is not usable again until the
+    last of the exhausted halves refills. An exhausted counter that named no window leaves
+    the wait unknown rather than letting the other counter's window speak for it. */
+    let wait_of =
+        |count: Option<u64>, window: Option<u64>| (count == Some(0)).then(|| window.map(remaining));
+    let waits: Vec<Option<u64>> = [
+        wait_of(requests_left, reading.requests_reset_in),
+        wait_of(tokens_left, reading.tokens_reset_in),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !waits.is_empty() {
         return Standing::Spent {
-            clears_in: reading.resets_in.map(remaining).filter(|left| *left > 0),
+            clears_in: waits
+                .iter()
+                .copied()
+                .try_fold(0, |longest, wait| wait.map(|wait| longest.max(wait))),
         };
     }
 
-    /* No reset window and an old reading: the counts are from a window that has very likely
-    rolled over, and there is nothing in the row that can say whether it has. Unknown rather
-    than clear-with-figures, because the figures are the part that has gone bad. */
-    if reading.resets_in.is_none() && age > STALE_AFTER_SECONDS {
+    // Nothing left that still says anything. Not spent -- an allowance whose window has
+    // turned over is an allowance that has refilled -- but nothing to show either.
+    if requests_left.is_none() && tokens_left.is_none() {
         return Standing::Unknown;
     }
 
@@ -186,16 +215,16 @@ pub fn standing(stored: Option<Stored>, now: i64) -> Standing {
         _ => None,
     };
     let left_percent = [
-        share(reading.requests_left, reading.requests_limit),
-        share(reading.tokens_left, reading.tokens_limit),
+        share(requests_left, reading.requests_limit),
+        share(tokens_left, reading.tokens_limit),
     ]
     .into_iter()
     .flatten()
     .min();
 
     Standing::Clear {
-        requests_left: reading.requests_left,
-        tokens_left: reading.tokens_left,
+        requests_left,
+        tokens_left,
         left_percent,
     }
 }
@@ -228,22 +257,14 @@ pub fn reading_from(
     };
     /* Both spellings of the reset, and both readings of what a reset *is*: Anthropic names
     the moment, OpenAI names the wait. `seconds_until` takes either, so the two spellings
-    collapse into one question here rather than into a per-provider branch. */
-    let reset = [
-        "anthropic-ratelimit-requests-reset",
-        "x-ratelimit-reset-requests",
-    ]
-    .into_iter()
-    .chain([
-        "anthropic-ratelimit-tokens-reset",
-        "x-ratelimit-reset-tokens",
-    ])
-    .filter_map(&header)
-    .filter_map(|value| seconds_until(&value, now))
-    // The longest of the resets reported, because the allowance is not back until the
-    // last of its halves is: a requests window that refills in one second while the
-    // tokens window has four minutes to go is still four minutes from useful.
-    .max();
+    collapse into one question here rather than into a per-provider branch -- but the two
+    *counters* do not collapse into one answer. See the note on `Reading`. */
+    let reset = |names: [&str; 2]| {
+        names
+            .into_iter()
+            .filter_map(&header)
+            .find_map(|value| seconds_until(&value, now))
+    };
 
     let reading = Reading {
         requests_left: count([
@@ -254,6 +275,10 @@ pub fn reading_from(
             "anthropic-ratelimit-requests-limit",
             "x-ratelimit-limit-requests",
         ]),
+        requests_reset_in: reset([
+            "anthropic-ratelimit-requests-reset",
+            "x-ratelimit-reset-requests",
+        ]),
         tokens_left: count([
             "anthropic-ratelimit-tokens-remaining",
             "x-ratelimit-remaining-tokens",
@@ -262,7 +287,10 @@ pub fn reading_from(
             "anthropic-ratelimit-tokens-limit",
             "x-ratelimit-limit-tokens",
         ]),
-        resets_in: reset,
+        tokens_reset_in: reset([
+            "anthropic-ratelimit-tokens-reset",
+            "x-ratelimit-reset-tokens",
+        ]),
         // Read on every response rather than only on a 429, because it is only ever sent
         // when it means something, and a provider that volunteers it on a 200 is telling
         // the truth about the same thing.
@@ -513,7 +541,7 @@ mod tests {
         .expect("a reading");
         assert_eq!(reading.requests_left, Some(11));
         assert_eq!(reading.requests_limit, Some(50));
-        assert_eq!(reading.resets_in, Some(120));
+        assert_eq!(reading.requests_reset_in, Some(120));
     }
 
     #[test]
@@ -530,7 +558,7 @@ mod tests {
         .expect("a reading");
         assert_eq!(reading.tokens_left, Some(1500));
         assert_eq!(reading.tokens_limit, Some(30000));
-        assert_eq!(reading.resets_in, Some(360));
+        assert_eq!(reading.tokens_reset_in, Some(360));
     }
 
     #[test]
@@ -553,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn the_longest_reset_reported_is_the_one_kept() {
+    fn each_counter_keeps_its_own_reset_rather_than_the_longest_of_them() {
         let reading = reading_from(
             Provider::Groq,
             headers(&[
@@ -563,7 +591,8 @@ mod tests {
             1_000,
         )
         .expect("a reading");
-        assert_eq!(reading.resets_in, Some(240));
+        assert_eq!(reading.requests_reset_in, Some(1));
+        assert_eq!(reading.tokens_reset_in, Some(240));
     }
 
     #[test]
@@ -589,7 +618,7 @@ mod tests {
         )
         .expect("a reading");
         assert_eq!(reading.requests_left, Some(3));
-        assert_eq!(reading.resets_in, None);
+        assert_eq!(reading.requests_reset_in, None);
     }
 
     #[test]
@@ -665,7 +694,7 @@ mod tests {
         let row = stored(
             Reading {
                 requests_left: Some(0),
-                resets_in: Some(100),
+                requests_reset_in: Some(100),
                 ..Reading::default()
             },
             1_000,
@@ -676,15 +705,9 @@ mod tests {
                 clears_in: Some(60)
             }
         );
-        // Past the reset, the zero describes an allowance that has been replaced.
-        assert_eq!(
-            standing(row, 1_200),
-            Standing::Clear {
-                requests_left: None,
-                tokens_left: None,
-                left_percent: None,
-            }
-        );
+        // Past the reset, the zero describes an allowance that has been replaced, and
+        // there is nothing else in the row to show.
+        assert_eq!(standing(row, 1_200), Standing::Unknown);
     }
 
     #[test]
@@ -700,14 +723,126 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_that_named_no_reset_stops_being_believed_rather_than_closing_the_door_forever() {
+        /* The deadlock this guards: Auto reads Spent, routes the turn to this machine
+        instead, and so never makes the request that would bring back a newer reading. A
+        zero with no reset time would otherwise refuse the provider until something else
+        happened to use it. */
+        let row = stored(
+            Reading {
+                tokens_left: Some(0),
+                ..Reading::default()
+            },
+            1_000,
+        );
+        assert_eq!(standing(row, 1_010), Standing::Spent { clears_in: None });
+        assert_eq!(
+            standing(row, 1_000 + STALE_AFTER_SECONDS + 1),
+            Standing::Unknown,
+            "an unexplained zero must not be permanent"
+        );
+    }
+
+    #[test]
+    fn a_counter_that_has_run_out_waits_on_its_own_window_and_not_the_other_one() {
+        // Requests gone and back in a second; tokens plentiful with four minutes on their
+        // window. Reading one wait for the whole row refused this provider for four
+        // minutes when it was ready again in one.
+        let row = stored(
+            Reading {
+                requests_left: Some(0),
+                requests_reset_in: Some(1),
+                tokens_left: Some(1_000),
+                tokens_limit: Some(30_000),
+                tokens_reset_in: Some(240),
+                ..Reading::default()
+            },
+            1_000,
+        );
+        assert_eq!(standing(row, 1_000), Standing::Spent { clears_in: Some(1) });
+        assert!(
+            !matches!(standing(row, 1_002), Standing::Spent { .. }),
+            "the requests window has turned over, so the provider is usable again"
+        );
+    }
+
+    #[test]
+    fn both_counters_exhausted_waits_for_the_later_of_the_two() {
+        let row = stored(
+            Reading {
+                requests_left: Some(0),
+                requests_reset_in: Some(30),
+                tokens_left: Some(0),
+                tokens_reset_in: Some(240),
+                ..Reading::default()
+            },
+            1_000,
+        );
+        assert_eq!(
+            standing(row, 1_000),
+            Standing::Spent {
+                clears_in: Some(240)
+            }
+        );
+        // The requests half has refilled; the tokens half has not, so it is still shut.
+        assert_eq!(
+            standing(row, 1_100),
+            Standing::Spent {
+                clears_in: Some(140)
+            }
+        );
+    }
+
+    #[test]
+    fn an_exhausted_counter_with_no_window_leaves_the_wait_unknown_even_beside_one_that_has() {
+        // The tokens window says nothing about when the requests allowance comes back, and
+        // borrowing it would be stating a time on no evidence.
+        let row = stored(
+            Reading {
+                requests_left: Some(0),
+                tokens_left: Some(900),
+                tokens_reset_in: Some(240),
+                ..Reading::default()
+            },
+            1_000,
+        );
+        assert_eq!(standing(row, 1_010), Standing::Spent { clears_in: None });
+    }
+
+    #[test]
+    fn a_counter_whose_window_turned_over_stops_being_shown_while_the_other_still_is() {
+        let row = stored(
+            Reading {
+                requests_left: Some(7),
+                requests_limit: Some(50),
+                requests_reset_in: Some(10),
+                tokens_left: Some(900),
+                tokens_limit: Some(30_000),
+                tokens_reset_in: Some(600),
+                ..Reading::default()
+            },
+            1_000,
+        );
+        assert_eq!(
+            standing(row, 1_060),
+            Standing::Clear {
+                requests_left: None,
+                tokens_left: Some(900),
+                left_percent: Some(3),
+            }
+        );
+    }
+
+    #[test]
     fn the_thinner_of_the_two_margins_is_the_one_reported() {
         let row = stored(
             Reading {
                 requests_left: Some(45),
                 requests_limit: Some(50),
+                requests_reset_in: Some(600),
                 tokens_left: Some(300),
                 tokens_limit: Some(30_000),
-                resets_in: Some(600),
+                tokens_reset_in: Some(600),
                 ..Reading::default()
             },
             1_000,
@@ -746,7 +881,7 @@ mod tests {
             Reading {
                 requests_left: Some(1),
                 requests_limit: Some(50),
-                resets_in: Some(60),
+                requests_reset_in: Some(60),
                 ..Reading::default()
             },
             1_000,

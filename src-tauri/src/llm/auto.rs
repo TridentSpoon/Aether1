@@ -145,6 +145,12 @@ pub fn is_online(provider: Provider) -> bool {
     ONLINE.contains(&provider)
 }
 
+/// The online providers, in the order the picker lists them. Public as a function rather
+/// than as the constant, so that nothing outside this module can index into the order.
+pub fn online_providers() -> impl Iterator<Item = Provider> {
+    ONLINE.into_iter()
+}
+
 /// The online providers, in the order the picker lists them.
 const ONLINE: [Provider; 5] = [
     Provider::Anthropic,
@@ -1230,7 +1236,7 @@ mod tests {
             super::super::ledger::Stored {
                 reading: super::super::ledger::Reading {
                     requests_left: Some(0),
-                    resets_in: Some(300),
+                    requests_reset_in: Some(300),
                     ..Default::default()
                 },
                 seen_at: super::super::ledger::now(),
