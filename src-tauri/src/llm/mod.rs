@@ -155,8 +155,6 @@ struct UsageStats {
     last_tps: f64,
     /// Whether the most recent reply's numbers were reported by the provider.
     last_measured: bool,
-    /// What the most recent reply alone cost. See `TurnStats`.
-    last_turn: Option<TurnStats>,
 }
 
 /// What one reply cost, as opposed to what the session has cost.
@@ -183,6 +181,24 @@ pub struct TurnStats {
     /// False when the counts are this app's character-count estimate rather than the
     /// provider's own, so the chip can say "about" instead of stating a figure it guessed.
     pub measured: bool,
+}
+
+thread_local! {
+    /// This thread's turn, waiting to be read by the handler that asked for it.
+    ///
+    /// Deliberately **not** a field on `UsageStats`, which is shared behind a mutex and
+    /// counts the session. The session totals are a running sum and do not care who adds
+    /// to them; one turn's figures belong to one answer, and `/api/chat`, the WebSocket
+    /// handler and a question relayed from a peer each generate on their own
+    /// `spawn_blocking` thread against the same engine. A field on the shared struct would
+    /// be overwritten by whichever request finished next, in the window where the first
+    /// one is still writing its benchmark and journalling the exchange -- and the chip
+    /// would then be describing somebody else's reply, plausibly and wrongly.
+    ///
+    /// Generation runs on the thread that asked for it, so the thread is the request. Same
+    /// mechanism and the same reasoning as `vault::consulted`, which is read two lines
+    /// away from this one for the same reason.
+    static TURN_STATS: std::cell::Cell<Option<TurnStats>> = const { std::cell::Cell::new(None) };
 }
 
 /// Serializable snapshot of UsageStats for the HUD's telemetry panel.
@@ -312,7 +328,7 @@ impl UsageStats {
             .map(|nanos| nanos as f64 / 1_000_000_000.0)
             .unwrap_or(duration_secs);
         self.last_tps = (completion_tok as f64 / seconds.max(0.05) * 10.0).round() / 10.0;
-        self.last_turn = Some(TurnStats {
+        let turn = TurnStats {
             prompt_tokens: prompt_tok,
             completion_tokens: completion_tok,
             tps: self.last_tps,
@@ -322,7 +338,8 @@ impl UsageStats {
                 .filter(|nanos| *nanos > 0)
                 .map(|nanos| (nanos as f64 / 100_000_000.0).round() / 10.0),
             measured: self.last_measured,
-        });
+        };
+        TURN_STATS.with(|cell| cell.set(Some(turn)));
     }
 
     fn snapshot(&self, about: SnapshotContext) -> UsageSnapshot {
@@ -2523,10 +2540,13 @@ impl LlmEngine {
         reply
     }
 
-    /// What the reply just generated cost, for the chip beside it. `None` before the
-    /// first reply of the process.
+    /// What the reply this thread just generated cost, for the chip beside it.
+    ///
+    /// Drained rather than read, exactly as `vault::consulted::taken` is drained and for
+    /// the same reason: what is left behind would be reported under the *next* answer as
+    /// though it had been measured for it. `None` on a path that reached no model.
     pub fn last_turn_stats(&self) -> Option<TurnStats> {
-        self.usage.lock().unwrap().last_turn
+        TURN_STATS.with(|cell| cell.take())
     }
 
     pub fn generate_identity_from_purpose(&self, purpose: &str) -> Identity {
@@ -3690,6 +3710,52 @@ mod tests {
         assert!(
             prompt.contains("The operator prefers helix."),
             "a fact written into the vault by hand must reach the prompt"
+        );
+    }
+
+    /// Codex caught this on #311: `last_turn` was a field on the shared `UsageStats`, so
+    /// a second request finishing in the window between the first recording its usage and
+    /// reading it back -- a window that holds a benchmark write, a capability refresh and
+    /// a journal write -- would hand the first answer the second one's figures. Two
+    /// clients is not hypothetical here: `/api/chat`, the WebSocket handler and a question
+    /// relayed from a peer all generate on their own thread against one engine.
+    #[test]
+    fn one_turn_s_figures_cannot_be_read_by_another_thread() {
+        let _guard = env_guard();
+        let engine = temp_engine("turn_stats_scope");
+
+        engine
+            .usage
+            .lock()
+            .unwrap()
+            .record_usage("here", "mine", 1.0, None);
+
+        // Another request, finishing on its own thread against the same engine, with
+        // numbers nothing like this one's.
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                engine.usage.lock().unwrap().record_usage(
+                    "a much longer question from somebody else entirely",
+                    "and a much longer answer to go with it, at length",
+                    9.0,
+                    None,
+                );
+                let theirs = engine.last_turn_stats().expect("their own turn");
+                assert!(theirs.prompt_tokens > 2, "{theirs:?}");
+            });
+        });
+
+        let mine = engine.last_turn_stats().expect("my turn, not theirs");
+        assert_eq!(
+            mine.prompt_tokens,
+            estimate_tokens("here"),
+            "the other thread's reply overwrote this one's figures: {mine:?}"
+        );
+
+        // And drained, so the next answer cannot inherit them.
+        assert!(
+            engine.last_turn_stats().is_none(),
+            "stats must be taken, not left for the next turn to report as its own"
         );
     }
 
