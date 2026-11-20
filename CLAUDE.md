@@ -61,12 +61,19 @@ failure and it reproduces on a clean checkout.
 ## Seeing a change actually work
 
 `aether1 --serve` binds loopback on 8378 with no token, so the real app can be driven over
-HTTP and with Playwright (Chromium is preinstalled). Point `HOME` at a scratch directory — the
-database, the vault and the settings all hang off it, so each run starts clean:
+HTTP and with Playwright (Chromium is preinstalled). Point `HOME` at a scratch directory so the
+vault starts clean:
 
 ```bash
 HOME=/tmp/scratch ./src-tauri/target/debug/aether1 --serve
 ```
+
+**`HOME` does not move the database, and the settings are in the database.** A binary run out
+of the checkout finds `frontend/` beside it and uses the repo as its root, so the database is
+always `backend/aether1_memory.db` whatever `HOME` says — `project_root()` only falls back to
+the share directory for an installed build. To start from nothing, delete that file; otherwise
+the next run inherits the last one's provider, keys and router settings, and a stale row will
+look like a fault in whatever you are testing.
 
 A first run shows `#setup-modal` over the page; dismiss `#btn-close-setup` before any click.
 

@@ -145,6 +145,12 @@ pub fn is_online(provider: Provider) -> bool {
     ONLINE.contains(&provider)
 }
 
+/// The online providers, in the order the picker lists them. Public as a function rather
+/// than as the constant, so that nothing outside this module can index into the order.
+pub fn online_providers() -> impl Iterator<Item = Provider> {
+    ONLINE.into_iter()
+}
+
 /// The online providers, in the order the picker lists them.
 const ONLINE: [Provider; 5] = [
     Provider::Anthropic,
@@ -212,6 +218,12 @@ pub struct Candidate {
     /// provider that vanishes when a switch is flipped is indistinguishable from one that
     /// was never set up.
     pub ready: bool,
+    /// What this provider last said about its own allowance, from the headers of the last
+    /// reply it gave. `Unknown` for every local model, for a provider that has never been
+    /// used, and for one that reports nothing of the kind -- and `Unknown` is the value
+    /// that leaves the router doing exactly what it did before the ledger existed. See
+    /// `llm::ledger`.
+    pub headroom: super::ledger::Standing,
 }
 
 /// Everything that could answer, as the picker lists it and as the router chooses from it.
@@ -257,6 +269,9 @@ pub fn candidates(db: &MemoryDb) -> Candidates {
             local: true,
             // On this machine, so neither a key nor local-only mode can stand in the way.
             ready: true,
+            // Nothing meters a model on the operator's own disk, and a figure here would
+            // be the one claim this whole project is against.
+            headroom: super::ledger::Standing::Unknown,
         })
         .collect();
 
@@ -281,6 +296,10 @@ pub fn candidates(db: &MemoryDb) -> Candidates {
             // A provider with no key switches and then fails with a 401, which is worse than
             // not being offered.
             ready: !super::api_key_for(db, provider).trim().is_empty(),
+            headroom: super::ledger::standing(
+                db.provider_headroom(provider.key()),
+                super::ledger::now(),
+            ),
         })
         .collect();
 
@@ -307,6 +326,30 @@ impl Candidates {
             return None;
         }
         self.online.iter().find(|c| c.ready && c.provider == chosen)
+    }
+
+    /// Whether the chosen cloud provider can take this turn, and if not, which of the two
+    /// reasons it is.
+    ///
+    /// The distinction is the whole point of returning three states rather than an Option.
+    /// "No provider is set up for Auto" is a thing the operator fixes once, in Settings;
+    /// "Anthropic has nothing left on this key for another four minutes" is a thing that
+    /// fixes itself, and telling somebody to go and check their configuration because of
+    /// it would send them looking for a fault that is not there. One sentence each, chosen
+    /// by what is actually true.
+    fn cloud_door(&self, chosen: Provider) -> CloudDoor<'_> {
+        let Some(candidate) = self.cloud(chosen) else {
+            return CloudDoor::Shut;
+        };
+        match candidate.headroom {
+            super::ledger::Standing::Spent { clears_in } => CloudDoor::Spent {
+                provider: candidate.provider,
+                clears_in,
+            },
+            // A thin margin is deliberately not a closed door: see the head of
+            // `llm::ledger` for why the router acts on `Spent` and on nothing else.
+            _ => CloudDoor::Open(candidate),
+        }
     }
 
     /// Whether anything local could answer at all.
@@ -545,6 +588,41 @@ pub fn built_in_judge_prompt() -> String {
         .to_string()
 }
 
+/// Whether the one online provider Auto may use can take this turn.
+#[derive(Debug)]
+enum CloudDoor<'a> {
+    Open(&'a Candidate),
+    /// Configured, reachable, and out of allowance for the moment. `clears_in` is None
+    /// where the provider said nothing left without saying when it refills.
+    Spent {
+        provider: Provider,
+        clears_in: Option<u64>,
+    },
+    /// Nowhere to send it: no provider chosen for Auto, no key for the one that was, or
+    /// local-only mode refusing them all.
+    Shut,
+}
+
+/// A wait as somebody would say it, for the one line Auto prints.
+///
+/// Minutes once it is past a minute, and rounded up, because the sentence is read as a
+/// promise: "in 1 minute" for sixty-one seconds would have somebody trying again and
+/// finding the door still shut.
+fn in_words(seconds: u64) -> String {
+    match seconds {
+        0..=1 => "a moment".to_string(),
+        2..=59 => format!("{seconds} seconds"),
+        _ => {
+            let minutes = seconds.div_ceil(60);
+            if minutes == 1 {
+                "a minute".to_string()
+            } else {
+                format!("{minutes} minutes")
+            }
+        }
+    }
+}
+
 /// What Auto decided, ready to be applied to the turn and shown to the operator.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Routed {
@@ -617,10 +695,47 @@ pub fn decide(
     // visibly struggles. Everything else stays on this machine, which is the default this
     // whole project is built around.
     let wants_cloud = verdict.difficulty == Difficulty::Hard;
-    let cloud = available.cloud(configured);
+    let door = available.cloud_door(configured);
 
     if wants_cloud {
-        if let Some(cloud) = cloud {
+        /* The allowance has run out, and this is the branch the ledger exists for. The turn
+        stays on this machine instead of going out to be refused, which is the one thing a
+        program that owns the model server can do here and a client of an endpoint cannot:
+        there is somewhere else for the work to go. Said in full, including when it comes
+        back, because a turn that silently drops to a 7B is a worse answer with no
+        explanation -- and because "wait four minutes and ask again" is a decision the
+        operator may want to make for themselves. */
+        if let CloudDoor::Spent {
+            provider,
+            clears_in,
+        } = door
+        {
+            if !available.has_local() {
+                return None;
+            }
+            return Some(Routed {
+                provider: available.local_provider,
+                model: local_base.unwrap_or_default().to_string(),
+                tools,
+                why: match clears_in {
+                    Some(seconds) => format!(
+                        "Auto kept this on your machine -- it would have used {}, but that \
+                         key has no allowance left for another {}.",
+                        provider.label(),
+                        in_words(seconds)
+                    ),
+                    // The provider said it has nothing left and did not say when it
+                    // refills. Claiming a time here would be inventing the one figure the
+                    // operator would act on.
+                    None => format!(
+                        "Auto kept this on your machine -- it would have used {}, but that \
+                         key has nothing left at the moment.",
+                        provider.label()
+                    ),
+                },
+            });
+        }
+        if let CloudDoor::Open(cloud) = door {
             // The one field whose unsureness costs nothing but a word: `is_code` only ever
             // picked which noun this line uses, so an unsure one takes the general noun
             // rather than claiming to know.
@@ -635,7 +750,11 @@ pub fn decide(
                 tools,
                 why: format!(
                     "Auto sent this to {} -- it reads as {subject} worth a larger model.",
-                    cloud.provider
+                    // The name, not the settings key. `Display` for a provider is its key,
+                    // which put "Auto sent this to anthropic" in front of the operator --
+                    // and reads beside the spent-allowance line below, which says
+                    // "Anthropic".
+                    cloud.provider.label()
                 ),
             });
         }
@@ -856,6 +975,7 @@ mod tests {
             local: true,
             tools: Some(true),
             ready: true,
+            headroom: super::super::ledger::Standing::Unknown,
         }
     }
 
@@ -866,6 +986,15 @@ mod tests {
             local: false,
             tools: None,
             ready,
+            headroom: super::super::ledger::Standing::Unknown,
+        }
+    }
+
+    /// The same cloud provider, with the ledger saying its allowance has run out.
+    fn spent_cloud(provider: Provider, clears_in: Option<u64>) -> Candidate {
+        Candidate {
+            headroom: super::super::ledger::Standing::Spent { clears_in },
+            ..cloud(provider, true)
         }
     }
 
@@ -957,6 +1086,189 @@ mod tests {
             "the operator's own cloud provider, not the first in the list"
         );
         assert!(routed.why.contains("code"));
+    }
+
+    /// `both()` with the chosen provider's allowance gone.
+    fn spent(clears_in: Option<u64>) -> Candidates {
+        Candidates {
+            online: vec![
+                spent_cloud(Provider::Anthropic, clears_in),
+                cloud(Provider::OpenAi, true),
+            ],
+            ..both()
+        }
+    }
+
+    #[test]
+    fn a_hard_question_stays_on_the_machine_when_the_chosen_key_has_nothing_left() {
+        let routed = decide(
+            verdict(Difficulty::Hard, false, true),
+            &spent(Some(240)),
+            Provider::Anthropic,
+            Reach {
+                tools: true,
+                web: true,
+            },
+            Some("qwen3:8b"),
+        )
+        .expect("something to route to");
+        assert_eq!(
+            routed.provider,
+            Provider::Ollama,
+            "the turn goes where there is somewhere for it to go, not out to be refused"
+        );
+        assert_eq!(routed.model, "qwen3:8b");
+        assert!(routed.why.contains("Anthropic"), "{}", routed.why);
+        assert!(routed.why.contains("4 minutes"), "{}", routed.why);
+    }
+
+    #[test]
+    fn a_spent_provider_with_no_reset_time_is_not_given_an_invented_one() {
+        let routed = decide(
+            verdict(Difficulty::Hard, false, false),
+            &spent(None),
+            Provider::Anthropic,
+            Reach {
+                tools: false,
+                web: false,
+            },
+            Some("qwen3:8b"),
+        )
+        .expect("something to route to");
+        assert!(
+            routed.why.contains("nothing left at the moment"),
+            "{}",
+            routed.why
+        );
+        assert!(
+            !routed.why.contains("another"),
+            "no wait is claimed when none was reported: {}",
+            routed.why
+        );
+    }
+
+    #[test]
+    fn another_providers_spent_allowance_is_not_the_chosen_ones() {
+        // Anthropic is out, and the operator chose OpenAI. One key's exhaustion must not
+        // move a turn that was never going to that key.
+        let routed = decide(
+            verdict(Difficulty::Hard, false, false),
+            &spent(Some(240)),
+            Provider::OpenAi,
+            Reach {
+                tools: true,
+                web: true,
+            },
+            None,
+        )
+        .expect("something to route to");
+        assert_eq!(routed.provider, Provider::OpenAi);
+    }
+
+    #[test]
+    fn a_spent_provider_with_nothing_installed_locally_leaves_the_turn_alone() {
+        // No local model, so there is nowhere to move the turn to. Routing it to a machine
+        // with no model on it would turn a provider's "wait four minutes" into the offline
+        // persona's canned reply, which is strictly worse than the refusal.
+        let nothing_local = Candidates {
+            local: vec![],
+            ..spent(Some(240))
+        };
+        assert_eq!(
+            decide(
+                verdict(Difficulty::Hard, false, false),
+                &nothing_local,
+                Provider::Anthropic,
+                Reach {
+                    tools: true,
+                    web: true,
+                },
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_simple_question_is_unaffected_by_a_spent_cloud_key() {
+        // It was never going to the cloud, so the ledger has nothing to say about it and
+        // the line must not start explaining an allowance nobody asked about.
+        let routed = decide(
+            verdict(Difficulty::Simple, false, false),
+            &spent(Some(240)),
+            Provider::Anthropic,
+            Reach {
+                tools: false,
+                web: false,
+            },
+            None,
+        )
+        .expect("something to route to");
+        assert_eq!(routed.provider, Provider::Ollama);
+        assert_eq!(routed.why, "Auto answered this on your machine.");
+    }
+
+    #[test]
+    fn a_wait_is_worded_so_that_trying_again_at_the_time_it_names_works() {
+        assert_eq!(in_words(0), "a moment");
+        assert_eq!(in_words(40), "40 seconds");
+        assert_eq!(in_words(60), "a minute");
+        // Rounded up: at sixty-one seconds, "a minute" would send somebody back early.
+        assert_eq!(in_words(61), "2 minutes");
+        assert_eq!(in_words(240), "4 minutes");
+    }
+
+    #[test]
+    fn the_ledger_reaches_the_router_through_the_candidate_list() {
+        // The wiring, not the arithmetic: a row written for one provider has to come back
+        // on that provider's candidate and on no other.
+        let path = std::env::temp_dir().join(format!(
+            "aether1_auto_ledger_{}_{}.db",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = MemoryDb::open(&path).unwrap();
+        db.set_setting("llm_api_key_anthropic", &serde_json::json!("sk-test"))
+            .unwrap();
+        db.record_provider_headroom(
+            Provider::Anthropic.key(),
+            super::super::ledger::Stored {
+                reading: super::super::ledger::Reading {
+                    requests_left: Some(0),
+                    requests_reset_in: Some(300),
+                    ..Default::default()
+                },
+                seen_at: super::super::ledger::now(),
+            },
+        )
+        .unwrap();
+
+        let available = candidates(&db);
+        let anthropic = available
+            .online
+            .iter()
+            .find(|c| c.provider == Provider::Anthropic)
+            .expect("Anthropic is always listed");
+        assert!(
+            matches!(
+                anthropic.headroom,
+                super::super::ledger::Standing::Spent { .. }
+            ),
+            "{:?}",
+            anthropic.headroom
+        );
+        let openai = available
+            .online
+            .iter()
+            .find(|c| c.provider == Provider::OpenAi)
+            .expect("OpenAI is always listed");
+        assert_eq!(
+            openai.headroom,
+            super::super::ledger::Standing::Unknown,
+            "a provider that has never been used knows nothing, not nothing left"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

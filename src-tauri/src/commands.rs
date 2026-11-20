@@ -239,7 +239,37 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
 ///     never have more than one ready member.
 ///
 /// Read-only. Switching is `save_settings`, which already writes both halves at once.
+/// One provider's standing, as the picker reads it. Null for "nothing known", which is
+/// what a provider that reports no such headers must come back as.
+///
+/// The wording is left to the front end on purpose, the way `tools: null` already is: the
+/// same figure is said differently in an option label and in a pane row, and a sentence
+/// built here would have to be unpicked there to fit either.
+fn headroom_json(standing: llm::ledger::Standing) -> Value {
+    match standing {
+        llm::ledger::Standing::Unknown => Value::Null,
+        llm::ledger::Standing::Clear {
+            requests_left,
+            tokens_left,
+            left_percent,
+        } => serde_json::json!({
+            "spent": false,
+            "requests_left": requests_left,
+            "tokens_left": tokens_left,
+            "left_percent": left_percent,
+        }),
+        llm::ledger::Standing::Spent { clears_in } => serde_json::json!({
+            "spent": true,
+            "clears_in": clears_in,
+        }),
+    }
+}
+
 pub fn brains(engine: &LlmEngine) -> Value {
+    // So that the figures the picker shows are the ones from the last reply rather than the
+    // ones from the reply before it. The picker is often the first thing opened after a
+    // refusal, and a stale row is exactly what somebody would be opening it to check.
+    engine.absorb_provider_readings();
     let db = engine.db();
     let provider_key = db.get_setting_string("llm_provider", "offline");
     let model = db.get_setting_string("llm_model", "");
@@ -272,6 +302,11 @@ pub fn brains(engine: &LlmEngine) -> Value {
                 // stored for it. A gateway deliberately has none -- its model ids are
                 // whatever an administrator connected, and an invented one is a 404.
                 "model": entry.model,
+                // What this key has left, as the provider last reported it. Absent rather
+                // than zeroed where nothing is known, so the picker can say nothing at all
+                // about a provider that meters nothing -- an invented "100%" on a provider
+                // that never said would be the one figure somebody would plan around.
+                "headroom": headroom_json(entry.headroom),
             })
         })
         .collect();
@@ -960,6 +995,9 @@ pub fn forget_provider_account(engine: &LlmEngine, provider_key: &str) -> Result
     }
     let _ = db.delete_setting(&llm::endpoint_setting_for(provider));
     let _ = db.delete_setting(&llm::model_setting_for(provider));
+    // What that account had left is a fact about the account, so it goes with it. A
+    // provider set up again later starts as one nothing is known about, which is what it is.
+    let _ = db.forget_provider_headroom(provider.key());
     Ok(provider_accounts(engine))
 }
 
@@ -1532,11 +1570,45 @@ fn check_pane_settings(map: &serde_json::Map<String, Value>) -> Result<(), Strin
     Ok(())
 }
 
+/// What a provider's ledger row was recorded against: the key its replies were answered
+/// with, and the address they came from.
+///
+/// Never stored anywhere -- it is built, compared against itself a few lines later, and
+/// dropped. See `MemoryDb::forget_provider_headroom` for why the row is thrown away rather
+/// than filed under this.
+fn connection_identity(engine: &LlmEngine, provider: llm::Provider) -> String {
+    let db = engine.db();
+    let address = if provider == llm::Provider::Gateway {
+        db.get_setting_string(llm::GATEWAY_URL_SETTING, "")
+    } else {
+        db.get_setting_string(&llm::endpoint_setting_for(provider), "")
+    };
+    format!("{address}\u{0}{}", llm::api_key_for(db, provider))
+}
+
+/// Every online provider's connection identity, to be compared across a save.
+fn connection_identities(engine: &LlmEngine) -> Vec<(llm::Provider, String)> {
+    llm::auto::online_providers()
+        .map(|provider| (provider, connection_identity(engine, provider)))
+        .collect()
+}
+
 pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> {
     let Some(map) = settings.as_object() else {
         return Err("settings payload must be a JSON object".to_string());
     };
     check_pane_settings(map)?;
+    /* What every online provider's connection looked like before this save, so that the
+    ones it changes can have their recorded allowance thrown away. A ledger row is filed
+    under the provider, because the provider is all a response identifies -- so a key
+    pasted in to replace one that ran out would inherit the exhausted key's allowance and
+    Auto would go on keeping turns local for a window the new key never spent.
+
+    Taken as a before-and-after over the whole list rather than hooked onto each of the
+    four places a credential or address can be written. Those four are easy to write a
+    fifth beside, and a fifth that forgot this line would be a bug visible only to somebody
+    who had just paid for a new key. */
+    let before = connection_identities(engine);
     /* Which provider this payload is about. Settings saves the provider and its details
     in one request, so the stored value is still the *previous* provider at this point and
     reading it here would file OpenAI's key under Anthropic. */
@@ -1689,6 +1761,15 @@ pub fn save_settings(engine: &LlmEngine, settings: Value) -> Result<(), String> 
             // read as a fallback by `api_key_for`, so a stale key left in it would answer
             // for a provider that has never been given one.
             crate::secrets::clear(engine.db(), llm::SHARED_KEY_SETTING);
+        }
+    }
+
+    // Best-effort, and after everything else: a row that outlives its connection costs a
+    // provider the operator may not be offered, but a failure to delete one must not cost
+    // them the save they actually asked for.
+    for (provider, was) in before {
+        if connection_identity(engine, provider) != was {
+            let _ = engine.db().forget_provider_headroom(provider.key());
         }
     }
     Ok(())
@@ -3146,6 +3227,106 @@ mod tests {
         }
         // And the key that was fine did not go in beside a refused one.
         assert_eq!(engine.db().get_setting_string("agent_name", ""), "Rory");
+    }
+
+    /// A ledger row saying the provider has nothing left.
+    fn spent_row(engine: &LlmEngine, provider: llm::Provider) {
+        engine
+            .db()
+            .record_provider_headroom(
+                provider.key(),
+                llm::ledger::Stored {
+                    reading: llm::ledger::Reading {
+                        requests_left: Some(0),
+                        requests_reset_in: Some(3_600),
+                        ..Default::default()
+                    },
+                    seen_at: llm::ledger::now(),
+                },
+            )
+            .unwrap();
+    }
+
+    fn is_spent(engine: &LlmEngine, provider: llm::Provider) -> bool {
+        matches!(
+            llm::ledger::standing(
+                engine.db().provider_headroom(provider.key()),
+                llm::ledger::now()
+            ),
+            llm::ledger::Standing::Spent { .. }
+        )
+    }
+
+    #[test]
+    fn a_replaced_key_does_not_inherit_the_old_keys_spent_allowance() {
+        // The case this is for: the allowance runs out, the operator pastes in a key from
+        // another account, and the row filed under "anthropic" tells Auto the fresh key
+        // has nothing left for the rest of an hour it never spent.
+        let engine = resume_engine("ledger_key_swap");
+        crate::secrets::use_settings_table_only();
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "anthropic", "llm_api_key": "sk-first"}),
+        )
+        .unwrap();
+        spent_row(&engine, llm::Provider::Anthropic);
+        assert!(is_spent(&engine, llm::Provider::Anthropic));
+
+        // A save that changes nothing about the connection leaves the row alone -- the
+        // allowance is still that key's, and forgetting it on every save would make the
+        // ledger useless.
+        save_settings(&engine, serde_json::json!({"agent_name": "Rory"})).unwrap();
+        assert!(
+            is_spent(&engine, llm::Provider::Anthropic),
+            "an unrelated save must not throw the reading away"
+        );
+
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "anthropic", "llm_api_key": "sk-second"}),
+        )
+        .unwrap();
+        assert!(
+            !is_spent(&engine, llm::Provider::Anthropic),
+            "the new key has its own allowance, and nothing yet known about it"
+        );
+    }
+
+    #[test]
+    fn repointing_the_gateway_forgets_what_the_last_one_had_left() {
+        // The gateway's address is half of which provider is actually answering, so a new
+        // address is as much a new connection as a new key is.
+        let engine = resume_engine("ledger_gateway_move");
+        crate::secrets::use_settings_table_only();
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_gateway_url": "http://one.invalid/v1", "llm_gateway_key": "gw-1"}),
+        )
+        .unwrap();
+        spent_row(&engine, llm::Provider::Gateway);
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_gateway_url": "http://two.invalid/v1"}),
+        )
+        .unwrap();
+        assert!(!is_spent(&engine, llm::Provider::Gateway));
+    }
+
+    #[test]
+    fn forgetting_an_account_forgets_what_it_had_left() {
+        let engine = resume_engine("ledger_forget_account");
+        crate::secrets::use_settings_table_only();
+        save_settings(
+            &engine,
+            serde_json::json!({"llm_provider": "openai", "llm_api_key": "sk-openai"}),
+        )
+        .unwrap();
+        spent_row(&engine, llm::Provider::OpenAi);
+        forget_provider_account(&engine, "openai").unwrap();
+        assert!(engine
+            .db()
+            .provider_headroom(llm::Provider::OpenAi.key())
+            .is_none());
     }
 
     #[test]

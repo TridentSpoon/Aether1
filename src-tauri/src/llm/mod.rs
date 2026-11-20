@@ -9,6 +9,7 @@ mod db;
 pub mod eyes;
 pub mod flow;
 mod genesis;
+pub mod ledger;
 mod persona;
 mod pricing;
 pub(crate) mod providers;
@@ -785,6 +786,13 @@ impl LlmEngine {
         if !auto::enabled(&self.db) {
             return (config, None);
         }
+        /* Before the router reads the ledger, not after: the reading that matters most is
+        the one from the turn that just failed, and a router deciding where this question
+        goes from a row written two turns ago is the stale-figure fault this file has
+        chased before. `record_benchmark_sample` writes the other half of it at the end of
+        a reply, but a 429 never reaches the end of a reply -- which is precisely the
+        reading worth having. */
+        self.absorb_provider_readings();
         // Asked here and passed in, because the router may only ever narrow it: an install
         // with the tools switched off does not acquire them because a judgment said the
         // question needs a lookup.
@@ -2536,6 +2544,7 @@ impl LlmEngine {
             reported,
         );
         self.record_benchmark_sample(&config, reported);
+        self.absorb_provider_readings();
         self.refresh_capability(&config);
         reply
     }
@@ -2714,6 +2723,27 @@ impl LlmEngine {
             usage.completion_tokens,
             nanos as f64 / 1_000_000_000.0,
         );
+    }
+
+    /// Writes down whatever the providers said about their own allowances since this was
+    /// last called.
+    ///
+    /// The join between a module that makes HTTP calls and one that owns a database, and
+    /// the reason it is a drain rather than a write at the call site: `providers.rs` holds
+    /// no database handle, and giving it one so that a response header could be stored
+    /// would put storage inside the wire format for the sake of seven integers. So it
+    /// notes the reading in a plain struct and this takes it from there.
+    ///
+    /// Called in two places -- before the router reads the ledger, and after a reply --
+    /// because those are the two moments at which something has just been learned. Calling
+    /// it when nothing has is free: the slot is empty and the loop does nothing.
+    pub fn absorb_provider_readings(&self) {
+        for (provider, stored) in ledger::take_pending() {
+            // Best-effort: a failed write means the router carries on with the row it had,
+            // which is the behaviour this program has always had. Nothing about a reply may
+            // depend on whether its own metering reached the disk.
+            let _ = self.db.record_provider_headroom(provider.key(), stored);
+        }
     }
 
     pub fn db(&self) -> &MemoryDb {

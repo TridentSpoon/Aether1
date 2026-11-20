@@ -9957,6 +9957,72 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const brainValue = (provider, model) => `${provider}\u001f${model || ''}`;
 
+    /* What a provider has left, as the ledger recorded it from the headers of that
+       provider's own last reply. See src-tauri/src/llm/ledger.rs.
+
+       `headroom` is null for everything the ledger cannot speak about: a local model, a key
+       that has never been used, and a provider that sends no such headers at all -- Gemini
+       sends none. Null has to read as silence here and not as a full bar, because the one
+       thing worse than not showing an allowance is showing one that was invented.
+
+       The wait is rounded up, in both of the two places it is worded, for the reason the
+       Rust side rounds it up: the badge is read as "try again then". */
+    function headroomWait(seconds) {
+        if (!Number.isFinite(seconds) || seconds <= 1) return 'A MOMENT';
+        if (seconds < 60) return `${Math.ceil(seconds)}S`;
+        const minutes = Math.ceil(seconds / 60);
+        return `${minutes}M`;
+    }
+
+    /* The same wait as a sentence would say it. The badge form is an abbreviation and reads
+       as one, so a tooltip that said "for another 4m" would be a short label wearing a
+       sentence's clothes. */
+    function headroomWaitWords(seconds) {
+        if (!Number.isFinite(seconds) || seconds <= 1) return 'a moment';
+        if (seconds < 60) return `${Math.ceil(seconds)} seconds`;
+        const minutes = Math.ceil(seconds / 60);
+        return minutes === 1 ? 'a minute' : `${minutes} minutes`;
+    }
+
+    /* The short badge, in the same slot as NO TOOLS and LOCAL-ONLY. Only two things earn
+       one: an allowance that has run out, and one thin enough to be about to. A provider
+       with most of its allowance left gets no badge, because a row that is fine should look
+       like every other row that is fine. */
+    function headroomNote(entry) {
+        const headroom = entry && entry.headroom;
+        if (!headroom) return '';
+        if (headroom.spent) {
+            return headroom.clears_in === null || headroom.clears_in === undefined
+                ? 'NO ALLOWANCE'
+                : `SPENT · ${headroomWait(headroom.clears_in)}`;
+        }
+        const left = headroom.left_percent;
+        if (typeof left === 'number' && left <= 10) return `${left}% LEFT`;
+        return '';
+    }
+
+    /* The sentence behind the badge. Longer than the badge can be and still worth having:
+       "SPENT · 4M" says what, and this says what it means for the next message -- which for
+       Auto is that the turn stays on this computer rather than failing. */
+    function headroomTitle(entry) {
+        const headroom = entry && entry.headroom;
+        if (!headroom) return '';
+        const label = (entry.label || entry.provider || 'This provider');
+        if (headroom.spent) {
+            const when = headroom.clears_in === null || headroom.clears_in === undefined
+                ? 'and did not say when it refills'
+                : `for another ${headroomWaitWords(headroom.clears_in)}`;
+            return `${label} reported no allowance left on this key ${when}. `
+                + 'Auto will keep messages on this computer until it clears; picking it '
+                + 'yourself will most likely be refused.';
+        }
+        const parts = [];
+        if (typeof headroom.requests_left === 'number') parts.push(`${headroom.requests_left} requests`);
+        if (typeof headroom.tokens_left === 'number') parts.push(`${headroom.tokens_left} tokens`);
+        if (!parts.length) return '';
+        return `${label} reported ${parts.join(' and ')} left on this key when it last answered.`;
+    }
+
     /* Draws one of the two selects. Never leaves it empty and never takes it away: a
        control that vanishes when the model server is down is indistinguishable from one
        that was removed, which is exactly the report this started from. With nothing to
@@ -10007,7 +10073,14 @@ document.addEventListener('DOMContentLoaded', () => {
             for (const entry of online) {
                 const option = document.createElement('option');
                 option.value = brainValue(entry.provider, entry.model);
-                option.textContent = entry.model ? `${entry.label} — ${entry.model}` : entry.label;
+                const name = entry.model ? `${entry.label} — ${entry.model}` : entry.label;
+                // What this key has left, where there is something worth saying about it.
+                // Shown and still selectable: an exhausted allowance is the provider's
+                // state for the next few minutes, not a reason to take the operator's own
+                // provider away from them.
+                const note = headroomNote(entry);
+                option.textContent = note ? `${name} — ${note.toLowerCase()}` : name;
+                option.title = headroomTitle(entry);
                 // Local-only mode refuses these before the request is built, so they are
                 // shown and not selectable rather than hidden: somebody who has configured
                 // Claude and cannot pick it should be able to see why.
@@ -10239,7 +10312,10 @@ document.addEventListener('DOMContentLoaded', () => {
             provider: entry.provider,
             model: entry.model,
             name: entry.model ? `${entry.label} — ${entry.model}` : entry.label,
-            note: data.local_only ? 'LOCAL-ONLY' : '',
+            // Local-only mode first where both apply: it is the one the operator can do
+            // something about, and a row cannot carry two badges.
+            note: data.local_only ? 'LOCAL-ONLY' : headroomNote(entry),
+            title: data.local_only ? '' : headroomTitle(entry),
             // Local-only mode refuses these before the request is built, so they are shown
             // and not selectable rather than hidden: somebody who has configured Claude and
             // cannot pick it should be able to see why.
@@ -10403,6 +10479,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 const value = brainValue(row.provider, row.model);
                 item.setAttribute('aria-selected', value === brainState.current ? 'true' : 'false');
                 item.disabled = row.disabled;
+                // The sentence behind a badge, where the badge has one. A row with nothing
+                // to explain is left without a tooltip rather than given an empty one.
+                if (row.title) item.title = row.title;
                 const name = document.createElement('span');
                 name.className = 'brain-pop-item-name';
                 name.textContent = row.name;

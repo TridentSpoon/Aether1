@@ -12,6 +12,12 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 
+// The one type this store borrows from elsewhere in `llm`, rather than mirroring in a
+// struct of its own. A second struct with the same seven fields would be two definitions of
+// one row, and the way that goes wrong is silent: a field added to the reading and not to
+// the row is a figure that is parsed, carried, and then quietly dropped on the way to disk.
+use super::ledger::{Reading, Stored};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Message {
     pub sender: String,
@@ -258,6 +264,17 @@ impl MemoryDb {
                 last_tps REAL NOT NULL DEFAULT 0,
                 last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (provider, model)
+            );
+            CREATE TABLE IF NOT EXISTS provider_ledger (
+                provider TEXT PRIMARY KEY,
+                requests_left INTEGER,
+                requests_limit INTEGER,
+                requests_reset_seconds INTEGER,
+                tokens_left INTEGER,
+                tokens_limit INTEGER,
+                tokens_reset_seconds INTEGER,
+                refused_for_seconds INTEGER,
+                seen_at INTEGER NOT NULL
             );",
         )?;
         db.migrate()?;
@@ -878,6 +895,100 @@ impl MemoryDb {
                  last_tps = ?5,
                  last_used = CURRENT_TIMESTAMP",
             params![provider, model, completion_tokens, generation_seconds, tps],
+        )?;
+        Ok(())
+    }
+
+    /// Writes down what a provider last said about its own allowance.
+    ///
+    /// One row per provider, replaced outright. There is no history kept and no averaging
+    /// done, because unlike `model_benchmarks` this is not a measurement that gets better
+    /// with more samples -- it is a balance, and an old balance is not evidence about the
+    /// current one. The row is the last thing the provider said, and nothing else.
+    pub fn record_provider_headroom(&self, provider: &str, stored: Stored) -> rusqlite::Result<()> {
+        let reading = stored.reading;
+        self.connect()?.execute(
+            "INSERT INTO provider_ledger
+                 (provider, requests_left, requests_limit, requests_reset_seconds,
+                  tokens_left, tokens_limit, tokens_reset_seconds,
+                  refused_for_seconds, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(provider) DO UPDATE SET
+                 requests_left = ?2,
+                 requests_limit = ?3,
+                 requests_reset_seconds = ?4,
+                 tokens_left = ?5,
+                 tokens_limit = ?6,
+                 tokens_reset_seconds = ?7,
+                 refused_for_seconds = ?8,
+                 seen_at = ?9",
+            params![
+                provider,
+                reading.requests_left,
+                reading.requests_limit,
+                reading.requests_reset_in,
+                reading.tokens_left,
+                reading.tokens_limit,
+                reading.tokens_reset_in,
+                reading.refused_for,
+                stored.seen_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// What one provider last said, or None if it has never said anything.
+    ///
+    /// A missing row and a failed read are the same answer on purpose: both mean nothing is
+    /// known, and `ledger::standing` turns "nothing known" into the behaviour this program
+    /// had before the ledger existed. A database error here must not be able to refuse a
+    /// provider.
+    pub fn provider_headroom(&self, provider: &str) -> Option<Stored> {
+        let conn = self.connect().ok()?;
+        conn.query_row(
+            "SELECT requests_left, requests_limit, requests_reset_seconds,
+                    tokens_left, tokens_limit, tokens_reset_seconds,
+                    refused_for_seconds, seen_at
+             FROM provider_ledger WHERE provider = ?1",
+            params![provider],
+            |row| {
+                Ok(Stored {
+                    reading: Reading {
+                        requests_left: row.get(0)?,
+                        requests_limit: row.get(1)?,
+                        requests_reset_in: row.get(2)?,
+                        tokens_left: row.get(3)?,
+                        tokens_limit: row.get(4)?,
+                        tokens_reset_in: row.get(5)?,
+                        refused_for: row.get(6)?,
+                    },
+                    seen_at: row.get(7)?,
+                })
+            },
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// Forgets what a provider said, because it was said by a connection that no longer
+    /// exists.
+    ///
+    /// A row is a statement about one key at one address, but it is filed under the
+    /// provider, which is the only thing the response itself identifies. So when the key or
+    /// the address changes, the row stops describing anything: the operator who pastes a
+    /// fresh key *because* the old one ran out would otherwise be told, by the allowance
+    /// their previous key reported, that the new one has nothing left -- and Auto would go
+    /// on keeping turns local until a window they never used had run its course.
+    ///
+    /// Forgetting rather than re-keying the row by credential, deliberately. Tying a stored
+    /// balance to a key would mean keeping something derived from a secret in a table the
+    /// secrets deliberately do not live in, and the thing being protected is worth less than
+    /// that: one unmetered request, after which the provider says what the new key has.
+    pub fn forget_provider_headroom(&self, provider: &str) -> rusqlite::Result<()> {
+        self.connect()?.execute(
+            "DELETE FROM provider_ledger WHERE provider = ?1",
+            params![provider],
         )?;
         Ok(())
     }
