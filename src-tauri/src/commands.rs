@@ -150,6 +150,11 @@ pub fn generate_response_streamed_with_media(
         "agent_name": agent_name,
         "notes": crate::vault::consulted::to_json(&notes),
         "handover": handover.as_ref().map(handover_json),
+        /* What this one reply cost, beside the reply itself. The telemetry panel has
+        always carried the session totals, and a session total cannot answer "why was
+        that one slow" -- which is the question a 2.8 tok/s laptop makes somebody ask on
+        every turn. */
+        "stats": engine.last_turn_stats(),
     }))
 }
 
