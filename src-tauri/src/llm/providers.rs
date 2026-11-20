@@ -271,7 +271,8 @@ fn role_for(sender: &str, model_role: &str) -> String {
 /// wrong, short of pasting a wall of JSON into the chat.
 const MAX_ERROR_BODY: usize = 600;
 
-/// Turns a non-2xx response into an error that carries what the provider actually said.
+/// Turns a non-2xx response into an error that carries what the provider actually said,
+/// and notes what its headers said about the allowance it was spent from.
 ///
 /// Every request here is built with `http_status_as_error(false)` so a 400 arrives as a
 /// response with a readable body rather than as a bare status code. That body is the whole
@@ -279,10 +280,18 @@ const MAX_ERROR_BODY: usize = 600;
 /// body attached says `messages: roles must alternate between "user" and "assistant"`, or
 /// names the model that does not exist, or the max_tokens that is too high for it. The
 /// status stays in the string too, because `explain_failure` matches on it.
+///
+/// The provider is taken for the reading, and the reading is taken here rather than at each
+/// of the thirteen call sites because this is the one funnel every response passes through
+/// -- including the refusals. A 429 is the single most informative response the ledger ever
+/// sees, since it carries `retry-after`, and it is exactly the one that would be missed by
+/// metering only the replies that worked. See `ledger`.
 fn checked(
+    provider: Provider,
     response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
 ) -> Result<ureq::http::Response<ureq::Body>, String> {
     let mut response = response.map_err(|e| e.to_string())?;
+    note_headroom(provider, response.headers());
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -301,6 +310,28 @@ fn checked(
         shown.push_str("...");
     }
     Err(format!("http status: {} -- {shown}", status.as_u16()))
+}
+
+/// Hands one response's rate-limit headers to the ledger.
+///
+/// Best-effort throughout: a header that is not valid UTF-8, a provider that sends none of
+/// them, and a lock that cannot be taken all end the same way, with nothing written and the
+/// turn proceeding. Nothing about a reply may depend on whether its own metering worked.
+fn note_headroom(provider: Provider, headers: &ureq::http::HeaderMap) {
+    let now = super::ledger::now();
+    let reading = super::ledger::reading_from(
+        provider,
+        |name| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        },
+        now,
+    );
+    if let Some(reading) = reading {
+        super::ledger::note(provider, reading, now);
+    }
 }
 
 // ------------------------------------------------------------- stream plumbing
@@ -1097,6 +1128,7 @@ pub fn call_ollama(endpoint: &str, model: &str, ctx: &ChatContext) -> Result<Com
     // and the gate judges that by the endpoint rather than by the provider's name: an
     // `endpoint` pointing at a rented box is outbound traffic whatever it is running.
     let response: OllamaResponse = checked(
+        Provider::Ollama,
         crate::net::post(&ollama_url(endpoint), "the model was not asked")?
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
@@ -1131,6 +1163,7 @@ pub fn stream_ollama(
     relay: &mut Relay,
 ) -> Result<Completion, String> {
     let response = checked(
+        Provider::Ollama,
         crate::net::post(&ollama_url(endpoint), "the model was not asked")?
             .config()
             .timeout_global(Some(STREAM_TIMEOUT))
@@ -2041,13 +2074,19 @@ fn openai_send(
     timeout: std::time::Duration,
     payload: &mut OpenAiRequest,
 ) -> Result<ureq::http::Response<ureq::Body>, String> {
-    let sent = checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload));
+    let sent = checked(
+        provider,
+        openai_request(provider, url, api_key, timeout)?.send_json(&*payload),
+    );
     match sent {
         Err(refusal)
             if payload.reasoning_effort.is_some() && refused_the_effort_field(&refusal) =>
         {
             payload.reasoning_effort = None;
-            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+            checked(
+                provider,
+                openai_request(provider, url, api_key, timeout)?.send_json(&*payload),
+            )
         }
         /* The same bargain for `tools`, and the reason LM Studio is allowed to be asked at
         all now. The refusal is remembered so it costs one request rather than one per
@@ -2057,7 +2096,10 @@ fn openai_send(
         Err(refusal) if payload.tools.is_some() && refused_the_tools_field(&refusal) => {
             remember_tool_refusal(endpoint, &payload.model);
             payload.tools = None;
-            checked(openai_request(provider, url, api_key, timeout)?.send_json(&*payload))
+            checked(
+                provider,
+                openai_request(provider, url, api_key, timeout)?.send_json(&*payload),
+            )
         }
         other => other,
     }
@@ -2415,6 +2457,7 @@ pub fn call_gemini(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Comp
     );
 
     let response: GeminiResponse = checked(
+        Provider::Gemini,
         crate::net::post(&url, "the model was not asked")?
             .config()
             .timeout_global(Some(CALL_TIMEOUT))
@@ -2466,6 +2509,7 @@ pub fn stream_gemini(
     );
 
     let response = checked(
+        Provider::Gemini,
         crate::net::post(&url, "the model was not asked")?
             .config()
             .timeout_global(Some(STREAM_TIMEOUT))
@@ -2872,6 +2916,7 @@ fn anthropic_request(
 
 pub fn call_anthropic(api_key: &str, model: &str, ctx: &ChatContext) -> Result<Completion, String> {
     let response: AnthropicResponse = checked(
+        Provider::Anthropic,
         anthropic_request(api_key, CALL_TIMEOUT)?.send_json(anthropic_payload(model, ctx, false)),
     )?
     .into_body()
@@ -2915,6 +2960,7 @@ pub fn stream_anthropic(
     relay: &mut Relay,
 ) -> Result<Completion, String> {
     let response = checked(
+        Provider::Anthropic,
         anthropic_request(api_key, STREAM_TIMEOUT)?.send_json(anthropic_payload(model, ctx, true)),
     )?;
 
@@ -3435,6 +3481,7 @@ fn judge_ollama(
         },
     };
     let response: OllamaResponse = checked(
+        Provider::Ollama,
         crate::net::post(&ollama_url(endpoint), "no judgment was asked for")?
             .config()
             .timeout_global(Some(ask.pace.timeout()))
@@ -3536,6 +3583,7 @@ pub fn look(
         },
     };
     let response: OllamaResponse = checked(
+        Provider::Ollama,
         crate::net::post(&ollama_url(endpoint), "the attachment was not looked at")?
             .config()
             .timeout_global(Some(pace.timeout()))
@@ -3602,6 +3650,7 @@ fn judge_openai(
         top_logprobs: JUDGE_ALTERNATIVES,
     };
     let response: Value = checked(
+        Provider::LmStudio,
         crate::net::post(&url, "no judgment was asked for")?
             .config()
             .timeout_global(Some(ask.pace.timeout()))

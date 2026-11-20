@@ -12,6 +12,12 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 
+// The one type this store borrows from elsewhere in `llm`, rather than mirroring in a
+// struct of its own. A second struct with the same seven fields would be two definitions of
+// one row, and the way that goes wrong is silent: a field added to the reading and not to
+// the row is a figure that is parsed, carried, and then quietly dropped on the way to disk.
+use super::ledger::{Reading, Stored};
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Message {
     pub sender: String,
@@ -258,6 +264,16 @@ impl MemoryDb {
                 last_tps REAL NOT NULL DEFAULT 0,
                 last_used DATETIME DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (provider, model)
+            );
+            CREATE TABLE IF NOT EXISTS provider_ledger (
+                provider TEXT PRIMARY KEY,
+                requests_left INTEGER,
+                requests_limit INTEGER,
+                tokens_left INTEGER,
+                tokens_limit INTEGER,
+                resets_in_seconds INTEGER,
+                refused_for_seconds INTEGER,
+                seen_at INTEGER NOT NULL
             );",
         )?;
         db.migrate()?;
@@ -880,6 +896,73 @@ impl MemoryDb {
             params![provider, model, completion_tokens, generation_seconds, tps],
         )?;
         Ok(())
+    }
+
+    /// Writes down what a provider last said about its own allowance.
+    ///
+    /// One row per provider, replaced outright. There is no history kept and no averaging
+    /// done, because unlike `model_benchmarks` this is not a measurement that gets better
+    /// with more samples -- it is a balance, and an old balance is not evidence about the
+    /// current one. The row is the last thing the provider said, and nothing else.
+    pub fn record_provider_headroom(&self, provider: &str, stored: Stored) -> rusqlite::Result<()> {
+        let reading = stored.reading;
+        self.connect()?.execute(
+            "INSERT INTO provider_ledger
+                 (provider, requests_left, requests_limit, tokens_left, tokens_limit,
+                  resets_in_seconds, refused_for_seconds, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(provider) DO UPDATE SET
+                 requests_left = ?2,
+                 requests_limit = ?3,
+                 tokens_left = ?4,
+                 tokens_limit = ?5,
+                 resets_in_seconds = ?6,
+                 refused_for_seconds = ?7,
+                 seen_at = ?8",
+            params![
+                provider,
+                reading.requests_left,
+                reading.requests_limit,
+                reading.tokens_left,
+                reading.tokens_limit,
+                reading.resets_in,
+                reading.refused_for,
+                stored.seen_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// What one provider last said, or None if it has never said anything.
+    ///
+    /// A missing row and a failed read are the same answer on purpose: both mean nothing is
+    /// known, and `ledger::standing` turns "nothing known" into the behaviour this program
+    /// had before the ledger existed. A database error here must not be able to refuse a
+    /// provider.
+    pub fn provider_headroom(&self, provider: &str) -> Option<Stored> {
+        let conn = self.connect().ok()?;
+        conn.query_row(
+            "SELECT requests_left, requests_limit, tokens_left, tokens_limit,
+                    resets_in_seconds, refused_for_seconds, seen_at
+             FROM provider_ledger WHERE provider = ?1",
+            params![provider],
+            |row| {
+                Ok(Stored {
+                    reading: Reading {
+                        requests_left: row.get(0)?,
+                        requests_limit: row.get(1)?,
+                        tokens_left: row.get(2)?,
+                        tokens_limit: row.get(3)?,
+                        resets_in: row.get(4)?,
+                        refused_for: row.get(5)?,
+                    },
+                    seen_at: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .ok()
+        .flatten()
     }
 
     /// Everything the Profile pane counts, in one pass over the messages table.

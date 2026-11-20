@@ -234,7 +234,37 @@ pub fn agent_genesis(engine: &LlmEngine, purpose: String) -> Result<Value, Strin
 ///     never have more than one ready member.
 ///
 /// Read-only. Switching is `save_settings`, which already writes both halves at once.
+/// One provider's standing, as the picker reads it. Null for "nothing known", which is
+/// what a provider that reports no such headers must come back as.
+///
+/// The wording is left to the front end on purpose, the way `tools: null` already is: the
+/// same figure is said differently in an option label and in a pane row, and a sentence
+/// built here would have to be unpicked there to fit either.
+fn headroom_json(standing: llm::ledger::Standing) -> Value {
+    match standing {
+        llm::ledger::Standing::Unknown => Value::Null,
+        llm::ledger::Standing::Clear {
+            requests_left,
+            tokens_left,
+            left_percent,
+        } => serde_json::json!({
+            "spent": false,
+            "requests_left": requests_left,
+            "tokens_left": tokens_left,
+            "left_percent": left_percent,
+        }),
+        llm::ledger::Standing::Spent { clears_in } => serde_json::json!({
+            "spent": true,
+            "clears_in": clears_in,
+        }),
+    }
+}
+
 pub fn brains(engine: &LlmEngine) -> Value {
+    // So that the figures the picker shows are the ones from the last reply rather than the
+    // ones from the reply before it. The picker is often the first thing opened after a
+    // refusal, and a stale row is exactly what somebody would be opening it to check.
+    engine.absorb_provider_readings();
     let db = engine.db();
     let provider_key = db.get_setting_string("llm_provider", "offline");
     let model = db.get_setting_string("llm_model", "");
@@ -267,6 +297,11 @@ pub fn brains(engine: &LlmEngine) -> Value {
                 // stored for it. A gateway deliberately has none -- its model ids are
                 // whatever an administrator connected, and an invented one is a 404.
                 "model": entry.model,
+                // What this key has left, as the provider last reported it. Absent rather
+                // than zeroed where nothing is known, so the picker can say nothing at all
+                // about a provider that meters nothing -- an invented "100%" on a provider
+                // that never said would be the one figure somebody would plan around.
+                "headroom": headroom_json(entry.headroom),
             })
         })
         .collect();
