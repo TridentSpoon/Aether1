@@ -157,6 +157,50 @@ struct UsageStats {
     last_measured: bool,
 }
 
+/// What one reply cost, as opposed to what the session has cost.
+///
+/// The panel has always had the session totals, and the session totals cannot answer the
+/// question an operator actually asks when a reply is slow, which is "was that one slow,
+/// and why". Three numbers answer it: how long it took, how many tokens went in against
+/// how many came out, and the rate. A greeting that reads 4,806 in and 154 out says
+/// plainly that the wait was the prompt being read and not the answer being written --
+/// which is the whole diagnosis, and it was not visible anywhere before.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct TurnStats {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    /// Tokens a second, on the same basis as `last_tps`: generation time where the
+    /// provider reports it, wall clock where it does not.
+    pub tps: f64,
+    /// Wall clock for the whole turn, which is what the operator sat through: the model
+    /// being read off disk, the prompt being processed, and the answer being written.
+    pub wall_secs: f64,
+    /// Generation time alone, when the provider measured it. The gap between this and
+    /// `wall_secs` is the loading and the prompt, and on a slow machine it is most of it.
+    pub gen_secs: Option<f64>,
+    /// False when the counts are this app's character-count estimate rather than the
+    /// provider's own, so the chip can say "about" instead of stating a figure it guessed.
+    pub measured: bool,
+}
+
+thread_local! {
+    /// This thread's turn, waiting to be read by the handler that asked for it.
+    ///
+    /// Deliberately **not** a field on `UsageStats`, which is shared behind a mutex and
+    /// counts the session. The session totals are a running sum and do not care who adds
+    /// to them; one turn's figures belong to one answer, and `/api/chat`, the WebSocket
+    /// handler and a question relayed from a peer each generate on their own
+    /// `spawn_blocking` thread against the same engine. A field on the shared struct would
+    /// be overwritten by whichever request finished next, in the window where the first
+    /// one is still writing its benchmark and journalling the exchange -- and the chip
+    /// would then be describing somebody else's reply, plausibly and wrongly.
+    ///
+    /// Generation runs on the thread that asked for it, so the thread is the request. Same
+    /// mechanism and the same reasoning as `vault::consulted`, which is read two lines
+    /// away from this one for the same reason.
+    static TURN_STATS: std::cell::Cell<Option<TurnStats>> = const { std::cell::Cell::new(None) };
+}
+
 /// Serializable snapshot of UsageStats for the HUD's telemetry panel.
 #[derive(serde::Serialize)]
 pub struct UsageSnapshot {
@@ -284,6 +328,18 @@ impl UsageStats {
             .map(|nanos| nanos as f64 / 1_000_000_000.0)
             .unwrap_or(duration_secs);
         self.last_tps = (completion_tok as f64 / seconds.max(0.05) * 10.0).round() / 10.0;
+        let turn = TurnStats {
+            prompt_tokens: prompt_tok,
+            completion_tokens: completion_tok,
+            tps: self.last_tps,
+            wall_secs: (duration_secs * 10.0).round() / 10.0,
+            gen_secs: reported
+                .and_then(|u| u.eval_nanos)
+                .filter(|nanos| *nanos > 0)
+                .map(|nanos| (nanos as f64 / 100_000_000.0).round() / 10.0),
+            measured: self.last_measured,
+        };
+        TURN_STATS.with(|cell| cell.set(Some(turn)));
     }
 
     fn snapshot(&self, about: SnapshotContext) -> UsageSnapshot {
@@ -945,7 +1001,24 @@ impl LlmEngine {
         }
     }
 
-    fn system_prompt(&self, config: &Config, telem: &Telemetry) -> String {
+    /// The part of the system prompt that is the same on every turn of a conversation.
+    ///
+    /// **The order is the point, not a layout preference.** A local server keeps the
+    /// attention cache for the longest *prefix* of the prompt that has not changed since
+    /// the last turn, and re-reads everything from the first byte that differs. The live
+    /// readings -- CPU load, memory, uptime -- differ on every single turn by
+    /// construction, and they used to sit at the top, four lines in. So the vault, the
+    /// instructions and the tool rules below them were re-read from scratch every time:
+    /// measured at 4,806 prompt tokens for "Good morning", of which only 1,153 bytes --
+    /// 19% -- were a stable prefix. On a card that is really an iGPU sharing system
+    /// memory, that re-read is most of the wait, and it is why the same model answers
+    /// instantly from Ollama's own prompt and slowly from here.
+    ///
+    /// So: everything stable first, and `host_telemetry` is appended last, after the tool
+    /// rules. Anything added here that changes between turns moves the cliff back up the
+    /// prompt and gives the whole cost back. Put it in `host_telemetry` instead, or
+    /// alongside it at the end.
+    fn system_prompt(&self, config: &Config) -> String {
         let base_persona = if config.persona_key == "custom" {
             if config.custom_directive.is_empty() {
                 Persona::Halcy.template(&config.agent_name)
@@ -974,21 +1047,12 @@ impl LlmEngine {
 
         format!(
             "{base_persona}\
-             [LIVE HOST TELEMETRY]\n\
-             - Identity: {agent_name}\n\
-             - Today: {today}\n\
-             - Machine: {machine}\n\
-             {operator_line}\
-             - OS: {os_name} ({architecture})\n\
-             - CPU Load: {cpu_percent:.1}% | RAM: {ram_used:.2}GB / {ram_total:.2}GB ({ram_percent:.1}%)\n\
-             - Uptime: {uptime}\n\
-             - System Health: {status}\n\
              {memory_context}\n\n\
              Instructions:\n\
              1. Refer to live telemetry if asked about the system or device health. Name this \
              machine as it is named on the Machine line rather than calling it \"this machine\": \
              the operator may be running AETHER1 on several.\n\
-             2. The Today line above is the real current date. Your training ended before it, \
+             2. The Today line is the real current date. Your training ended before it, \
              so anything you remember as \"the latest\" or \"most recent\" is out of date by \
              however long that gap is. A question that turns on something after your training \
              -- results, releases, prices, who holds an office -- is one to look up, and the \
@@ -999,13 +1063,6 @@ impl LlmEngine {
              useful answer over staying in character.\n\
              4. Refer to yourself as {agent_name}.{operator_instruction}",
             agent_name = config.agent_name,
-            today = self.db.local_date_sentence(),
-            machine = config.machine,
-            operator_line = if config.operator_name.is_empty() {
-                String::new()
-            } else {
-                format!("- Operator: {}\n", config.operator_name)
-            },
             // The name was stated as a fact among the telemetry and never used, so an
             // operator who had filled in their name in Profile -- and watched the vault
             // load a note containing it -- was still addressed as nobody, and reasonably
@@ -1021,6 +1078,38 @@ impl LlmEngine {
                      sentence.",
                     config.operator_name
                 )
+            },
+        )
+    }
+
+    /// What this machine is doing right now, as the last thing in the system prompt.
+    ///
+    /// Separated from `system_prompt` for the reason written there: these lines change
+    /// every turn, and a changing line is a wall that everything after it has to be read
+    /// through again. Last means only itself and the conversation are re-read.
+    ///
+    /// The stable facts travel with it rather than being left behind in the stable half.
+    /// Identity, the date and the machine's name never change mid-conversation, so
+    /// hoisting them would buy nothing measurable, and splitting one block the model reads
+    /// as a unit into two blocks in two places is how the Machine line stops being found.
+    fn host_telemetry(&self, config: &Config, telem: &Telemetry) -> String {
+        format!(
+            "\n\n[LIVE HOST TELEMETRY]\n\
+             - Identity: {agent_name}\n\
+             - Today: {today}\n\
+             - Machine: {machine}\n\
+             {operator_line}\
+             - OS: {os_name} ({architecture})\n\
+             - CPU Load: {cpu_percent:.1}% | RAM: {ram_used:.2}GB / {ram_total:.2}GB ({ram_percent:.1}%)\n\
+             - Uptime: {uptime}\n\
+             - System Health: {status}",
+            agent_name = config.agent_name,
+            today = self.db.local_date_sentence(),
+            machine = config.machine,
+            operator_line = if config.operator_name.is_empty() {
+                String::new()
+            } else {
+                format!("- Operator: {}\n", config.operator_name)
             },
             os_name = telem.os_name,
             architecture = telem.architecture,
@@ -2119,7 +2208,15 @@ impl LlmEngine {
         let history =
             without_trailing_user_turn(self.db.get_messages(session_id, 8).unwrap_or_default());
         let telem = Telemetry::snapshot();
-        let mut system_prompt = self.system_prompt(&config, &telem);
+        let mut system_prompt = self.system_prompt(&config);
+        /* Everything that differs from one turn to the next, held back and appended after
+        the tool rules rather than pushed onto the prompt where it is worked out. See
+        `system_prompt`: the server keeps its attention cache for the longest unchanged
+        prefix, so a per-turn line in the middle makes the server re-read every stable byte
+        after it. The picture note and the Graft hits are both per-turn -- the hits are
+        looked up with this question's words -- and both used to land above the vault and
+        the tool rules. */
+        let mut per_turn = String::new();
 
         /* An image on a turn going to a model that cannot see one. Settled here, before
         anything is built or sent, because the alternative is what a desktop log of
@@ -2151,7 +2248,7 @@ impl LlmEngine {
                     images,
                 ) {
                     Some(seen) => {
-                        system_prompt.push_str(&eyes::seen_note(images.len(), &seen));
+                        per_turn.push_str(&eyes::seen_note(images.len(), &seen));
                         (
                             &[][..],
                             crate::tools::protocol::trace_of(&eyes::seen_trace(
@@ -2161,7 +2258,7 @@ impl LlmEngine {
                         )
                     }
                     None => {
-                        system_prompt.push_str(&Self::blind_to_images_note(images.len()));
+                        per_turn.push_str(&Self::blind_to_images_note(images.len()));
                         (
                             &[][..],
                             crate::tools::protocol::trace_of(&format!(
@@ -2177,7 +2274,7 @@ impl LlmEngine {
 
         // Inject Graft code graph context if a project is selected
         let graft_context = crate::graft::prime(&self.db, prompt);
-        system_prompt.push_str(&graft_context);
+        per_turn.push_str(&graft_context);
 
         /* Carried on the same line as the router's, so it reaches both answering branches
         and the tool loop without a fourth copy of the "prepend a trace" dance. */
@@ -2253,6 +2350,11 @@ impl LlmEngine {
                 )
             });
         }
+
+        /* The end of the stable half. Everything from here down differs between turns, so
+        everything from here down is the only part the server has to read again. */
+        system_prompt.push_str(&per_turn);
+        system_prompt.push_str(&self.host_telemetry(&config, &telem));
 
         /* Thinking on paper, before anything is said. Guarded by the same two conditions
         as the branches below that actually reach a model: there is nothing to deliberate
@@ -2436,6 +2538,15 @@ impl LlmEngine {
         self.record_benchmark_sample(&config, reported);
         self.refresh_capability(&config);
         reply
+    }
+
+    /// What the reply this thread just generated cost, for the chip beside it.
+    ///
+    /// Drained rather than read, exactly as `vault::consulted::taken` is drained and for
+    /// the same reason: what is left behind would be reported under the *next* answer as
+    /// though it had been measured for it. `None` on a path that reached no model.
+    pub fn last_turn_stats(&self) -> Option<TurnStats> {
+        TURN_STATS.with(|cell| cell.take())
     }
 
     pub fn generate_identity_from_purpose(&self, purpose: &str) -> Identity {
@@ -3595,10 +3706,136 @@ mod tests {
         std::fs::write(&profile, "# Profile\n\nThe operator prefers helix.\n").unwrap();
 
         let config = engine.load_config();
-        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+        let prompt = engine.system_prompt(&config);
         assert!(
             prompt.contains("The operator prefers helix."),
             "a fact written into the vault by hand must reach the prompt"
+        );
+    }
+
+    /// Codex caught this on #311: `last_turn` was a field on the shared `UsageStats`, so
+    /// a second request finishing in the window between the first recording its usage and
+    /// reading it back -- a window that holds a benchmark write, a capability refresh and
+    /// a journal write -- would hand the first answer the second one's figures. Two
+    /// clients is not hypothetical here: `/api/chat`, the WebSocket handler and a question
+    /// relayed from a peer all generate on their own thread against one engine.
+    #[test]
+    fn one_turn_s_figures_cannot_be_read_by_another_thread() {
+        let _guard = env_guard();
+        let engine = temp_engine("turn_stats_scope");
+
+        engine
+            .usage
+            .lock()
+            .unwrap()
+            .record_usage("here", "mine", 1.0, None);
+
+        // Another request, finishing on its own thread against the same engine, with
+        // numbers nothing like this one's.
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                engine.usage.lock().unwrap().record_usage(
+                    "a much longer question from somebody else entirely",
+                    "and a much longer answer to go with it, at length",
+                    9.0,
+                    None,
+                );
+                let theirs = engine.last_turn_stats().expect("their own turn");
+                assert!(theirs.prompt_tokens > 2, "{theirs:?}");
+            });
+        });
+
+        let mine = engine.last_turn_stats().expect("my turn, not theirs");
+        assert_eq!(
+            mine.prompt_tokens,
+            estimate_tokens("here"),
+            "the other thread's reply overwrote this one's figures: {mine:?}"
+        );
+
+        // And drained, so the next answer cannot inherit them.
+        assert!(
+            engine.last_turn_stats().is_none(),
+            "stats must be taken, not left for the next turn to report as its own"
+        );
+    }
+
+    /// The whole prompt a model is handed, stable half and live readings together.
+    ///
+    /// The two are built separately so the readings can go last (see `system_prompt`), but
+    /// a test asking "does this fact reach the model" is asking about the pair, not about
+    /// which half it landed in.
+    fn whole_prompt(engine: &LlmEngine, config: &Config) -> String {
+        format!(
+            "{}{}",
+            engine.system_prompt(config),
+            engine.host_telemetry(config, &Telemetry::snapshot())
+        )
+    }
+
+    /// The one that pays for itself on a slow machine.
+    ///
+    /// A local server keeps its attention cache for the longest prefix of the prompt that
+    /// has not changed, and reads the rest again from the first differing byte. The live
+    /// readings differ every turn by construction, so while they sat near the top -- four
+    /// lines in -- the vault, the instructions and the tool rules underneath them were
+    /// re-read every single time. Measured against a stub server on 2026-11-20: 4,806
+    /// prompt tokens for "Good morning Rori", of which 1,153 bytes, 19%, were a stable
+    /// prefix. On an Intel iGPU sharing system memory that re-read is most of the wait.
+    ///
+    /// So the test is about *order*, which no test here could previously fail on, and it
+    /// is written against two snapshots taken with different readings rather than against
+    /// a fixed string: what matters is not where the block is but that nothing above it
+    /// moves.
+    #[test]
+    fn the_stable_half_of_the_prompt_is_identical_between_turns() {
+        let _guard = env_guard();
+        let engine = temp_engine("prompt_prefix");
+        crate::vault::ensure(engine.db()).unwrap();
+        let config = engine.load_config();
+
+        let first = Telemetry {
+            cpu_percent: 3.0,
+            ram_used_gb: 4.0,
+            ram_percent: 25.0,
+            uptime: "00h 05m 36s".to_string(),
+            ..Telemetry::snapshot()
+        };
+        let second = Telemetry {
+            cpu_percent: 61.5,
+            ram_used_gb: 11.0,
+            ram_percent: 70.0,
+            uptime: "01h 40m 02s".to_string(),
+            ..Telemetry::snapshot()
+        };
+
+        let stable = engine.system_prompt(&config);
+        assert!(
+            !stable.contains("CPU Load:") && !stable.contains("Uptime:"),
+            "a reading that changes every turn must not be in the half that does not: {stable}"
+        );
+
+        let a = format!("{stable}{}", engine.host_telemetry(&config, &first));
+        let b = format!("{stable}{}", engine.host_telemetry(&config, &second));
+        assert_ne!(
+            a, b,
+            "the two turns must differ somewhere, or this proves nothing"
+        );
+
+        let shared = a
+            .char_indices()
+            .zip(b.chars())
+            .take_while(|((_, x), y)| x == y)
+            .count();
+        assert!(
+            shared >= stable.chars().count(),
+            "the whole stable half has to survive as a common prefix: only {shared} of              {} characters did",
+            stable.chars().count()
+        );
+        // And the readings really are the only thing after it.
+        assert!(
+            a[a.len() - 40..].contains("System Health")
+                || a.ends_with(&engine.host_telemetry(&config, &first)),
+            "the readings must be the last thing in the prompt: {a}"
         );
     }
 
@@ -3611,7 +3848,7 @@ mod tests {
         let engine = temp_engine("operator_name");
 
         let config = engine.load_config();
-        let before = engine.system_prompt(&config, &Telemetry::snapshot());
+        let before = whole_prompt(&engine, &config);
         assert!(
             !before.contains("- Operator:"),
             "an install with no name set must not claim one: {before}"
@@ -3622,7 +3859,7 @@ mod tests {
             .set_setting("operator_name", &serde_json::Value::String("Ada".into()))
             .unwrap();
         let config = engine.load_config();
-        let after = engine.system_prompt(&config, &Telemetry::snapshot());
+        let after = whole_prompt(&engine, &config);
         assert!(after.contains("- Operator: Ada"), "{after}");
         // Stating the name is not the same as being told to use it. It was a data line
         // among the telemetry, and an operator who had filled in Profile -- and watched
@@ -3646,7 +3883,7 @@ mod tests {
         let _guard = env_guard();
         let engine = temp_engine("prompt_date");
         let config = engine.load_config();
-        let prompt = engine.system_prompt(&config, &Telemetry::snapshot());
+        let prompt = whole_prompt(&engine, &config);
 
         let (today, _) = engine.db.local_now();
         let year = today.split('-').next().unwrap_or_default();
@@ -3691,7 +3928,7 @@ mod tests {
         let engine = temp_engine("machine_name");
 
         let config = engine.load_config();
-        let bare = engine.system_prompt(&config, &Telemetry::snapshot());
+        let bare = whole_prompt(&engine, &config);
         let host = sysinfo::System::host_name().unwrap_or_else(|| "this machine".to_string());
         assert!(bare.contains(&format!("- Machine: {host}")), "{bare}");
 
@@ -3707,7 +3944,7 @@ mod tests {
             .set_setting("machine_kind", &serde_json::Value::String("homelab".into()))
             .unwrap();
         let config = engine.load_config();
-        let named = engine.system_prompt(&config, &Telemetry::snapshot());
+        let named = whole_prompt(&engine, &config);
         assert!(
             named.contains(&format!("- Machine: Aegis (hostname {host}), a homelab")),
             "{named}"

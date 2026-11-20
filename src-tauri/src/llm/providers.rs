@@ -1375,6 +1375,21 @@ pub struct LocalCapability {
     /// "Q4_K_M" and friends. Together with the parameter size this is most of what decides
     /// whether a reply will be fast and shallow or slow and careful.
     pub quantization: Option<String>,
+    /// The window AETHER1 will actually ask this server for, which is rarely the one
+    /// above.
+    ///
+    /// Without it the panel showed `context_tokens` alone and was read as a statement
+    /// about how the app is running -- an operator on an Intel iGPU saw "256k" beside a
+    /// machine at 94% memory and concluded, reasonably and wrongly, that AETHER1 had
+    /// opened a quarter-million-token window on a laptop. What it had opened was 16,384:
+    /// `local_context_window` clamps the model's own figure to the ceiling and then to
+    /// what `fit` says this machine has room for. Both numbers are worth showing; only
+    /// one of them is a fact about this turn.
+    ///
+    /// `None` when the model's size is not known well enough to size a window, which is
+    /// the same condition that leaves `local_context_window` clamping on the first two
+    /// terms alone.
+    pub window_tokens: Option<u64>,
 }
 
 impl LocalCapability {
@@ -1411,10 +1426,28 @@ pub fn ollama_capability(endpoint: &str, model: &str) -> Option<LocalCapability>
             .and_then(|d| d.get("quantization_level"))
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        // Filled in below, deliberately after the emptiness test: it is derived rather
+        // than reported, so a server that said nothing must not be made to look like a
+        // server that said one thing.
+        window_tokens: None,
     };
 
     // Nothing known is not the same as a model with no properties; say so with None.
-    (!capability.is_empty()).then_some(capability)
+    if capability.is_empty() {
+        return None;
+    }
+    /* The same reader as the request uses, off the same cached probe, for the reason
+    stated all over this file: two readers of one fact are two answers waiting to
+    disagree, and a panel that disagreed with the request would be worse than a panel
+    that said nothing. */
+    let facts = ollama_facts(endpoint, model);
+    Some(LocalCapability {
+        window_tokens: Some(local_context_window(
+            facts.context_tokens,
+            local_context_room(facts),
+        )),
+        ..capability
+    })
 }
 
 /// What a local model can be asked to do, as its own server describes it.

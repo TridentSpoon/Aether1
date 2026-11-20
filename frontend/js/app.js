@@ -2396,9 +2396,30 @@ document.addEventListener('DOMContentLoaded', () => {
         const capability = tokens.capability || null;
         if (capacityRow) capacityRow.classList.toggle('hidden', !capability);
         if (context) {
-            context.textContent = capability && capability.context_tokens
-                ? `${Math.round(capability.context_tokens / 1024)}k`
-                : '--';
+            /* Two numbers, because showing only the first was read as a claim about how
+               the app is running: an operator on an Intel iGPU saw "256k" beside a
+               machine at 94% memory and concluded AETHER1 had opened a quarter-million
+               token window on a laptop. It had opened 16k. The model's own figure stays
+               -- it is how you tell a 4k model from a long-context one -- but the window
+               actually asked for leads, because that is the one that is true of the
+               reply on screen. */
+            const built = capability && capability.context_tokens;
+            const inUse = capability && capability.window_tokens;
+            const k = (n) => `${Math.round(n / 1024)}k`;
+            if (inUse && built && inUse < built) {
+                context.textContent = `${k(inUse)} of ${k(built)}`;
+                context.title = `AETHER1 asks this server for ${inUse.toLocaleString()} tokens. `
+                    + `The model was built for ${built.toLocaleString()}, but a window has to fit `
+                    + `in memory beside the weights, and this machine has room for the smaller one.`;
+            } else if (inUse || built) {
+                context.textContent = k(inUse || built);
+                context.title = inUse
+                    ? `AETHER1 asks this server for ${inUse.toLocaleString()} tokens.`
+                    : '';
+            } else {
+                context.textContent = '--';
+                context.title = '';
+            }
         }
         if (size) {
             const parts = capability
@@ -2568,7 +2589,21 @@ document.addEventListener('DOMContentLoaded', () => {
         return Object.keys(AVATAR_PRESETS).find((id) => AVATAR_PRESETS[id].persona === personaKey) || null;
     }
 
-    function appendMessage(sender, text, audioUrl = null) {
+    /* SQLite writes `CURRENT_TIMESTAMP` as UTC in `YYYY-MM-DD HH:MM:SS`, with nothing in
+       the string to say so. Handed to `new Date` as it stands, most browsers read it as
+       local time, which is silently right in London and silently wrong everywhere else --
+       the worst kind of wrong, because the clock still looks plausible. Marked as UTC
+       here, and anything unparseable falls back to no stamp rather than "Invalid Date". */
+    function storedTime(stamp) {
+        if (!stamp) return null;
+        const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(stamp)
+            ? `${stamp.replace(' ', 'T')}Z`
+            : stamp;
+        const when = new Date(iso);
+        return Number.isNaN(when.getTime()) ? null : when;
+    }
+
+    function appendMessage(sender, text, audioUrl = null, stamp = null) {
         const msgDiv = document.createElement('div');
         const isUser = sender === 'user';
         msgDiv.className = `p-3 rounded my-2 text-sm leading-relaxed ${isUser ? 'msg-user self-end ml-8' : 'msg-agent self-start mr-8'}`;
@@ -2582,7 +2617,14 @@ document.addEventListener('DOMContentLoaded', () => {
         headerDiv.appendChild(senderSpan);
 
         const timeSpan = document.createElement('span');
-        timeSpan.textContent = new Date().toLocaleTimeString();
+        /* The time the message was *sent*, not the time this node was built. Restoring a
+           conversation calls this for every message in it, and with `new Date()` here the
+           whole transcript came back stamped with the moment it was reopened -- an
+           operator looking at two questions and an answer all reading 07:45:43, while the
+           clock in the title bar said 07:52, could only conclude the app had sent
+           something twice. */
+        const when = storedTime(stamp);
+        timeSpan.textContent = (when || new Date()).toLocaleTimeString();
         headerDiv.appendChild(timeSpan);
 
         const bodyDiv = document.createElement('div');
@@ -2729,6 +2771,59 @@ document.addEventListener('DOMContentLoaded', () => {
             chip.className = 'border border-cyan-500/20 rounded px-1.5 py-0.5 bg-cyan-950/30 text-cyan-200/80';
             chip.textContent = `${how.mark} ${note.note}`;
             chip.title = how.hint;
+            row.appendChild(chip);
+        });
+
+        msgDiv.appendChild(row);
+    }
+
+    /* What this one reply cost, on a line under it.
+       Three figures and no more, because the question it answers is narrow: was that reply
+       slow, and which half of it was slow. The split between in and out is the part that
+       does the work -- 4,806 in against 154 out says the wait was the prompt being read,
+       not the answer being written, and that is a different fault with a different fix.
+       Wall clock rather than generation time leads, because the wait the operator sat
+       through includes the model being loaded and the prompt being processed; the
+       generation time is in the tooltip where it can be compared with it.
+       Nothing is shown at all when the provider reported nothing and the numbers would be
+       this app's own character-count guess dressed up as measurements. */
+    function attachTurnStats(msgDiv, stats) {
+        if (!stats || typeof stats !== 'object') return;
+        const n = (v) => Number.isFinite(v) ? v : 0;
+        const inTok = n(stats.prompt_tokens);
+        const outTok = n(stats.completion_tokens);
+        if (!inTok && !outTok) return;
+
+        const row = document.createElement('div');
+        row.className = 'mt-2 pt-1 border-t border-cyan-500/10 flex flex-wrap items-center gap-2 '
+            + 'text-[10px] font-mono text-slate-400';
+
+        const about = stats.measured ? '' : '~';
+        const parts = [
+            [`${n(stats.wall_secs).toFixed(1)}s`,
+             stats.gen_secs != null
+                 ? `${n(stats.wall_secs).toFixed(1)}s from pressing send. `
+                   + `${n(stats.gen_secs).toFixed(1)}s of that was the model writing; the rest `
+                   + `was loading it and reading the prompt.`
+                 : 'Time from pressing send to the last word.'],
+            [`${about}${inTok.toLocaleString()} in / ${about}${outTok.toLocaleString()} out`,
+             stats.measured
+                 ? 'Tokens the server counted. "In" is the whole prompt -- persona, memory '
+                   + 'notes and tool definitions -- not just what you typed.'
+                 : 'Estimated from the text, because this provider does not report its own '
+                   + 'token counts.'],
+            [`${n(stats.tps).toFixed(1)} tok/s`,
+             stats.gen_secs != null
+                 ? 'Output tokens over the time the model spent generating, which is the '
+                   + 'honest measure of this machine.'
+                 : 'Output tokens over wall clock, because this provider does not report '
+                   + 'how long it spent generating.'],
+        ];
+        parts.forEach(([text, hint]) => {
+            const chip = document.createElement('span');
+            chip.className = 'border border-cyan-500/20 rounded px-1.5 py-0.5 bg-cyan-950/30 text-cyan-200/80';
+            chip.textContent = text;
+            chip.title = hint;
             row.appendChild(chip);
         });
 
@@ -3716,6 +3811,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 sealReasoning(replyDiv);
             }
             attachConsultedNotes(replyDiv, data.notes);
+            attachTurnStats(replyDiv, data.stats);
             voiceEngine.playSFX('incoming');
 
             /* Speak whatever never reached a sentence boundary. There is almost always
@@ -13544,7 +13640,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     appendMessage(currentAgentName, `Greetings Operator. **${currentAgentName}** online and ready for deployment.`);
                 }
             } else {
-                msgs.forEach(m => appendMessage(m.sender, m.text));
+                msgs.forEach(m => appendMessage(m.sender, m.text, null, m.timestamp));
             }
         } catch (e) {
             console.warn("Could not load messages", e);
