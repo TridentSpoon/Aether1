@@ -158,17 +158,14 @@ the words. The rail with the rest (pin, finish, rename, delete) lives in a windo
 `?panel=code`, which on Cyberpunk is built frameless and transparent so the page can draw the
 projection rather than a rectangle.
 
-What a task does **not** hold yet is the engine's own session, and that is deliberate rather
-than forgotten: the engine mints its own ids and refuses one it did not mint, `--continue`
-follows whichever session ran last in the state directory rather than this task's, and the
-state directory cannot be made per task because the provider package in it is 63 MB. The id
-is on every event of `opencode run --format json`, which is also what the tool-activity rail
-below would be built from, so the two arrive together or not at all.
+The task now holds the engine's own session ID, captured from `opencode run --format json`
+and passed back on the next run. This is under implementation and still needs a live model
+test across interleaved tasks and an app restart; see `CODING_PLATFORM_HANDOFF.md`.
 
-**6. A tool-activity rail instead of streamed prose.** Each tool call drawn as a line that
-says what it did -- `Updated src/net.rs`, `Ran cargo test` -- rather than as the model's prose
-about what it is about to do. This is also where the engine's session id comes from; see
-above.
+**6. A tool-activity rail instead of streamed prose.** The panel now collects completed tool
+events from the same structured stream and offers a compact action list and an operator-facing
+journal. A richer live rail remains to be built; see
+`CODING_PLATFORM_HANDOFF.md`.
 
 **7. Host tools instead of host access.** `system.get_cpu()`, `system.list_processes()`,
 notifications, screenshots — narrow calls into the host rather than a shell on it. When the

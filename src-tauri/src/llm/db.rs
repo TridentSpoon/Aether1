@@ -846,6 +846,22 @@ impl MemoryDb {
         rows.collect()
     }
 
+    /// Actual coding-engine tool events for one task, newest first.
+    pub fn code_actions(
+        &self,
+        session_id: &str,
+        limit: u32,
+    ) -> rusqlite::Result<Vec<ActionRecord>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, ts, tool, args_json, mutating, status, result, undo_json, approved_by, reason, session_id \
+             FROM action_log WHERE session_id = ?1 AND tool LIKE 'code_engine:%' \
+             ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![session_id, limit.min(500)], action_from_row)?;
+        rows.collect()
+    }
+
     /// The database file itself. `MemoryDb` is a path and opens a connection per call, so
     /// this is how another thread gets a handle of its own on the same database.
     pub fn path(&self) -> &Path {
@@ -1434,6 +1450,29 @@ mod tests {
         assert_eq!(recent.len(), 3);
         assert_eq!(recent[0].args["n"], serde_json::json!(4));
         assert_eq!(recent[2].args["n"], serde_json::json!(2));
+    }
+
+    #[test]
+    fn code_actions_are_scoped_to_one_task() {
+        let db = temp_db("code_actions");
+        for (tool, session) in [
+            ("code_engine:edit", "aether-code-a"),
+            ("code_engine:bash", "aether-code-b"),
+            ("read_file", "aether-code-a"),
+        ] {
+            db.log_action(
+                tool,
+                &serde_json::json!({"target": "x"}),
+                true,
+                ActionStatus::Executed,
+                None,
+                Some(session),
+            )
+            .unwrap();
+        }
+        let rows = db.code_actions("aether-code-a", 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tool, "code_engine:edit");
     }
 
     #[test]

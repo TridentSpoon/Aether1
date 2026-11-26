@@ -698,8 +698,12 @@
                          line of text because the thing to do about it is one click away. -->
                     <button type="button" id="btn-code-workspace" class="hidden shrink-0 text-amber-400 hover:text-amber-300" title="Name the folder AETHER CODE may work in">no project folder set</button>
                     <span class="flex-1"></span>
+                    <button type="button" id="btn-code-journal" class="text-slate-500 hover:text-cyan-300 shrink-0" title="See actions the coding engine actually ran in this task">actions</button>
+                    <button type="button" id="btn-code-checkpoints" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Review saved project checkpoints">checkpoints</button>
                     <button type="button" id="btn-code-chat-clear" class="text-slate-500 hover:text-cyan-300 shrink-0" title="Forget what was said in this task; the task itself stays in the list">clear this task</button>
                 </div>
+                <div id="code-checkpoint-list" class="hidden max-h-48 overflow-y-auto px-4 py-2 bg-slate-950/80 border-b border-cyan-500/20 text-xs"></div>
+                <div id="code-journal-list" class="hidden max-h-48 overflow-y-auto px-4 py-2 bg-slate-950/80 border-b border-cyan-500/20 text-xs"></div>
                 <div id="code-chat-messages" class="flex-1 p-4 overflow-y-auto flex flex-col space-y-2"></div>
                 <div class="p-3 bg-slate-950/90 border-t border-cyan-500/30">
                     <div class="flex items-center gap-2">

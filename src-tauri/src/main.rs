@@ -1730,6 +1730,39 @@ fn code_tasks_rust(engine: tauri::State<LlmEngine>) -> Vec<code_tasks::Listed> {
 }
 
 #[tauri::command(async)]
+fn code_journal_rust(
+    engine: tauri::State<LlmEngine>,
+    task: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<llm::ActionRecord>, String> {
+    commands::code_journal(&engine, task.as_deref(), limit)
+}
+
+#[tauri::command(async)]
+fn code_checkpoint_preview_rust(
+    engine: tauri::State<LlmEngine>,
+    reference: String,
+) -> Result<code_checkpoint::Preview, String> {
+    commands::code_checkpoint_preview(&engine, Some(&reference))
+}
+
+#[tauri::command(async)]
+fn code_checkpoint_list_rust(
+    engine: tauri::State<LlmEngine>,
+) -> Result<Vec<code_checkpoint::Checkpoint>, String> {
+    commands::code_checkpoint_list(&engine)
+}
+
+#[tauri::command(async)]
+fn code_checkpoint_restore_rust(
+    engine: tauri::State<LlmEngine>,
+    reference: String,
+    fingerprint: String,
+) -> Result<String, String> {
+    commands::code_checkpoint_restore(&engine, &reference, &fingerprint)
+}
+
+#[tauri::command(async)]
 fn code_task_create_rust(
     engine: tauri::State<LlmEngine>,
     title: Option<String>,
@@ -3470,7 +3503,19 @@ fn build_llm_engine() -> LlmEngine {
 }
 
 fn open_llm_engine() -> LlmEngine {
-    let db_path = project_root().join("backend").join("aether1_memory.db");
+    // Evaluation runs use a separate database. A bad override must fail rather than
+    // silently falling back to the operator's real conversations and settings.
+    let eval_db = std::env::var_os("AETHER1_CODE_EVAL_DB");
+    let db_path = if let Some(path) = eval_db.as_ref() {
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_absolute(),
+            "AETHER1_CODE_EVAL_DB must be an absolute path"
+        );
+        path
+    } else {
+        project_root().join("backend").join("aether1_memory.db")
+    };
     // The native path creates backend/ as a side effect of setting up the audio cache in
     // setup(), but a headless run (--serve, or a CLI subcommand) reaches this first. Without
     // this, sqlite can't create the file in a directory that doesn't exist yet, and every
@@ -3502,6 +3547,12 @@ fn open_llm_engine() -> LlmEngine {
             LlmEngine::new(db)
         }
         Err(e) => {
+            if eval_db.is_some() {
+                panic!(
+                    "evaluation database {} could not be opened: {e}",
+                    db_path.display()
+                );
+            }
             // NOT ":memory:" -- MemoryDb opens a fresh connection per call (matching
             // memory_db.py's own pattern, which is fine for a real file), so a literal
             // SQLite ":memory:" database would be destroyed and recreated empty on
@@ -3722,6 +3773,10 @@ fn main() {
             code_chat_history_rust,
             code_chat_clear_rust,
             code_tasks_rust,
+            code_journal_rust,
+            code_checkpoint_preview_rust,
+            code_checkpoint_list_rust,
+            code_checkpoint_restore_rust,
             code_task_create_rust,
             code_task_focus_rust,
             code_task_rename_rust,

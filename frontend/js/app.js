@@ -5153,6 +5153,43 @@ document.addEventListener('DOMContentLoaded', () => {
         return await (await apiFetch('/api/code/tasks')).json();
     }
 
+    async function loadCodeJournal() {
+        const panel = document.getElementById('code-journal-list');
+        if (!panel || panel.classList.contains('hidden')) return;
+        const task = codeTaskId;
+        panel.textContent = 'Loading actions...';
+        try {
+            const rows = IS_TAURI
+                ? await tauriInvoke('code_journal_rust', { task, limit: 100 })
+                : await (async () => {
+                    const response = await apiFetch(`/api/code/journal?task=${encodeURIComponent(task || '')}`);
+                    if (!response.ok) throw new Error(await response.text());
+                    return response.json();
+                })();
+            if (task !== codeTaskId) return;
+            panel.textContent = '';
+            if (!rows.length) panel.textContent = 'No engine actions recorded in this task yet.';
+            for (const row of rows) {
+                const item = document.createElement('div');
+                item.className = 'py-1 border-b border-cyan-500/10 font-mono';
+                const args = row.args || {};
+                const action = row.tool.replace(/^code_engine:/, '');
+                item.textContent = `${row.timestamp}  ${row.status}  ${action}  ${args.target || args.title || ''}`;
+                if (args.checkpoint) item.title = `Checkpoint: ${args.checkpoint}`;
+                panel.appendChild(item);
+            }
+        } catch (err) {
+            panel.textContent = String((err && (err.message || err)) || 'could not read actions');
+        }
+    }
+
+    document.getElementById('btn-code-journal')?.addEventListener('click', () => {
+        const panel = document.getElementById('code-journal-list');
+        if (!panel) return;
+        panel.classList.toggle('hidden');
+        loadCodeJournal();
+    });
+
     /* Each of these returns the task it changed, which is what the backend hands back, so
        nothing here has to guess what the list now looks like -- it reloads. */
     async function codeTaskCall(name, path, args) {
@@ -5433,6 +5470,7 @@ document.addEventListener('DOMContentLoaded', () => {
         paintCodeTaskBar();
         paintCodeTaskMenu();
         paintCodeTaskRail();
+        loadCodeJournal();
         if (!keep || moved) await loadCodeChatMessages();
     }
 
@@ -5462,6 +5500,13 @@ document.addEventListener('DOMContentLoaded', () => {
                paint the wrong conversation over the right one. */
             if (task !== codeTaskId) return;
             (history || []).forEach(m => appendCodeMessage(m.sender, m.text, m.commands));
+            const saved = codeTasks.find(t => t.id === task)?.checkpoint;
+            if (saved) {
+                const controls = document.createElement('div');
+                controls.className = 'px-3 py-2 text-xs';
+                appendCodeCheckpoint(controls, saved);
+                codeChatMessages.appendChild(controls);
+            }
         } catch (e) {
             /* An empty tab is the right failure here: the conversation is a convenience,
                and the composer below it still works. */
@@ -5551,6 +5596,81 @@ document.addEventListener('DOMContentLoaded', () => {
         return await resp.json();
     }
 
+    function appendCodeCheckpoint(container, reference, label) {
+        if (!reference) return;
+        const saved = document.createElement('div');
+        saved.className = 'text-[10px] font-mono mt-2';
+        saved.textContent = label || `Checkpoint saved before this task’s latest run: ${reference}`;
+        container.appendChild(saved);
+        const inspect = document.createElement('button');
+        inspect.type = 'button';
+        inspect.className = 'text-xs underline mt-1';
+        inspect.textContent = 'Review restore';
+        container.appendChild(inspect);
+        inspect.addEventListener('click', async () => {
+            inspect.disabled = true;
+            try {
+                const plan = await codeTaskCall('code_checkpoint_preview_rust', '/api/code/checkpoint/preview', { reference });
+                const panel = document.createElement('div');
+                panel.className = 'mt-2 text-xs whitespace-pre-wrap';
+                panel.textContent = `Restore ${plan.restore_files} files from ${plan.when}.\nChanged since checkpoint: ${plan.changed_files.join(', ') || 'none'}\nNew files left alone: ${plan.leave_alone.join(', ') || 'none'}`;
+                const restore = document.createElement('button');
+                restore.type = 'button';
+                restore.className = 'block underline mt-1 text-amber-300';
+                restore.textContent = 'Restore these files';
+                panel.appendChild(restore);
+                container.appendChild(panel);
+                restore.addEventListener('click', async () => {
+                    restore.disabled = true;
+                    try {
+                        const result = await codeTaskCall('code_checkpoint_restore_rust', '/api/code/checkpoint/restore', { reference, fingerprint: plan.fingerprint });
+                        panel.textContent = typeof result === 'string' ? result : result.report;
+                    } catch (err) {
+                        panel.textContent = String((err && (err.message || err)) || 'restore failed');
+                        inspect.disabled = false;
+                    }
+                });
+            } catch (err) {
+                const why = document.createElement('div');
+                why.textContent = String((err && (err.message || err)) || 'could not preview checkpoint');
+                container.appendChild(why);
+                inspect.disabled = false;
+            }
+        });
+    }
+
+    document.getElementById('btn-code-checkpoints')?.addEventListener('click', async () => {
+        const panel = document.getElementById('code-checkpoint-list');
+        if (!panel) return;
+        if (!panel.classList.contains('hidden')) {
+            panel.classList.add('hidden');
+            return;
+        }
+        panel.classList.remove('hidden');
+        panel.textContent = 'Loading checkpoints...';
+        try {
+            const rows = IS_TAURI
+                ? await tauriInvoke('code_checkpoint_list_rust')
+                : await (async () => {
+                    const response = await apiFetch('/api/code/checkpoints');
+                    if (!response.ok) throw new Error(await response.text());
+                    return response.json();
+                })();
+            panel.textContent = '';
+            if (!rows.length) {
+                panel.textContent = 'No checkpoints in this project yet.';
+            }
+            for (const row of rows) {
+                const item = document.createElement('div');
+                item.className = 'py-1 border-b border-cyan-500/10';
+                appendCodeCheckpoint(item, row.reference, `Checkpoint from ${row.when} (${row.reference})`);
+                panel.appendChild(item);
+            }
+        } catch (err) {
+            panel.textContent = String((err && (err.message || err)) || 'could not list checkpoints');
+        }
+    });
+
     /* Hands the open task to the engine. Deliberately close to sendCodeChat: the operator is
        in one conversation and the two buttons under it are two things to do with what they
        just typed, so what appears in the transcript has to look like the same conversation.
@@ -5590,6 +5710,13 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const said = (reply && reply.text) || rendered;
             replyDiv.bodyDiv.textContent = said || 'the engine said nothing.';
+            appendCodeCheckpoint(replyDiv.bodyDiv, reply?.checkpoint);
+            if (reply?.journal_error) {
+                const note = document.createElement('div');
+                note.className = 'text-amber-300 text-[10px] font-mono mt-1';
+                note.textContent = `Action journal could not save: ${reply.journal_error}`;
+                replyDiv.bodyDiv.appendChild(note);
+            }
             /* A non-zero status with output is not an error to replace the output with --
                what it managed to say first is the useful part -- so it is a note under it. */
             if (reply && reply.status !== 0) {
@@ -5597,6 +5724,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 note.className = 'text-amber-300 text-[10px] font-mono mt-1';
                 note.textContent = `the engine stopped with status ${reply.status}`;
                 replyDiv.bodyDiv.appendChild(note);
+            }
+            /* Structured events come from the engine, so this list describes actions that
+               actually ran rather than actions the model said it intended to run. */
+            const actions = (reply?.events || [])
+                .filter((event) => event?.part?.type === 'tool')
+                .filter((event) => ['completed', 'error'].includes(event.part?.state?.status));
+            if (actions.length) {
+                const activity = document.createElement('details');
+                activity.className = 'mt-2 text-xs';
+                const summary = document.createElement('summary');
+                summary.textContent = `${actions.length} tool actions`;
+                activity.appendChild(summary);
+                const list = document.createElement('ol');
+                list.className = 'mt-1 pl-4 list-decimal';
+                for (const event of actions) {
+                    const item = document.createElement('li');
+                    const state = event.part.state;
+                    item.textContent = `${state.status}: ${state.title || event.part.tool || 'tool'}`;
+                    list.appendChild(item);
+                }
+                activity.appendChild(list);
+                replyDiv.bodyDiv.appendChild(activity);
             }
         } catch (err) {
             const why = (err && (err.message || err)) || 'the engine did not run';

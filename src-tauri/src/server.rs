@@ -330,9 +330,19 @@ pub async fn run(engine: LlmEngine, lan: bool) {
         .route("/api/code/conventions", get(code_conventions))
         .route("/api/code/chat", post(code_chat))
         .route("/api/code/engine", post(code_engine_run))
+        .route(
+            "/api/code/checkpoint/preview",
+            post(code_checkpoint_preview),
+        )
+        .route("/api/code/checkpoints", get(code_checkpoint_list))
+        .route(
+            "/api/code/checkpoint/restore",
+            post(code_checkpoint_restore),
+        )
         .route("/api/code/chat/history", get(code_chat_history))
         .route("/api/code/chat/clear", post(code_chat_clear))
         .route("/api/code/tasks", get(code_tasks).post(code_task_create))
+        .route("/api/code/journal", get(code_journal))
         .route("/api/code/tasks/focus", post(code_task_focus))
         .route("/api/code/tasks/rename", post(code_task_rename))
         .route("/api/code/tasks/done", post(code_task_done))
@@ -1670,6 +1680,62 @@ async fn code_tasks(State(state): State<AppState>) -> Json<Vec<crate::code_tasks
             .await
             .expect("code_tasks panicked"),
     )
+}
+
+async fn code_journal(
+    State(state): State<AppState>,
+    Query(query): Query<TaskQuery>,
+) -> Result<Json<Vec<llm::ActionRecord>>, (StatusCode, String)> {
+    let rows = tokio::task::spawn_blocking(move || {
+        commands::code_journal(&state.engine, query.task.as_deref(), Some(100))
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+struct CheckpointRequest {
+    reference: String,
+    #[serde(default)]
+    fingerprint: String,
+}
+
+async fn code_checkpoint_preview(
+    State(state): State<AppState>,
+    Json(req): Json<CheckpointRequest>,
+) -> Result<Json<crate::code_checkpoint::Preview>, (StatusCode, String)> {
+    let plan = tokio::task::spawn_blocking(move || {
+        commands::code_checkpoint_preview(&state.engine, Some(&req.reference))
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(plan))
+}
+
+async fn code_checkpoint_list(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::code_checkpoint::Checkpoint>>, (StatusCode, String)> {
+    let rows = tokio::task::spawn_blocking(move || commands::code_checkpoint_list(&state.engine))
+        .await
+        .map_err(internal_error)?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(rows))
+}
+
+async fn code_checkpoint_restore(
+    State(state): State<AppState>,
+    Json(req): Json<CheckpointRequest>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let report = tokio::task::spawn_blocking(move || {
+        commands::code_checkpoint_restore(&state.engine, &req.reference, &req.fingerprint)
+    })
+    .await
+    .map_err(internal_error)?
+    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(serde_json::json!({ "report": report })))
 }
 
 async fn code_task_create(
