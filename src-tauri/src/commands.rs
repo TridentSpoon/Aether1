@@ -2873,10 +2873,11 @@ pub fn code_engine_run(
         task.engine_session.as_deref(),
         ENGINE_TIMEOUT,
         sink,
-        true,
-        Some(&mut record),
+        crate::code_engine::EventOptions {
+            structured: true,
+            sink: Some(&mut record),
+        },
     )?;
-    drop(record);
 
     // Only the engine may mint this ID. A non-zero exit may still have made useful edits;
     // keeping its session lets the operator ask it to inspect and repair that same work.

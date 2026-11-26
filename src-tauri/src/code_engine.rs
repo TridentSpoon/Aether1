@@ -137,6 +137,11 @@ pub struct Done {
     pub events: Vec<serde_json::Value>,
 }
 
+pub struct EventOptions<'a> {
+    pub structured: bool,
+    pub sink: Option<&'a mut dyn FnMut(&serde_json::Value)>,
+}
+
 /// Writes the engine's configuration into its own directory, pointing it at the model socket.
 ///
 /// Rewritten every run rather than once, so an operator who changes model or endpoint gets
@@ -211,7 +216,18 @@ pub fn run(
     timeout: std::time::Duration,
     said: crate::llm::providers::Sink,
 ) -> Result<Done, String> {
-    run_with_events(db, model, task, session, timeout, said, false, None)
+    run_with_events(
+        db,
+        model,
+        task,
+        session,
+        timeout,
+        said,
+        EventOptions {
+            structured: false,
+            sink: None,
+        },
+    )
 }
 
 /// The panel uses structured events to link tasks and show actual tool activity.
@@ -222,8 +238,7 @@ pub fn run_with_events(
     session: Option<&str>,
     timeout: std::time::Duration,
     said: crate::llm::providers::Sink,
-    structured: bool,
-    event_sink: Option<&mut dyn FnMut(&serde_json::Value)>,
+    events: EventOptions<'_>,
 ) -> Result<Done, String> {
     let task = task.trim();
     if task.is_empty() {
@@ -267,7 +282,7 @@ pub fn run_with_events(
     write_config(&state, &brain.endpoint.in_box(), model)?;
 
     let mut args = vec!["run".to_string()];
-    if structured {
+    if events.structured {
         args.extend(["--format".to_string(), "json".to_string()]);
     }
     if let Some(session) = session.map(str::trim).filter(|s| !s.is_empty()) {
@@ -303,7 +318,7 @@ pub fn run_with_events(
     .spawn()
     .map_err(|e| format!("{ENGINE} could not be started: {e}"))?;
 
-    collect(child, timeout, said, structured, event_sink)
+    collect(child, timeout, said, events.structured, events.sink)
 }
 
 /// Reads one running engine to its end, handing every line to `said` as it arrives, and
