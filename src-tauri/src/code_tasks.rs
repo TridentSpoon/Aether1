@@ -29,15 +29,9 @@
 // on the conversation it opened on yesterday. Nothing is rewritten, and a database that goes
 // back to an older build still shows that conversation where it always was.
 //
-// **What a task does not hold yet: the engine's own session.** `code_engine` runs a pinned
-// engine inside the sandbox, and that engine keeps conversations of its own -- so the obvious
-// next field is the engine session each task continues. It is not here because there is no
-// honest way to fill it yet. The engine mints its own session ids and refuses one it did not
-// mint ("Session not found"), `--continue` continues whichever session ran last in the state
-// directory rather than this task's, and the state directory cannot be made per task because
-// the provider package it holds is 63 MB of it. The one place the id does appear is on every
-// event of `--format json`, which is also what a tool-activity rail would be built from; that
-// is where this field belongs, and it waits for that work rather than being guessed at here.
+// OpenCode mints its own session id. It is captured from its structured events and kept here,
+// alongside the task. Never derive it from a task id or use `--continue`: that would resume
+// whichever task happened to run last.
 //
 // **Why there is no "running" state.** A task is running while a question is in flight, which
 // is a fact about this instant and not about the task. Stored, it survives a crash as a lie:
@@ -93,6 +87,12 @@ pub struct Task {
     pub state: State,
     #[serde(default)]
     pub pinned: bool,
+    /// OpenCode's own minted session, captured from a completed structured run.
+    #[serde(default)]
+    pub engine_session: Option<String>,
+    /// The checkpoint made before this task's latest engine run.
+    #[serde(default)]
+    pub checkpoint: Option<String>,
 }
 
 impl Task {
@@ -103,6 +103,8 @@ impl Task {
             title: String::new(),
             state: State::Open,
             pinned: false,
+            engine_session: None,
+            checkpoint: None,
         }
     }
 
@@ -147,6 +149,22 @@ pub fn all(db: &MemoryDb) -> Vec<Task> {
     for task in stored {
         if !valid_id(&task.id) || kept.iter().any(|seen| seen.id == task.id) {
             continue;
+        }
+        let mut task = task;
+        if task.engine_session.as_deref().is_some_and(|id| {
+            !valid_engine_session(id)
+                || kept
+                    .iter()
+                    .any(|seen| seen.engine_session.as_deref() == Some(id))
+        }) {
+            task.engine_session = None;
+        }
+        if task
+            .checkpoint
+            .as_deref()
+            .is_some_and(|refname| !valid_checkpoint(refname))
+        {
+            task.checkpoint = None;
         }
         has_main |= task.id == MAIN;
         kept.push(task);
@@ -220,6 +238,8 @@ pub fn create(db: &MemoryDb, title: &str) -> Result<Task, String> {
         title,
         state: State::Open,
         pinned: false,
+        engine_session: None,
+        checkpoint: None,
     };
     tasks.insert(0, task.clone());
     store(db, &tasks)?;
@@ -277,6 +297,57 @@ pub fn set_state(db: &MemoryDb, id: &str, state: State) -> Result<Task, String> 
 /// Pins a task to the top of the list, or unpins it.
 pub fn set_pinned(db: &MemoryDb, id: &str, pinned: bool) -> Result<Task, String> {
     edit(db, id, |task| task.pinned = pinned)
+}
+
+/// Remember only an ID emitted by the engine for the task that initiated the run.
+pub fn set_engine_session(db: &MemoryDb, id: &str, session: &str) -> Result<Task, String> {
+    if !valid_engine_session(session) {
+        return Err("the engine returned an invalid session id; the task was not linked".into());
+    }
+    let tasks = all(db);
+    if tasks
+        .iter()
+        .any(|task| task.id != id && task.engine_session.as_deref() == Some(session))
+    {
+        return Err(
+            "the engine session already belongs to another task; the task was not linked".into(),
+        );
+    }
+    edit(db, id, |task| {
+        task.engine_session = Some(session.to_string())
+    })
+}
+
+pub fn set_checkpoint(db: &MemoryDb, id: &str, reference: Option<&str>) -> Result<Task, String> {
+    if let Some(reference) = reference {
+        if !valid_checkpoint(reference) {
+            return Err("the checkpoint reference is invalid".into());
+        }
+    }
+    edit(db, id, |task| {
+        task.checkpoint = reference.map(str::to_string)
+    })
+}
+
+fn valid_checkpoint(reference: &str) -> bool {
+    let Some(stamp) = reference.strip_prefix("refs/aether1/checkpoints/") else {
+        return false;
+    };
+    if stamp.len() == 12 {
+        return stamp.bytes().all(|byte| byte.is_ascii_digit());
+    }
+    stamp.len() == 31
+        && stamp.as_bytes()[20] == b'-'
+        && stamp[..20].bytes().all(|byte| byte.is_ascii_digit())
+        && stamp[21..].bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn valid_engine_session(session: &str) -> bool {
+    session.starts_with("ses_")
+        && session.len() <= 128
+        && session
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 fn edit(db: &MemoryDb, id: &str, change: impl Fn(&mut Task)) -> Result<Task, String> {
@@ -340,6 +411,7 @@ pub struct Listed {
     pub last: String,
     /// True for the one the panel should open on.
     pub current: bool,
+    pub checkpoint: Option<String>,
 }
 
 /// The whole list, ready to draw: pinned first, then open, then finished, each group newest
@@ -368,6 +440,7 @@ pub fn listed(db: &MemoryDb) -> Vec<Listed> {
                 named,
                 state: task.state,
                 pinned: task.pinned,
+                checkpoint: task.checkpoint.clone(),
                 messages: messages.len() as u32,
                 last: messages
                     .last()
@@ -466,6 +539,59 @@ mod tests {
         assert_eq!(current(&db).id, MAIN);
         let task = create(&db, "fix the build").unwrap();
         assert_eq!(current(&db).id, task.id);
+    }
+
+    #[test]
+    fn engine_sessions_stay_with_their_tasks() {
+        let db = db();
+        let first = create(&db, "first").unwrap();
+        let second = create(&db, "second").unwrap();
+        set_engine_session(&db, &first.id, "ses_first").unwrap();
+        set_engine_session(&db, &second.id, "ses_second").unwrap();
+        assert_eq!(
+            resolve(&db, Some(&first.id))
+                .unwrap()
+                .engine_session
+                .as_deref(),
+            Some("ses_first")
+        );
+        assert_eq!(
+            resolve(&db, Some(&second.id))
+                .unwrap()
+                .engine_session
+                .as_deref(),
+            Some("ses_second")
+        );
+        assert!(set_engine_session(&db, &second.id, "ses_first").is_err());
+        assert!(set_engine_session(&db, &second.id, "../../other").is_err());
+    }
+
+    #[test]
+    fn checkpoint_reference_survives_task_reload() {
+        let db = db();
+        let task = create(&db, "restore me").unwrap();
+        let reference = "refs/aether1/checkpoints/001795689600";
+        set_checkpoint(&db, &task.id, Some(reference)).unwrap();
+        assert_eq!(
+            resolve(&db, Some(&task.id)).unwrap().checkpoint.as_deref(),
+            Some(reference)
+        );
+        assert_eq!(
+            listed(&db)
+                .iter()
+                .find(|row| row.id == task.id)
+                .unwrap()
+                .checkpoint
+                .as_deref(),
+            Some(reference)
+        );
+        assert!(set_checkpoint(&db, &task.id, Some("refs/heads/main")).is_err());
+        let current = "refs/aether1/checkpoints/01798600000000000000-0000000042";
+        set_checkpoint(&db, &task.id, Some(current)).unwrap();
+        assert_eq!(
+            resolve(&db, Some(&task.id)).unwrap().checkpoint.as_deref(),
+            Some(current)
+        );
     }
 
     #[test]

@@ -133,6 +133,8 @@ pub const ENGINE: &str = "opencode";
 pub struct Done {
     pub status: i32,
     pub output: String,
+    pub session: Option<String>,
+    pub events: Vec<serde_json::Value>,
 }
 
 /// Writes the engine's configuration into its own directory, pointing it at the model socket.
@@ -209,6 +211,20 @@ pub fn run(
     timeout: std::time::Duration,
     said: crate::llm::providers::Sink,
 ) -> Result<Done, String> {
+    run_with_events(db, model, task, session, timeout, said, false, None)
+}
+
+/// The panel uses structured events to link tasks and show actual tool activity.
+pub fn run_with_events(
+    db: &MemoryDb,
+    model: &str,
+    task: &str,
+    session: Option<&str>,
+    timeout: std::time::Duration,
+    said: crate::llm::providers::Sink,
+    structured: bool,
+    event_sink: Option<&mut dyn FnMut(&serde_json::Value)>,
+) -> Result<Done, String> {
     let task = task.trim();
     if task.is_empty() {
         return Err("there is no task to give the engine".to_string());
@@ -251,6 +267,9 @@ pub fn run(
     write_config(&state, &brain.endpoint.in_box(), model)?;
 
     let mut args = vec!["run".to_string()];
+    if structured {
+        args.extend(["--format".to_string(), "json".to_string()]);
+    }
     if let Some(session) = session.map(str::trim).filter(|s| !s.is_empty()) {
         args.push("--session".to_string());
         args.push(session.to_string());
@@ -284,7 +303,7 @@ pub fn run(
     .spawn()
     .map_err(|e| format!("{ENGINE} could not be started: {e}"))?;
 
-    collect(child, timeout, said)
+    collect(child, timeout, said, structured, event_sink)
 }
 
 /// Reads one running engine to its end, handing every line to `said` as it arrives, and
@@ -297,6 +316,8 @@ fn collect(
     mut child: std::process::Child,
     timeout: std::time::Duration,
     said: crate::llm::providers::Sink,
+    structured: bool,
+    mut event_sink: Option<&mut dyn FnMut(&serde_json::Value)>,
 ) -> Result<Done, String> {
     let stdout = child
         .stdout
@@ -334,6 +355,8 @@ fn collect(
     };
 
     let mut output = String::new();
+    let mut session = None;
+    let mut events = Vec::new();
     {
         use std::io::BufRead;
         let mut lines = std::io::BufReader::new(stdout);
@@ -346,8 +369,64 @@ fn collect(
             match lines.read_line(&mut line) {
                 Ok(0) => break,
                 Ok(_) => {
-                    output.push_str(&line);
-                    said(&line);
+                    if structured {
+                        match serde_json::from_str::<serde_json::Value>(&line) {
+                            Ok(event) => {
+                                if let Some(id) = event.get("sessionID").and_then(|v| v.as_str()) {
+                                    session.get_or_insert_with(|| id.to_string());
+                                }
+                                if let Some(rendered) = event_line(&event) {
+                                    output.push_str(&rendered);
+                                    said(&rendered);
+                                }
+                                if event
+                                    .get("part")
+                                    .and_then(|part| part.get("type"))
+                                    .and_then(|kind| kind.as_str())
+                                    == Some("tool")
+                                {
+                                    let part = &event["part"];
+                                    let input = part.get("state").and_then(|v| v.get("input"));
+                                    let target = input
+                                        .and_then(|v| {
+                                            ["filePath", "path", "command", "file"].iter().find_map(
+                                                |key| v.get(*key).and_then(|v| v.as_str()),
+                                            )
+                                        })
+                                        .unwrap_or("");
+                                    let summary = serde_json::json!({
+                                        "part": {
+                                            "type": "tool",
+                                            "id": part.get("id"),
+                                            "tool": part.get("tool"),
+                                            "target": target.chars().take(200).collect::<String>(),
+                                            "state": {
+                                            "title": part.get("state").and_then(|v| v.get("title")).and_then(|v| v.as_str()).map(|title| title.chars().take(200).collect::<String>()),
+                                                "status": part.get("state").and_then(|v| v.get("status")),
+                                            }
+                                        }
+                                    });
+                                    if matches!(
+                                        summary["part"]["state"]["status"].as_str(),
+                                        Some("completed" | "error")
+                                    ) {
+                                        if let Some(sink) = event_sink.as_mut() {
+                                            sink(&summary);
+                                        }
+                                    }
+                                    events.push(summary);
+                                }
+                            }
+                            Err(_) => {
+                                // Preserve diagnostics from a version that emits a plain line.
+                                output.push_str(&line);
+                                said(&line);
+                            }
+                        }
+                    } else {
+                        output.push_str(&line);
+                        said(&line);
+                    }
                 }
                 Err(_) => break,
             }
@@ -386,6 +465,8 @@ fn collect(
         Some(status) => Ok(Done {
             status: status.code().unwrap_or(1),
             output,
+            session,
+            events,
         }),
         None => Err(format!(
             "{ENGINE} could not be waited on. What it said:\n\n{output}"
@@ -393,9 +474,82 @@ fn collect(
     }
 }
 
+fn event_line(event: &serde_json::Value) -> Option<String> {
+    let part = event.get("part")?;
+    match part.get("type")?.as_str()? {
+        "text" => part
+            .get("text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "tool" => {
+            let tool = part.get("tool").and_then(|v| v.as_str()).unwrap_or("tool");
+            let state = part.get("state")?;
+            let status = state
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("running");
+            if status == "running" || status == "pending" {
+                return None;
+            }
+            let title = state.get("title").and_then(|v| v.as_str()).unwrap_or(tool);
+            Some(format!("\n[{status}] {title}\n"))
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_events_render_text_and_completed_tools() {
+        let text = serde_json::json!({"part": {"type": "text", "text": "Done."}});
+        assert_eq!(event_line(&text).as_deref(), Some("Done."));
+        let tool = serde_json::json!({"part": {"type": "tool", "tool": "bash", "state": {"status": "completed", "title": "Ran cargo test"}}});
+        assert_eq!(
+            event_line(&tool).as_deref(),
+            Some("\n[completed] Ran cargo test\n")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn structured_run_captures_its_session_without_showing_json_as_prose() {
+        let child = sh("printf '%s\\n' '{\"type\":\"text\",\"sessionID\":\"ses_one\",\"part\":{\"type\":\"text\",\"text\":\"hello\"}}'");
+        let mut seen = String::new();
+        let done = collect(
+            child,
+            std::time::Duration::from_secs(5),
+            &mut |line| seen.push_str(line),
+            true,
+            None,
+        )
+        .unwrap();
+        assert_eq!(done.session.as_deref(), Some("ses_one"));
+        assert_eq!(done.output, "hello");
+        assert_eq!(seen, "hello");
+        assert!(done.events.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completed_tool_event_reaches_journal_sink_without_file_contents() {
+        let child = sh("printf '%s\\n' '{\"part\":{\"type\":\"tool\",\"id\":\"call_1\",\"tool\":\"edit\",\"state\":{\"status\":\"completed\",\"title\":\"Edited file\",\"input\":{\"filePath\":\"src/lib.rs\",\"content\":\"secret\"}}}}'");
+        let mut journal = Vec::new();
+        let done = collect(
+            child,
+            std::time::Duration::from_secs(5),
+            &mut |_| {},
+            true,
+            Some(&mut |event| journal.push(event.clone())),
+        )
+        .unwrap();
+        assert_eq!(journal.len(), 1);
+        assert_eq!(journal[0]["part"]["target"], "src/lib.rs");
+        assert!(!journal[0].to_string().contains("secret"));
+        assert_eq!(done.events.len(), 1);
+    }
 
     fn db() -> MemoryDb {
         let path = std::env::temp_dir().join(format!(
@@ -667,6 +821,8 @@ mod tests {
             sh("echo first; echo second; echo third"),
             std::time::Duration::from_secs(30),
             &mut |said| seen.push(said.to_string()),
+            false,
+            None,
         )
         .expect("it runs");
 
@@ -690,6 +846,8 @@ mod tests {
             sh("echo starting; sleep 30"),
             std::time::Duration::from_millis(300),
             &mut |_| {},
+            false,
+            None,
         )
         .expect_err("it should be stopped");
 
@@ -713,6 +871,8 @@ mod tests {
             sh("echo tried this; exit 3"),
             std::time::Duration::from_secs(30),
             &mut |_| {},
+            false,
+            None,
         )
         .expect("a non-zero exit is still an answer");
         assert_eq!(done.status, 3);
@@ -730,6 +890,8 @@ mod tests {
             sh("echo out; echo trouble 1>&2"),
             std::time::Duration::from_secs(30),
             &mut |said| seen.push_str(said),
+            false,
+            None,
         )
         .expect("it runs");
         assert!(done.output.contains("out"), "{}", done.output);

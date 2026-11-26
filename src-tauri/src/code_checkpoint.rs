@@ -23,6 +23,8 @@
 //! A folder that is not a git repository gets no checkpoint and is told so rather than
 //! quietly going unprotected.
 
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 /// Where checkpoint refs live. Outside `refs/heads` and `refs/tags`, so they are not
@@ -31,12 +33,118 @@ use std::path::Path;
 const REF_PREFIX: &str = "refs/aether1/checkpoints";
 
 /// One checkpoint, as the operator sees it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Checkpoint {
     /// The full ref, which is also how it is named back to `revert`.
     pub reference: String,
     /// When it was taken, as git formats it.
     pub when: String,
+}
+
+/// Read-only account of what an additive restore will touch.
+#[derive(Debug, Clone, Serialize)]
+pub struct Preview {
+    pub reference: String,
+    pub when: String,
+    pub restore_files: usize,
+    pub changed_files: Vec<String>,
+    pub leave_alone: Vec<String>,
+    pub fingerprint: String,
+}
+
+fn selected(root: &Path, reference: Option<&str>) -> Result<Checkpoint, String> {
+    match reference {
+        Some(r) => list(root)?
+            .into_iter()
+            .find(|c| c.reference == r || c.reference.ends_with(&format!("/{r}")))
+            .ok_or_else(|| format!("there is no checkpoint called {r}")),
+        None => latest(root)?.ok_or_else(|| {
+            "there are no checkpoints in this folder yet. One is taken before AETHER CODE first changes anything."
+                .to_string()
+        }),
+    }
+}
+
+pub fn preview(root: &Path, reference: Option<&str>) -> Result<Preview, String> {
+    let target = selected(root, reference)?;
+    let held = git(
+        root,
+        &["ls-tree", "-r", "--name-only", &target.reference],
+        None,
+    )?;
+    let held: Vec<String> = held.lines().map(str::to_string).collect();
+    let changed = git(
+        root,
+        &["diff", "--name-only", &target.reference, "--"],
+        None,
+    )?;
+    let now = git(
+        root,
+        &["ls-files", "--cached", "--others", "--exclude-standard"],
+        None,
+    )?;
+    let leave_alone = now
+        .lines()
+        .filter(|path| !held.iter().any(|old| old == path))
+        .map(str::to_string)
+        .collect();
+    let fingerprint = workspace_fingerprint(root, &target.reference)?;
+    Ok(Preview {
+        reference: target.reference,
+        when: target.when,
+        restore_files: held.len(),
+        changed_files: changed.lines().map(str::to_string).collect(),
+        leave_alone,
+        fingerprint,
+    })
+}
+
+/// Bind a preview to the working tree it described, including untracked file contents.
+fn workspace_fingerprint(root: &Path, reference: &str) -> Result<String, String> {
+    let mut hash = Sha256::new();
+    hash.update(reference.as_bytes());
+    hash.update(git(root, &["diff", "--binary", reference, "--"], None)?.as_bytes());
+    let untracked = git(
+        root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+        None,
+    )?;
+    for relative in untracked.split('\0').filter(|path| !path.is_empty()) {
+        let path = root.join(relative);
+        hash.update(relative.as_bytes());
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("{} changed during checkpoint preview: {e}", path.display()))?;
+        if meta.file_type().is_symlink() {
+            hash.update(
+                std::fs::read_link(&path)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .as_bytes(),
+            );
+        } else if meta.is_file() {
+            hash.update(std::fs::read(&path).map_err(|e| e.to_string())?);
+        }
+    }
+    Ok(hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+pub fn revert_if_unchanged(
+    root: &Path,
+    reference: &str,
+    fingerprint: &str,
+) -> Result<String, String> {
+    let current = preview(root, Some(reference))?;
+    if current.fingerprint != fingerprint {
+        return Err(
+            "the project changed since the restore preview -- review it again before restoring"
+                .into(),
+        );
+    }
+    revert(root, Some(reference))
 }
 
 /// Runs a git command in the workspace and returns its stdout, or a readable error.
@@ -108,13 +216,23 @@ pub fn take(root: &Path, why: &str) -> Result<Option<Checkpoint>, String> {
 
 /// A sortable, readable name: the refs list in order because the names do.
 fn stamp() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    // Seconds since the epoch, zero-padded so lexical order is chronological order for the
-    // next few thousand years. Paired with a readable date by `list`, from git itself.
-    format!("{now:012}")
+    // Keep order and uniqueness even if two checkpoints land in one clock tick. The PID
+    // separates concurrent Aether1 processes; old twelve-digit refs remain readable.
+    let mut previous = LAST.load(Ordering::Relaxed);
+    let unique = loop {
+        let candidate = now.max(previous.saturating_add(1));
+        match LAST.compare_exchange(previous, candidate, Ordering::SeqCst, Ordering::Relaxed) {
+            Ok(_) => break candidate,
+            Err(actual) => previous = actual,
+        }
+    };
+    format!("{unique:020}-{:010}", std::process::id())
 }
 
 /// Every checkpoint in this workspace, newest first.
@@ -156,21 +274,15 @@ pub fn latest(root: &Path) -> Result<Option<Checkpoint>, String> {
 /// lose an afternoon, and the whole point of this module is that there is now exactly one
 /// direction work can go.
 pub fn revert(root: &Path, reference: Option<&str>) -> Result<String, String> {
-    let target = match reference {
-        Some(r) => list(root)?
-            .into_iter()
-            .find(|c| c.reference == r || c.reference.ends_with(&format!("/{r}")))
-            .ok_or_else(|| format!("there is no checkpoint called {r}"))?,
-        None => latest(root)?.ok_or_else(|| {
-            "there are no checkpoints in this folder yet. One is taken before AETHER CODE \
-             first changes anything."
-                .to_string()
-        })?,
-    };
+    let target = selected(root, reference)?;
 
-    // What exists now that the checkpoint did not hold. Worked out before the restore, and
-    // reported rather than removed.
-    let now = git(root, &["ls-files", "--others", "--exclude-standard"], None)?;
+    // What exists now that the checkpoint did not hold, whether staged or untracked.
+    // Worked out before the restore, and reported rather than removed.
+    let now = git(
+        root,
+        &["ls-files", "--cached", "--others", "--exclude-standard"],
+        None,
+    )?;
     let then = git(
         root,
         &["ls-tree", "-r", "--name-only", &target.reference],
@@ -239,8 +351,24 @@ mod tests {
         std::fs::remove_file(dir.join("untracked.txt")).unwrap();
         git(&dir, &["reset", "--hard", "HEAD"], None).unwrap();
         std::fs::write(dir.join("new-since.txt"), "made by the agent\n").unwrap();
+        std::fs::write(dir.join("staged-since.txt"), "also made by the agent\n").unwrap();
+        git(&dir, &["add", "staged-since.txt"], None).unwrap();
 
-        let report = revert(&dir, Some(&made.reference)).unwrap();
+        let plan = preview(&dir, Some(&made.reference)).unwrap();
+        assert!(plan.changed_files.contains(&"kept.txt".to_string()));
+        assert!(plan.changed_files.contains(&"untracked.txt".to_string()));
+        assert!(plan.leave_alone.contains(&"new-since.txt".to_string()));
+        assert!(plan.leave_alone.contains(&"staged-since.txt".to_string()));
+
+        std::fs::write(dir.join("new-since.txt"), "changed after preview\n").unwrap();
+        assert!(
+            revert_if_unchanged(&dir, &made.reference, &plan.fingerprint)
+                .unwrap_err()
+                .contains("changed since")
+        );
+        std::fs::write(dir.join("new-since.txt"), "made by the agent\n").unwrap();
+
+        let report = revert_if_unchanged(&dir, &made.reference, &plan.fingerprint).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("kept.txt")).unwrap(),
             "edited but not committed\n",
@@ -255,6 +383,7 @@ mod tests {
             dir.join("new-since.txt").is_file(),
             "and nothing is deleted by a revert: {report}"
         );
+        assert!(dir.join("staged-since.txt").is_file(), "{report}");
         assert!(
             report.contains("new-since.txt"),
             "but it is named: {report}"
@@ -286,6 +415,15 @@ mod tests {
                 .contains("aether1"),
             "and must not leave a branch behind"
         );
+    }
+
+    #[test]
+    fn rapid_checkpoints_keep_distinct_refs() {
+        let dir = repo("rapid");
+        let first = take(&dir, "first").unwrap().unwrap();
+        let second = take(&dir, "second").unwrap().unwrap();
+        assert_ne!(first.reference, second.reference);
+        assert_eq!(list(&dir).unwrap().len(), 2);
     }
 
     #[test]

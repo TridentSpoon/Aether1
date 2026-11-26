@@ -1602,6 +1602,10 @@ fn run_code_do(task: String, session: Option<String>) -> Result<String, String> 
     // Long, because this is a coding agent editing a repository rather than a shell command.
     // Still bounded: an engine that has stopped making progress should stop, not sit there.
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(900);
+    let root = crate::code_workspace::root(db)?;
+    if let Some(saved) = crate::code_checkpoint::take(&root, "before AETHER CODE engine run")? {
+        eprintln!("Checkpoint saved: {}", saved.reference);
+    }
     // Printed as it arrives: the operator is at a terminal watching, and an agent editing a
     // repository for ten minutes in silence looks like one that has hung.
     let done = crate::code_engine::run(

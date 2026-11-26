@@ -2784,6 +2784,11 @@ pub struct EngineReply {
     /// the operator needs to read, and throwing that away to return a tidy `Err` is how a
     /// panel ends up showing "it did not work" about a quarter of an hour of real output.
     pub status: i32,
+    /// Structured engine events for clients that display a detailed activity rail.
+    pub events: Vec<serde_json::Value>,
+    /// The snapshot taken before this run, when the workspace is a Git repository.
+    pub checkpoint: Option<String>,
+    pub journal_error: Option<String>,
 }
 
 /// Hands the engine a task and lets it work, in the project folder, inside the sandbox.
@@ -2794,13 +2799,7 @@ pub struct EngineReply {
 /// this machine writes code with, and writing the exchange into that task's transcript so
 /// reopening the tab shows what the agent did.
 ///
-/// **The engine's own memory is a separate question from this transcript.** What is stored
-/// here is what the panel shows. The engine keeps its sessions in the directory
-/// `code_engine` exists to preserve, and nothing here hands it a session id: opencode mints
-/// its own and refuses one it did not mint, so every run starts the engine fresh even though
-/// the panel's record of the task is continuous. Closing that gap needs the id off
-/// `--format json`, which is the same change that would give the panel a tool-activity rail,
-/// and it is not this one.
+/// The engine's own session is captured from structured events and linked to this task.
 pub fn code_engine_run(
     engine: &LlmEngine,
     prompt: &str,
@@ -2827,14 +2826,63 @@ pub fn code_engine_run(
         ));
     }
 
-    let done = crate::code_engine::run(
+    let root = crate::code_workspace::root(engine.db())?;
+    let checkpoint = crate::code_checkpoint::take(&root, "before AETHER CODE engine run")?
+        .map(|saved| saved.reference);
+    crate::code_tasks::set_checkpoint(engine.db(), &task.id, checkpoint.as_deref())?;
+
+    let task_id = task.id.clone();
+    let task_session = task.session();
+    let checkpoint_for_journal = checkpoint.clone();
+    let mut recorded = std::collections::HashSet::new();
+    let mut journal_error = None;
+    let mut record = |event: &serde_json::Value| {
+        let part = &event["part"];
+        let event_id = part["id"].as_str().unwrap_or("");
+        if !event_id.is_empty() && !recorded.insert(event_id.to_string()) {
+            return;
+        }
+        let tool = part["tool"].as_str().unwrap_or("unknown");
+        let status = if part["state"]["status"] == "error" {
+            llm::ActionStatus::Failed
+        } else {
+            llm::ActionStatus::Executed
+        };
+        let args = serde_json::json!({
+            "task": task_id.as_str(),
+            "checkpoint": checkpoint_for_journal.as_deref(),
+            "title": part["state"]["title"].as_str().unwrap_or(""),
+            "target": part["target"].as_str().unwrap_or(""),
+        });
+        if let Err(error) = engine.db().log_action(
+            &format!("code_engine:{}", tool.chars().take(60).collect::<String>()),
+            &args,
+            true,
+            status,
+            Some("OpenCode structured tool event"),
+            Some(&task_session),
+        ) {
+            journal_error.get_or_insert_with(|| error.to_string());
+        }
+    };
+
+    let done = crate::code_engine::run_with_events(
         engine.db(),
         &advice.model,
         prompt,
-        None,
+        task.engine_session.as_deref(),
         ENGINE_TIMEOUT,
         sink,
+        true,
+        Some(&mut record),
     )?;
+    drop(record);
+
+    // Only the engine may mint this ID. A non-zero exit may still have made useful edits;
+    // keeping its session lets the operator ask it to inspect and repair that same work.
+    if let Some(session) = &done.session {
+        crate::code_tasks::set_engine_session(engine.db(), &task.id, session)?;
+    }
 
     // Written down once it has finished, the way `code_chat` does it: a run that failed
     // halfway is not history the next question should be answered against. Stored even when
@@ -2847,6 +2895,9 @@ pub fn code_engine_run(
     Ok(EngineReply {
         text,
         status: done.status,
+        events: done.events,
+        checkpoint,
+        journal_error,
     })
 }
 
@@ -2888,6 +2939,42 @@ pub fn code_chat_clear(engine: &LlmEngine, task: Option<&str>) -> Result<(), Str
 /// Every piece of work in AETHER CODE, ready to draw.
 pub fn code_tasks_list(engine: &LlmEngine) -> Vec<crate::code_tasks::Listed> {
     crate::code_tasks::listed(engine.db())
+}
+
+pub fn code_journal(
+    engine: &LlmEngine,
+    task: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Vec<ActionRecord>, String> {
+    let task = crate::code_tasks::resolve(engine.db(), task)?;
+    engine
+        .db()
+        .code_actions(&task.session(), limit.unwrap_or(100))
+        .map_err(|error| format!("could not read this task's action journal: {error}"))
+}
+
+pub fn code_checkpoint_preview(
+    engine: &LlmEngine,
+    reference: Option<&str>,
+) -> Result<crate::code_checkpoint::Preview, String> {
+    let root = crate::code_workspace::root(engine.db())?;
+    crate::code_checkpoint::preview(&root, reference)
+}
+
+pub fn code_checkpoint_list(
+    engine: &LlmEngine,
+) -> Result<Vec<crate::code_checkpoint::Checkpoint>, String> {
+    let root = crate::code_workspace::root(engine.db())?;
+    crate::code_checkpoint::list(&root)
+}
+
+pub fn code_checkpoint_restore(
+    engine: &LlmEngine,
+    reference: &str,
+    fingerprint: &str,
+) -> Result<String, String> {
+    let root = crate::code_workspace::root(engine.db())?;
+    crate::code_checkpoint::revert_if_unchanged(&root, reference, fingerprint)
 }
 
 /// Starts a piece of work and puts it in focus. The name may be empty: the first thing asked
